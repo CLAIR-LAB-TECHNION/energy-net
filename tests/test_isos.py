@@ -1,13 +1,13 @@
 # tests/test_isos.py
 
 import unittest
-
+from typing import  List
 from energy_net.dynamics.iso.hourly_pricing_iso import HourlyPricingISO
 from energy_net.dynamics.iso.random_pricing_iso import RandomPricingISO
 from energy_net.dynamics.iso.quadratic_pricing_iso import QuadraticPricingISO
 from energy_net.dynamics.iso.time_of_use_pricing_iso import TimeOfUsePricingISO
 from energy_net.dynamics.iso.dynamic_pricing_iso import DynamicPricingISO
-
+from energy_net.dynamics.iso.fixed_pricing_iso import FixedPricingISO
 
 class TestHourlyPricingISO(unittest.TestCase):
     def setUp(self):
@@ -155,6 +155,84 @@ class TestDynamicPricingISO(unittest.TestCase):
         reward = pricing_func(10)
         expected_reward = (10 * 37.5) 
         self.assertEqual(reward, expected_reward)
+        
+class TestFixedPricingISO(unittest.TestCase):
+    def setUp(self):
+        # Define a fixed pricing schedule for testing
+        self.pricing_schedule: List[float] = [50.0, 52.0, 51.5, 53.0, 54.0]
+        self.iso = FixedPricingISO(pricing_schedule=self.pricing_schedule)
+    
+    def test_initialization_with_valid_parameters(self):
+        # Test that ISO initializes correctly with a valid pricing schedule
+        self.assertEqual(self.iso.pricing_schedule, self.pricing_schedule)
+        self.assertEqual(self.iso.current_step, 0)
+        self.assertEqual(self.iso.episode_length, 5)
+    
+    def test_initialization_missing_pricing_schedule(self):
+        # Test that ISO raises ValueError if pricing_schedule is missing
+        with self.assertRaises(TypeError):
+            # Missing 'pricing_schedule' argument
+            FixedPricingISO()
+    
+    def test_initialization_invalid_pricing_schedule_type(self):
+        # Test that ISO handles invalid pricing_schedule types gracefully
+        with self.assertRaises(TypeError):
+            FixedPricingISO(pricing_schedule="invalid_schedule")  # Should be a list
+            
+    def test_initialization_invalid_pricing_schedule_elements(self):
+        # Test that ISO raises ValueError if elements in pricing_schedule are not numbers
+        invalid_pricing_schedule = [50.0, "52.0", 51.5, None, 54.0]
+        with self.assertRaises(ValueError):
+            FixedPricingISO(pricing_schedule=invalid_pricing_schedule)
+    
+    def test_get_pricing_function_returns_correct_prices(self):
+        # Test that the pricing function returns the correct prices step by step
+        for expected_price in self.pricing_schedule:
+            pricing_function = self.iso.get_pricing_function(observation={})
+            price = pricing_function(action_amount=1.0)  # action_amount is arbitrary
+            self.assertEqual(price, expected_price)
+    
+    def test_get_pricing_function_after_episode_length(self):
+        # Test that after the episode length, the last price is returned
+        for _ in range(len(self.pricing_schedule)):
+            pricing_function = self.iso.get_pricing_function(observation={})
+            pricing_function(action_amount=1.0)
+        
+        # Now, any further calls should return the last price
+        pricing_function = self.iso.get_pricing_function(observation={})
+        price = pricing_function(action_amount=1.0)
+        self.assertEqual(price, self.pricing_schedule[-1])
+    
+    def test_reset_method(self):
+        # Test that reset restores the ISO to the initial state
+        for _ in range(3):
+            pricing_function = self.iso.get_pricing_function(observation={})
+            pricing_function(action_amount=1.0)
+        
+        self.iso.reset()
+        self.assertEqual(self.iso.current_step, 0)
+        
+        # After reset, pricing should start from the beginning again
+        pricing_function = self.iso.get_pricing_function(observation={})
+        price = pricing_function(action_amount=1.0)
+        self.assertEqual(price, self.pricing_schedule[0])
+    
+    def test_update_pricing_schedule(self):
+        # Test updating the pricing schedule
+        new_pricing_schedule: List[float] = [55.0, 56.0, 57.0]
+        self.iso.pricing_schedule = new_pricing_schedule
+        self.iso.episode_length = len(new_pricing_schedule)
+        self.iso.current_step = 0
+        
+        for expected_price in new_pricing_schedule:
+            pricing_function = self.iso.get_pricing_function(observation={})
+            price = pricing_function(action_amount=1.0)
+            self.assertEqual(price, expected_price)
+        
+        # Beyond the new schedule length
+        pricing_function = self.iso.get_pricing_function(observation={})
+        price = pricing_function(action_amount=1.0)
+        self.assertEqual(price, new_pricing_schedule[-1])
 
 
 if __name__ == '__main__':
