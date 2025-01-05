@@ -1,87 +1,98 @@
+"""
+PCS Unit Environment
+
+This environment simulates a Power Consumption & Storage (PCS) unit interacting with the power grid.
+
+Environment States:
+    - Battery energy level (MWh)
+    - Current time (fraction of day)
+    - Self production level (MWh)
+    - Self consumption level (MWh)
+
+Actions:
+    - Battery charging/discharging rate
+    - Optional: Production control
+    - Optional: Consumption control
+
+Key Features:
+    - Integrates with trained ISO models for price determination
+    - Supports both single and multi-action control schemes
+    - Implements configurable reward functions
+"""
 
 from __future__ import annotations
-
-
 from typing import Optional, Tuple, Dict, Any, Union
-import os
 import numpy as np
 import gymnasium as gym
-from gymnasium import spaces
-import yaml
-import logging
-
-# from . import energy_net_v0 as __energy_net_v0
-# from .wrappers.single_agent import SingleEntityWrapper as __SingleEntityWrapper
+from stable_baselines3 import PPO
 from energy_net.pcsunit_controller import PCSUnitController
-
-# def gym_env(*args, **kwargs):
-#     """
-#     Create and configure a single entity environment for EnergyNet.
-
-#     This function initializes a parallel environment from the EnergyNet
-#     environment, wraps it with a single entity wrapper, sets the environment
-#     metadata, and rescales the action space to the range [-1, 1].
-
-#     Args:
-#         *args: Variable length argument list passed to the EnergyNet environment.
-#         **kwargs: Arbitrary keyword arguments passed to the EnergyNet environment.
-
-#     Returns:
-#         gym.Env: A configured single entity environment with rescaled action space.
-#     """
-#     energy_net_env = __energy_net_v0.parallel_env(*args, **kwargs)
-
-#     single_energy_net_env = __SingleEntityWrapper(energy_net_env)
-#     single_energy_net_env.unwrapped.metadata['name'] = 'single_entity_v0'
-#     # single_energy_net_env = RescaleAction(single_energy_net_env, -1, 1)
-
-#     return single_energy_net_env
-
-
 
 class PCSUnitEnv(gym.Env):
     """
-    A Gymnasium-compatible environment for simulating an energy network with
-    battery storage, production, and consumption capabilities, managed by PCSUnit and ISO objects.
-
-    Actions:
-        Type: Box(1)
-        Action                              Min                     Max
-        Charging/Discharging Power           -max discharge rate     max charge rate
-
-    Observation:
-        Type: Box(4)
-                                        Min                     Max
-        Energy storage level (MWh)            0                       ENERGY_MAX
-        Time (fraction of day)               0                       1
-        Self Production (MWh)                0                       Inf
-        Self Consumption (MWh)               0                       Inf
+    Gymnasium environment for PCS unit training.
+    
+    The environment simulates a PCS unit that can:
+    1. Store energy in a battery
+    2. Generate energy through self-production
+    3. Consume energy based on demand
+    4. Buy/sell energy from/to the grid
+    
+    The agent learns to optimize these operations based on:
+    - Current energy prices (determined by ISO)
+    - Internal state (battery level, production, consumption)
+    - Time of day
     """
-
     def __init__(
         self,
         render_mode: Optional[str] = None,
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
         pcs_unit_config_path: Optional[str] = 'configs/pcs_unit_config.yaml',
-        log_file: Optional[str] = 'logs/environment.log',  # Path to the log file
-        reward_type: str = 'cost'  # New parameter to specify the reward type
+        log_file: Optional[str] = 'logs/environments.log',
+        reward_type: str = 'cost',
+        trained_iso_model_path: Optional[str] = None, 
+        model_iteration: Optional[int] = None  
     ):
-        """
-        Constructs an instance of EnergyNetEnv.
+        super().__init__()
+        
+        # Initialize controller with base configurations
+        self.controller = PCSUnitController(
+            render_mode=render_mode,
+            env_config_path=env_config_path,
+            iso_config_path=iso_config_path,
+            pcs_unit_config_path=pcs_unit_config_path,
+            log_file=log_file,
+            reward_type=reward_type,
+            trained_iso_model_path=trained_iso_model_path 
+        )
 
-        Args:
-            render_mode: Optional rendering mode.
-            env_config_path: Path to the environment YAML configuration file.
-            iso_config_path: Path to the ISO YAML configuration file.
-            pcs_unit_config_path: Path to the PCSUnit YAML configuration file.
-            log_file: Path to the log file for environment logging.
-            reward_type: Type of reward function to use.
-        """
-        super().__init__()  # Initialize the parent class
-        self.controller = PCSUnitController(render_mode, env_config_path, iso_config_path, pcs_unit_config_path, log_file, reward_type)
+        # Use controller's logger
+        self.logger = self.controller.logger
+
+        # Load trained ISO model if provided
+        if trained_iso_model_path:
+            try:
+                trained_iso_agent = PPO.load(trained_iso_model_path)
+                self.controller.set_trained_iso_agent(trained_iso_agent)
+                self.logger.info(f"Loaded ISO model: {trained_iso_model_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to load ISO model: {e}")
+
+        self.model_iteration = model_iteration
         self.observation_space = self.controller.observation_space
         self.action_space = self.controller.action_space
+
+    def update_trained_iso_model(self, model_path: str) -> bool:
+        """Update the trained ISO model during training iterations"""
+        try:
+            trained_iso_agent = PPO.load(model_path)
+            self.controller.set_trained_iso_agent(trained_iso_agent)
+            self.logger.info(f"Updated ISO model: {model_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to update ISO model: {e}")
+            return False
+
     def reset(
         self,
         *,
@@ -120,7 +131,7 @@ class PCSUnitEnv(gym.Env):
         """
         return self.controller.step(action)
 
-    def _get_info(self) -> Dict[str, float]:
+    def get_info(self) -> Dict[str, float]:
         """
         Provides additional information about the environment's state.
 
