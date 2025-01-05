@@ -1,5 +1,12 @@
 # configs/iso_config.yaml
 
+pricing:
+  default_buy_price: 60.0  
+  default_sell_price: 40.0  
+  parameters:
+    min_price: 30.0
+    max_price: 100.0
+
 # Specifies which ISO implementation to use
 type: "HourlyPricingISO"
 

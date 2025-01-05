@@ -10,7 +10,7 @@ battery:
     discharge_rate_max: 10.0                 # Maximum discharging rate (MW)
     charge_efficiency: 1.0                 # Charging efficiency (0 < charge_efficiency <= 1)
     discharge_efficiency: 1.0              # Discharging efficiency (0 < discharge_efficiency <= 1)
-    init: 30.0                             # Initial state of charge (MWh)
+    init: 70.0                             # Initial state of charge (MWh)
     lifetime_constant: 100.0               # Lifetime constant (> 0), adjust as needed
 
 production_unit:
