@@ -187,3 +187,11 @@ class PCSUnit(CompositeGridEntity):
         else:
             self.logger.error("Battery not found in PCSUnit sub-entities.")
             return 0.0
+
+    def reset(self, initial_battery_level: Optional[float] = None) -> None:
+        """Resets all components with optional initial battery level"""
+        for entity in self.sub_entities.values():
+            if isinstance(entity, Battery) and initial_battery_level is not None:
+                entity.reset(initial_battery_level)  # Pass initial level to battery
+            else:
+                entity.reset()  # Normal reset for other components

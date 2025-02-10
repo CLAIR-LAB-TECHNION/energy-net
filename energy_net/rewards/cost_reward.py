@@ -11,18 +11,21 @@ class CostReward(BaseReward):
     def compute_reward(self, info: Dict[str, Any]) -> float:
         """
         Computes the reward as the negative net cost.
-
+        
         Args:
-            info (Dict[str, Any]): Contains:
-                - net_exchange: Amount of energy exchanged
-                - pricing_function: Function that returns price based on quantity
-
+            info (Dict[str, Any]): Dictionary containing:
+                - net_exchange (float): Amount of energy exchanged with grid.
+                - iso_buy_price (float): ISO buying price for energy.
+                - iso_sell_price (float): ISO selling price for energy.
+        
         Returns:
-            float: Negative net cost.
+            float: The reward value, which is the negative cost.
         """
         net_exchange = info.get('net_exchange', 0.0)
-        pricing_function = info.get('pricing_function')
+
+        if net_exchange > 0:
+            cost = net_exchange * info['iso_buy_price']
+        else:
+            cost = net_exchange * info['iso_sell_price']
         
-        reward = -1 * pricing_function(net_exchange)
-        
-        return reward
+        return -cost

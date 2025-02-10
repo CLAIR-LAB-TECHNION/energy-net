@@ -93,10 +93,17 @@ class Battery(ElementaryGridEntity):
         self.current_time = time
         self.perform_action(action)
 
-    def reset(self) -> None:
+    def reset(self, initial_level: Optional[float] = None) -> None:
         """
-        Resets the battery to its initial energy level.
+        Resets the battery to specified or default initial level.
+        
+        Args:
+            initial_level: Optional override for initial energy level
         """
-        self.logger.info(f"Resetting Battery from {self.energy_level} MWh to initial energy level: {self.initial_energy} MWh")
-        self.energy_level = self.initial_energy
+        if initial_level is not None:
+            self.energy_level = initial_level
+            self.logger.info(f"Reset Battery to specified level: {self.energy_level} MWh")
+        else:
+            self.energy_level = self.initial_energy
+            self.logger.info(f"Reset Battery to default level: {self.energy_level} MWh")
         self.logger.debug(f"Battery reset complete. Current energy level: {self.energy_level} MWh")

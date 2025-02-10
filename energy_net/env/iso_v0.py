@@ -53,6 +53,19 @@ class ISOEnv(gym.Env):
         trained_pcs_model_path: Optional[str] = None,  
         model_iteration: Optional[int] = None  
     ):
+        """
+        Initializes the ISOEnv environment.
+
+        Args:
+            render_mode (Optional[str], optional): Rendering mode. Defaults to None.
+            env_config_path (Optional[str], optional): Path to environment config. Defaults to 'configs/environment_config.yaml'.
+            iso_config_path (Optional[str], optional): Path to ISO config. Defaults to 'configs/iso_config.yaml'.
+            pcs_unit_config_path (Optional[str], optional): Path to PCS unit config. Defaults to 'configs/pcs_unit_config.yaml'.
+            log_file (Optional[str], optional): Path to log file. Defaults to 'logs/environments.log'.
+            reward_type (str, optional): Type of reward function. Defaults to 'iso'.
+            trained_pcs_model_path (Optional[str], optional): Path to trained PCS model. Defaults to None.
+            model_iteration (Optional[int], optional): Model iteration number. Defaults to None.
+        """
         super().__init__()
         
         # Initialize controller with base configurations

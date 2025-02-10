@@ -6,8 +6,6 @@ This environment simulates a Power Consumption & Storage (PCS) unit interacting 
 Environment States:
     - Battery energy level (MWh)
     - Current time (fraction of day)
-    - Self production level (MWh)
-    - Self consumption level (MWh)
 
 Actions:
     - Battery charging/discharging rate
@@ -53,6 +51,19 @@ class PCSUnitEnv(gym.Env):
         trained_iso_model_path: Optional[str] = None, 
         model_iteration: Optional[int] = None  
     ):
+        """
+        Initializes the PCSUnitEnv environment.
+
+        Args:
+            render_mode (Optional[str], optional): Rendering mode. Defaults to None.
+            env_config_path (Optional[str], optional): Path to environment config. Defaults to 'configs/environment_config.yaml'.
+            iso_config_path (Optional[str], optional): Path to ISO config. Defaults to 'configs/iso_config.yaml'.
+            pcs_unit_config_path (Optional[str], optional): Path to PCS unit config. Defaults to 'configs/pcs_unit_config.yaml'.
+            log_file (Optional[str], optional): Path to log file. Defaults to 'logs/environments.log'.
+            reward_type (str, optional): Type of reward function. Defaults to 'cost'.
+            trained_iso_model_path (Optional[str], optional): Path to trained ISO model. Defaults to None.
+            model_iteration (Optional[int], optional): Model iteration number. Defaults to None.
+        """
         super().__init__()
         
         # Initialize controller with base configurations
