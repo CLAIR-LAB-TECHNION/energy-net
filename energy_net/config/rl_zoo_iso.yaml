@@ -1,0 +1,48 @@
+# Environment settings
+env: 
+  env_id: "ISOEnv-v0"
+  env_kwargs:
+    env_config_path: '../configs/environment_config.yaml'
+    iso_config_path: '../configs/iso_config.yaml'
+    pcs_unit_config_path: '../configs/pcs_unit_config.yaml'
+    log_file: 'logs/environments.log'
+    reward_type: 'iso'
+
+# Training settings
+train:
+  n_timesteps: 10000
+  n_envs: 4  # Number of parallel environments
+  normalize: True
+  normalize_kwargs:
+    norm_obs: True
+    norm_reward: True
+    clip_obs: 1.0
+    clip_reward: 1.0
+
+# Algorithm settings
+algo:
+  name: "PPO"
+  policy: "MlpPolicy"
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+# Evaluation settings
+eval:
+  n_eval_episodes: 10
+  eval_freq: 10000
+  deterministic: True
+
+# Logging settings
+logging:
+  log_path: "logs/rl_zoo"
+  tensorboard_log: "logs/rl_zoo/tensorboard/"
+  save_path: "models/rl_zoo/iso"
+  save_freq: 10000
