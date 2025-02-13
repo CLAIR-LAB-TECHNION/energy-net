@@ -5,11 +5,13 @@ import yaml
 import logging
 from stable_baselines3 import PPO
 from gymnasium import spaces
+from energy_net.env import PricingPolicy  
 
 from energy_net.utils.logger import setup_logger
 from energy_net.rewards.base_reward import BaseReward
 from energy_net.rewards.iso_reward import ISOReward
 from energy_net.components.pcsunit import PCSUnit
+from energy_net.dynamics.iso.quadratic_pricing_iso import QuadraticPricingISO
 
 
 class ISOController:
@@ -21,11 +23,15 @@ class ISOController:
         [time, predicted_demand, pcs_demand]
         
     Action Space:
-        [buy_price, sell_price]
+        [b0, b1, b2, s0, s1, s2, dispatch_profile] 
+        - b0, b1, b2: Polynomial coefficients for buy pricing
+        - s0, s1, s2: Polynomial coefficients for sell pricing
+        - dispatch_profile: 48 values for dispatch profile
     """
     
     def __init__(
         self,
+        pricing_policy: PricingPolicy = None,  
         render_mode: Optional[str] = None,
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
@@ -33,12 +39,14 @@ class ISOController:
         log_file: Optional[str] = 'logs/environments.log',
         reward_type: str = 'iso',
         model_path: Optional[str] = None,
-        trained_pcs_model_path: Optional[str] = None
+        trained_pcs_model_path: Optional[str] = None,
     ):
         # Set up logger
         self.logger = setup_logger('ISOController', log_file)
-        self.logger.info("Initializing ISO Controller")
+        self.logger.info(f"Initializing ISO Controller with {pricing_policy.value} policy")
         
+        self.pricing_policy = pricing_policy
+
         # Load configurations
         self.env_config = self.load_config(env_config_path)
         self.iso_config = self.load_config(iso_config_path)
@@ -58,12 +66,71 @@ class ISOController:
         self.max_price = price_params.get('max_price', pricing_config.get('default_buy_price', 10.0))
         self.max_steps_per_episode = self.env_config['time'].get('max_steps_per_episode', 48)
         self.logger.info(f"Price bounds set to: min={self.min_price}, max={self.max_price}")
+
+        # Get action space parameters from config based on pricing policy
+        action_spaces_config = self.iso_config.get('action_spaces', {})
+        policy_config = action_spaces_config.get(self.pricing_policy.value, {})
         
-        self.action_space = spaces.Box(
-            low=np.array([self.min_price, self.min_price], dtype=np.float32),
-            high=np.array([self.max_price, self.max_price], dtype=np.float32),
-            dtype=np.float32
+        if self.pricing_policy == PricingPolicy.QUADRATIC:
+            # Define action space for quadratic pricing policy
+            dispatch_config = policy_config.get('dispatch', {})
+            poly_config = policy_config.get('polynomial', {})
+            
+            dispatch_min = dispatch_config.get('min', 0.0)
+            dispatch_max = dispatch_config.get('max', 300.0)
+            low_poly = poly_config.get('min', -100.0)
+            high_poly = poly_config.get('max', 100.0)
+
+            low_array = np.concatenate((
+                np.full(6, low_poly, dtype=np.float32),
+                np.full(self.max_steps_per_episode, dispatch_min, dtype=np.float32)
+            ))
+            high_array = np.concatenate((
+                np.full(6, high_poly, dtype=np.float32),
+                np.full(self.max_steps_per_episode, dispatch_max, dtype=np.float32)
+            ))
+                    
+            self.action_space = spaces.Box(
+                low=low_array,
+                high=high_array,
+                dtype=np.float32
+            )
+        elif self.pricing_policy == PricingPolicy.CONSTANT:
+            # New branch for constant pricing: only 2 coefficients (buy & sell) + dispatch profile
+            dispatch_config = policy_config.get('dispatch', {})
+            poly_config = policy_config.get('polynomial', {})
+            dispatch_min = dispatch_config.get('min', 0.0)
+            dispatch_max = dispatch_config.get('max', 300.0)
+            low_const = poly_config.get('min', self.min_price)
+            high_const = poly_config.get('max', self.max_price)
+
+            low_array = np.concatenate((
+                np.array([self.min_price, self.min_price], dtype=np.float32),
+                np.full(self.max_steps_per_episode, dispatch_min, dtype=np.float32)
+            ))
+            high_array = np.concatenate((
+                np.array([self.max_price, self.max_price], dtype=np.float32),
+                np.full(self.max_steps_per_episode, dispatch_max, dtype=np.float32)
+            ))
+            
+            self.action_space = spaces.Box(
+                low=low_array,
+                high=high_array,
+                dtype=np.float32
+            )
+        elif self.pricing_policy == PricingPolicy.ONLINE:
+            # Define action space for online pricing policy
+            self.action_space = spaces.Box(
+                low=np.array([self.min_price, self.min_price], dtype=np.float32),
+                high=np.array([self.max_price, self.max_price], dtype=np.float32),
+                dtype=np.float32
         )
+                   
+
+        self.buy_coef = np.zeros(3, dtype=np.float32)   # [b0, b1, b2]
+        self.sell_coef = np.zeros(3, dtype=np.float32)  # [s0, s1, s2]
+        self.dispatch_profile = np.zeros(self.max_steps_per_episode, dtype=np.float32)
+
 
         # Load PPO model if provided
         self.model = None
@@ -210,6 +277,7 @@ class ISOController:
             self.logger.debug("No reward type option provided; using default.")
 
         self.count = 0
+        self.first_action_taken = False
         self.terminated = False
         self.truncated = False
         self.init = True
@@ -262,24 +330,109 @@ class ISOController:
         """
         assert self.init, "Environment must be reset before stepping."
 
-        self.count += 1
+        # 1. Update time and predicted demand
+        self.count += 1            
         self.current_time = (self.count * self.time_step_duration) / self.env_config['time']['minutes_per_day']
         self.logger.debug(f"Advanced time to {self.current_time:.3f} (day fraction)")
         self.predicted_demand = self.calculate_predicted_demand(self.current_time)
         self.logger.debug(f"Predicted demand: {self.predicted_demand:.2f} MWh")
 
-        self.logger.debug(f"Processing ISO action: {action}")
-        if isinstance(action, np.ndarray):
-            action = action.flatten()
-        else:
-            action = np.array([action, action])
-            self.logger.debug(f"Converted scalar action to array: {action}")
-        if not self.action_space.contains(action):
-            self.logger.warning(f"Action {action} out of bounds; clipping.")
-            action = np.clip(action, self.action_space.low, self.action_space.high)
-        self.iso_sell_price, self.iso_buy_price = action
-        self.logger.info(f"Step {self.count} - ISO Prices: Sell {self.iso_sell_price:.2f}, Buy {self.iso_buy_price:.2f}")
+        # 2. Process ISO action
+        if self.pricing_policy == PricingPolicy.QUADRATIC:
+            if self.count == 1 and not self.first_action_taken:
+                action = np.array(action).flatten()
+                if len(action) != 6 + self.max_steps_per_episode: 
+                    raise ValueError(
+                        f"Expected action of length {6 + self.max_steps_per_episode}, "
+                        f"got {len(action)}"
+                    )
+                
+                self.buy_coef = action[0:3]    # [b0, b1, b2] 
+                self.sell_coef = action[3:6]   # [s0, s1, s2] 
+                self.dispatch_profile = action[6:]  # 48 values for dispatch profile
 
+                self.buy_iso = QuadraticPricingISO(
+                    buy_a=float(self.buy_coef[0]),
+                    buy_b=float(self.buy_coef[1]), 
+                    buy_c=float(self.buy_coef[2])
+                )
+                self.sell_iso = QuadraticPricingISO(
+                    buy_a=float(self.sell_coef[0]),
+                    buy_b=float(self.sell_coef[1]),
+                    buy_c=float(self.sell_coef[2])
+                )
+
+                self.first_action_taken = True
+                self.logger.info(
+                    f"Day-ahead polynomial for BUY: {self.buy_coef}, "
+                    f"SELL: {self.sell_coef}, "
+                    f"Dispatch profile: {self.dispatch_profile}"
+                )
+            else:
+                self.logger.debug("Ignoring action - day-ahead polynomial & dispatch are already set.")
+        
+            buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': self.predicted_demand})
+            self.iso_buy_price = buy_pricing_fn(1.0)
+
+            sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': self.predicted_demand})
+            self.iso_sell_price = sell_pricing_fn(1.0)
+            dispatch = self.dispatch_profile[self.count - 1]
+            self.logger.info(f"Step {self.count} - ISO Prices: Sell {self.iso_sell_price:.2f}, Buy {self.iso_buy_price:.2f}")
+
+        elif self.pricing_policy == PricingPolicy.CONSTANT:
+            if self.count == 1 and not self.first_action_taken:
+                action = np.array(action).flatten()
+                if len(action) != 2 + self.max_steps_per_episode:
+                    raise ValueError(
+                        f"Expected action of length {2 + self.max_steps_per_episode}, got {len(action)}"
+                    )
+                self.const_buy = float(action[0])
+                self.const_sell = float(action[1])
+                self.dispatch_profile = action[2:]
+                self.buy_iso = QuadraticPricingISO(
+                    buy_a=0.0,
+                    buy_b=0.0,
+                    buy_c=self.const_buy
+                )
+                self.sell_iso = QuadraticPricingISO(
+                    buy_a=0.0,
+                    buy_b=0.0,
+                    buy_c=self.const_sell
+                )   
+                self.first_action_taken = True
+                self.logger.info(
+                    f"Day-ahead polynomial for BUY: {self.buy_coef}, "
+                    f"SELL: {self.sell_coef}, "
+                    f"Dispatch profile: {self.dispatch_profile}"
+                )
+            else:
+                self.logger.debug("Ignoring action - day-ahead constant pricing & dispatch already set.")
+            
+            buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': self.predicted_demand})
+            self.iso_buy_price = buy_pricing_fn(1.0)
+
+            sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': self.predicted_demand})
+            self.iso_sell_price = sell_pricing_fn(1.0)
+            dispatch = self.dispatch_profile[self.count - 1]
+            self.logger.info(f"Step {self.count} - ISO Prices: Sell {self.iso_sell_price:.2f}, Buy {self.iso_buy_price:.2f}")
+
+        elif self.pricing_policy == PricingPolicy.ONLINE:
+            self.logger.debug(f"Processing ISO action: {action}")
+            dispatch = self.predicted_demand
+            if isinstance(action, np.ndarray):
+                action = action.flatten()
+            else:
+                action = np.array([action, action])
+                self.logger.debug(f"Converted scalar action to array: {action}")
+            if not self.action_space.contains(action):
+                self.logger.warning(f"Action {action} out of bounds; clipping.")
+                action = np.clip(action, self.action_space.low, self.action_space.high)
+            self.iso_sell_price, self.iso_buy_price = action
+            self.logger.info(f"Step {self.count} - ISO Prices: Sell {self.iso_sell_price:.2f}, Buy {self.iso_buy_price:.2f}")
+
+
+
+        # 3. Get PCS response
         if self.trained_pcs_agent is not None:
             try:
                 pcs_obs = self.translate_to_pcs_observation()
@@ -304,7 +457,7 @@ class ISOController:
             # Simulate maximum charging behavior when no PCS agent is present
             # This helps validate that ISO responds correctly to constant buying behavior
             charge_rate_max = self.pcs_unit_config['battery']['model_parameters']['charge_rate_max']
-            battery_action = charge_rate_max  # Always charge at maximum rate
+            battery_action = self.rng.uniform(max(-self.PCSUnit.battery.get_state(),-charge_rate_max), charge_rate_max)
             net_exchange = (self.consumption + battery_action) - self.production
             self.pcs_demand = net_exchange
             
@@ -332,11 +485,13 @@ class ISOController:
                 f"net_demand={self.pcs_demand:.2f}"
             )
 
+
+
+        # 4. Calculate grid state and costs
         noise = np.random.normal(0, self.sigma)
         self.realized_demand = float(self.predicted_demand + noise)
         net_demand = self.realized_demand + self.pcs_demand
         self.logger.debug(f"Net demand: {net_demand:.2f} MWh")
-        dispatch = self.predicted_demand
         dispatch_cost = self.dispatch_price * dispatch
         shortfall = max(0.0, net_demand - dispatch)
         reserve_cost = self.reserve_price * shortfall
@@ -359,8 +514,11 @@ class ISOController:
             'dispatch_cost': dispatch_cost,
             'shortfall': shortfall,
             'reserve_cost': reserve_cost,
+            'dispatch': dispatch,
             'pcs_demand': self.pcs_demand
         }
+
+        # 5. Compute reward
 
         reward = self.reward.compute_reward(info)
         self.logger.info(f"Step reward: {reward:.2f}")

@@ -37,7 +37,6 @@ class ISOReward(BaseReward):
         else:
             price = info.get('iso_buy_price', 0.0)
 
-        print(f"Reserve Cost: {reserve_cost}, PCS Demand: {pcs_demand}, Dispatch Cost: {dispatch_cost}, Price: {price}")
         reward = -(reserve_cost + dispatch_cost - pcs_demand*price)
         
         return float(reward)
