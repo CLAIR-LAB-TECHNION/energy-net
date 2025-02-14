@@ -168,8 +168,8 @@ def main():
 def train_and_evaluate_agent(
     algo_type='PPO',
     env_id_iso='ISOEnv-v0',
-    total_iterations=2,             
-    train_timesteps_per_iteration=48*1,  
+    total_iterations=10,             
+    train_timesteps_per_iteration=48*10,  
     eval_episodes=5,                 
     log_dir_iso='logs/agent_iso',
     model_save_path_iso='models/agent_iso/agent_iso',
