@@ -385,7 +385,7 @@ class PCSUnitController:
                 )
         else:
             self.iso_sell_price = self.iso_buy_price = 10.0
-            if (self.predicted_demand>=self.realized_demand):
+            if (10<=self.count<=30):
                 self.iso_sell_price = 4.0
             self.iso_buy_price = 0.8 * self.iso_sell_price
             self.logger.info(
@@ -557,8 +557,6 @@ class PCSUnitController:
         """
         self.logger.info("Closing environment.")
 
-        # Close loggers if necessary
-        # Example:
         logger_names = ['PCSunitEnv', 'Battery', 'ProductionUnit', 'ConsumptionUnit', 'PCSUnit'] 
         for logger_name in logger_names:
             logger = logging.getLogger(logger_name)

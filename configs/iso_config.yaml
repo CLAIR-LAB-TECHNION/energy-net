@@ -1,11 +1,32 @@
 # configs/iso_config.yaml
 
 pricing:
-  default_buy_price: 10.0  
-  default_sell_price: 1.0  
+  default_buy_price: 20.0  
+  default_sell_price: 0.0  
   parameters:
-    min_price: 1.0
-    max_price: 10.0
+    min_price: 0.0
+    max_price: 20.0
+
+
+# Action space configurations for different pricing policies
+action_spaces:
+  quadratic:
+    dispatch:
+      min: 0.0
+      max: 300.0
+    polynomial:
+      min: -100.0
+      max: 100.0
+  online:
+    buy_price:
+      min: 1.0
+      max: 10.0
+    sell_price:
+      min: 1.0
+      max: 10.0
+    dispatch:
+      min: 0.0
+      max: 300.0
 
 # Specifies which ISO implementation to use
 type: "HourlyPricingISO"
@@ -39,8 +60,3 @@ parameters:
     22: 4.5
     23: 4.0
 
-  # Example: To use RandomPricingISO, change type and parameters accordingly
-  # type: "RandomPricingISO"
-  # parameters:
-  #   min_price: 40.0
-  #   max_price: 60.0

@@ -14,13 +14,28 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RescaleAction, ClipAction
 from gymnasium import spaces
 from stable_baselines3.common.noise import NormalActionNoise
+from energy_net.env import PricingPolicy
 
 class DiscreteActionWrapper(gym.ActionWrapper):
-    def __init__(self, env, n_actions=21, min_action=-10.0, max_action=10.0):
+    def __init__(self, env, n_actions=21):
         super().__init__(env)
         self.n_actions = n_actions
-        self.min_action = min_action
-        self.max_action = max_action
+        
+        # Get pricing policy and config from the environment's controller
+        pricing_policy = env.controller.pricing_policy
+        action_spaces_config = env.controller.iso_config.get('action_spaces', {})
+        
+        if pricing_policy == PricingPolicy.ONLINE:
+            # For online policy, use price bounds
+            price_config = action_spaces_config.get('online', {}).get('buy_price', {})
+            self.min_action = price_config.get('min', 1.0)
+            self.max_action = price_config.get('max', 10.0)
+        else:  # QUADRATIC
+            # For quadratic policy, use polynomial coefficient bounds
+            poly_config = action_spaces_config.get('quadratic', {}).get('polynomial', {})
+            self.min_action = poly_config.get('min', 0.0)
+            self.max_action = poly_config.get('max', 100.0)
+            
         self.action_space = spaces.Discrete(n_actions)
     
     def action(self, action_idx):
@@ -46,6 +61,7 @@ def main():
     log_file = 'logs/environments.log'
     pcs_id = 'PCSUnitEnv-v0'
     iso_id = 'ISOEnv-v0'
+    pricing_policy = PricingPolicy.ONLINE  # Set the pricing policy here
     # Attempt to create the environment using gym.make
     try:
         env = gym.make(
@@ -54,7 +70,8 @@ def main():
             env_config_path=env_config_path,
             iso_config_path=iso_config_path,
             pcs_unit_config_path=pcs_unit_config_path,
-            log_file=log_file
+            log_file=log_file,
+            pricing_policy=pricing_policy
         )
     except gym.error.UnregisteredEnv:
         print("Error: The environment '{env_id}' is not registered. Please check your registration.")
@@ -104,7 +121,8 @@ def main():
             env_config_path=env_config_path,
             iso_config_path=iso_config_path,
             pcs_unit_config_path=pcs_unit_config_path,
-            log_file=log_file
+            log_file=log_file,
+            pricing_policy=pricing_policy
         )
     except gym.error.UnregisteredEnv:
         print("Error: The environment '{env_id}' is not registered. Please check your registration.")
@@ -151,11 +169,13 @@ def train_and_evaluate_agent(
     algo_type='PPO',
     env_id_iso='ISOEnv-v0',
     total_iterations=10,             
-    train_timesteps_per_iteration=1,  
+    train_timesteps_per_iteration=48*10,  
     eval_episodes=5,                 
     log_dir_iso='logs/agent_iso',
     model_save_path_iso='models/agent_iso/agent_iso',
-    seed=42
+    seed=422,
+    trained_pcs_model_path=None,
+    pricing_policy=None  
 ):
     """
     Implements an iterative training process for two agents (ISO and ISO) using different RL algorithms.
@@ -182,6 +202,7 @@ def train_and_evaluate_agent(
         model_save_path_iso (str): Save path for ISO model
         model_save_path_iso (str): Save path for ISO model
         seed (int): Random seed for reproducibility
+        pricing_policy (PricingPolicy): The pricing policy to use (QUADRATIC/ONLINE/CONSTANT)
     
     Results:
     - Saves trained models at specified intervals
@@ -192,18 +213,38 @@ def train_and_evaluate_agent(
     os.makedirs(log_dir_iso, exist_ok=True)
     os.makedirs(os.path.dirname(model_save_path_iso), exist_ok=True)
 
-    # Create base environments
-    train_env_iso = gym.make(env_id_iso)
-    eval_env_iso = gym.make(env_id_iso)
+    # Create base environments with trained model path and pricing policy
+    train_env_iso = gym.make(
+        env_id_iso,
+        trained_pcs_model_path=trained_pcs_model_path,
+        pricing_policy=pricing_policy
+    )
+    eval_env_iso = gym.make(
+        env_id_iso,
+        trained_pcs_model_path=trained_pcs_model_path,
+        pricing_policy=pricing_policy
+    )
 
     if algo_type == 'DQN':
         # Wrap with discrete-action wrapper
         train_env_iso = DiscreteActionWrapper(train_env_iso)
         eval_env_iso = DiscreteActionWrapper(eval_env_iso)
     else:
-        train_env_iso = RescaleAction(train_env_iso, min_action=-10.0, max_action=10.0)
-        eval_env_iso = RescaleAction(eval_env_iso, min_action=-10.0, max_action=10.0)
-    
+        if pricing_policy == PricingPolicy.ONLINE:
+            train_env_iso = RescaleAction(
+                train_env_iso, 
+                min_action=np.array([1.0, 1.0], dtype=np.float32),
+                max_action=np.array([10.0, 10.0], dtype=np.float32)
+            )
+            eval_env_iso = RescaleAction(
+                eval_env_iso,
+                min_action=np.array([1.0, 1.0], dtype=np.float32),
+                max_action=np.array([10.0, 10.0], dtype=np.float32)
+            )
+        else:  # QUADRATIC
+            train_env_iso = RescaleAction(train_env_iso, min_action=0.0, max_action=100.0)
+            eval_env_iso = RescaleAction(eval_env_iso, min_action=0.0, max_action=100.0)
+
     # Add monitoring
     train_env_iso = Monitor(train_env_iso, filename=os.path.join(log_dir_iso, 'train_monitor_iso.csv'))
     eval_env_iso = Monitor(eval_env_iso, filename=os.path.join(log_dir_iso, 'eval_monitor.csv'))
@@ -270,7 +311,7 @@ def train_and_evaluate_agent(
                       seed=seed,
                       tensorboard_log=log_dir)
         if algo_type == 'PPO':
-            return PPO('MlpPolicy', env, verbose=1, seed=seed, tensorboard_log=log_dir,ent_coef=0.01, gamma=1)
+            return PPO('MlpPolicy', env, verbose=1, seed=seed, tensorboard_log=log_dir, gamma=1)
         elif algo_type == 'A2C':
             return A2C('MlpPolicy', 
                       env, 
@@ -398,7 +439,7 @@ def train_and_evaluate_agent(
             # Reload normalization statistics and update model environment
             new_normalizer = VecNormalize.load(
                 f"{model_save_path_iso}_normalizer.pkl",
-                DummyVecEnv([lambda: gym.make(env_id_iso)])
+                DummyVecEnv([lambda: gym.make(env_id_iso, pricing_policy=pricing_policy)])
             )
             new_normalizer.training = True
             new_normalizer.norm_reward = True
@@ -442,12 +483,21 @@ def train_and_evaluate_agent(
   
 
 
-    def load_env_and_normalizer(env_id, normalizer_path, log_dir, min_action=-10, max_action=10):
+    def load_env_and_normalizer(env_id, normalizer_path, log_dir, pricing_policy):
         """
         Loads a gym environment along with its VecNormalize normalizer.
         """
-        env = gym.make(env_id)
-        env = RescaleAction(env, min_action=min_action, max_action=max_action)
+        env = gym.make(env_id, pricing_policy=pricing_policy)
+        
+        if pricing_policy == PricingPolicy.ONLINE:
+            env = RescaleAction(
+                env,
+                min_action=np.array([1.0, 1.0], dtype=np.float32),
+                max_action=np.array([10.0, 10.0], dtype=np.float32)
+            )
+        else:
+            env = RescaleAction(env, min_action=0.0, max_action=100.0)
+        
         env = Monitor(env, filename=os.path.join(log_dir, 'eval_monitor.csv'))
         vec_env = DummyVecEnv([lambda: env])
         vec_env = VecNormalize.load(normalizer_path, vec_env)
@@ -504,7 +554,7 @@ def train_and_evaluate_agent(
 
     print("Training and evaluation process completed.")
 
-    iso_eval_env = load_env_and_normalizer(env_id_iso, f"{model_save_path_iso}_normalizer.pkl", log_dir_iso, min_action=-10, max_action=10)
+    iso_eval_env = load_env_and_normalizer(env_id_iso, f"{model_save_path_iso}_normalizer.pkl", log_dir_iso, pricing_policy)
     
     if algo_type == 'PPO':
         iso_model_final = PPO.load(f"{model_save_path_iso}_final.zip", env=iso_eval_env)
@@ -531,5 +581,9 @@ def train_and_evaluate_agent(
 
 
 if __name__ == "__main__":
-    # Example usage with different algorithms
-    train_and_evaluate_agent(algo_type='PPO')
+    # Example usage with trained PCS model
+    train_and_evaluate_agent(
+        algo_type='PPO',
+        trained_pcs_model_path= None,
+        pricing_policy=PricingPolicy.QUADRATIC, 
+    )

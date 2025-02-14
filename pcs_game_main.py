@@ -150,7 +150,7 @@ def main():
 def train_and_evaluate_agent(
     algo_type='PPO',
     env_id_pcs='PCSUnitEnv-v0',
-    total_iterations=500,             
+    total_iterations=100,             
     train_timesteps_per_iteration=48*400,  
     eval_episodes=5,                 
     log_dir_pcs='logs/agent_pcs',

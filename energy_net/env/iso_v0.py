@@ -23,7 +23,8 @@ from typing import Optional, Tuple, Dict, Any, Union
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
-from energy_net.iso_controller import ISOController 
+from energy_net.iso_controller import ISOController
+from energy_net.env import PricingPolicy  # Add this import
 
 class ISOEnv(gym.Env):
     """
@@ -44,6 +45,7 @@ class ISOEnv(gym.Env):
     
     def __init__(
         self,
+        pricing_policy=None,
         render_mode: Optional[str] = None,
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
@@ -57,6 +59,7 @@ class ISOEnv(gym.Env):
         Initializes the ISOEnv environment.
 
         Args:
+            pricing_policy: Pricing policy to be used. Defaults to PricingPolicy.QUADRATIC.
             render_mode (Optional[str], optional): Rendering mode. Defaults to None.
             env_config_path (Optional[str], optional): Path to environment config. Defaults to 'configs/environment_config.yaml'.
             iso_config_path (Optional[str], optional): Path to ISO config. Defaults to 'configs/iso_config.yaml'.
@@ -67,9 +70,10 @@ class ISOEnv(gym.Env):
             model_iteration (Optional[int], optional): Model iteration number. Defaults to None.
         """
         super().__init__()
+        self.pricing_policy = pricing_policy
         
-        # Initialize controller with base configurations
         self.controller = ISOController(
+            pricing_policy=pricing_policy,
             render_mode=render_mode,
             env_config_path=env_config_path,
             iso_config_path=iso_config_path,

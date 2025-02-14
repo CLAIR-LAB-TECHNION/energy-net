@@ -35,7 +35,8 @@ class ActionTrackingCallback(BaseCallback):
         self.battery_levels = []
         self.net_exchanges = []
         self.iso_sell_prices = [] 
-        self.iso_buy_prices = []   
+        self.iso_buy_prices = []
+        self.dispatch = []   
         
     def _on_step(self) -> bool:
         """
@@ -76,6 +77,7 @@ class ActionTrackingCallback(BaseCallback):
             'dispatch_cost': info.get('dispatch_cost', 0.0),
             'reserve_cost': info.get('reserve_cost', 0.0),
             'shortfall': info.get('shortfall', 0.0),
+            'dispatch': info.get('dispatch', 0.0),
             'net_demand': info.get('net_demand', 0.0)
         }
         
@@ -114,6 +116,7 @@ class ActionTrackingCallback(BaseCallback):
         realized_demand = [d.get('realized_demand', 0.0) for d in episode_data]
         iso_sell_prices = [d.get('iso_sell_price', 0.0) for d in episode_data]  # safe extraction
         iso_buy_prices = [d.get('iso_buy_price', 0.0) for d in episode_data]    # safe extraction
+        dispatch = [d.get('dispatch', 0.0) for d in episode_data]
         
         # Compute net demand as realized_demand + net_exchange
         net_demand = [r + n for r, n in zip(realized_demand, net_exchange)]
@@ -133,7 +136,7 @@ class ActionTrackingCallback(BaseCallback):
         ax1 = plt.subplot(2, 1, 1)
         
         # Dispatch bar as originally defined
-        ax1.bar(steps, predicted_demand, width=0.8, color='lightblue', label='dispatch')
+        ax1.bar(steps, dispatch, width=0.8, color='lightblue', label='dispatch')
         
         # Plot demand lines on top of dispatch:
         ax1.plot(steps, predicted_demand, 'k--', linewidth=2, label='Predicted Demand')

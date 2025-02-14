@@ -7,29 +7,47 @@ from energy_net.utils.callbacks import ActionTrackingCallback
 from gymnasium.wrappers import RescaleAction
 from gymnasium import spaces
 import numpy as np
+from energy_net.env import PricingPolicy
 
-class DiscretizeActionWrapper(gym.ActionWrapper):
-    def __init__(self, env, n_actions=21, min_action=-10.0, max_action=10.0):
+
+class DiscreteActionWrapper(gym.ActionWrapper):
+    def __init__(self, env, n_actions=21):
         super().__init__(env)
         self.n_actions = n_actions
-        self.min_action = min_action
-        self.max_action = max_action
+        
+        # Get pricing policy and config from the environment's controller
+        pricing_policy = env.controller.pricing_policy
+        action_spaces_config = env.controller.iso_config.get('action_spaces', {})
+        
+        if pricing_policy == PricingPolicy.ONLINE:
+            # For online policy, use price bounds
+            price_config = action_spaces_config.get('online', {}).get('buy_price', {})
+            self.min_action = price_config.get('min', 1.0)
+            self.max_action = price_config.get('max', 10.0)
+        else:  # QUADRATIC
+            # For quadratic policy, use polynomial coefficient bounds
+            poly_config = action_spaces_config.get('quadratic', {}).get('polynomial', {})
+            self.min_action = poly_config.get('min', 0.0)
+            self.max_action = poly_config.get('max', 100.0)
+            
         self.action_space = spaces.Discrete(n_actions)
     
     def action(self, action_idx):
         step_size = (self.max_action - self.min_action) / (self.n_actions - 1)
         return np.array([self.min_action + action_idx * step_size], dtype=np.float32)
 
+
 def evaluate_trained_model(
-    model_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_final.zip',
-    normalizer_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_normalizer.pkl',
-    env_id='ISOEnv-v0',
+    model_path=None,
+    normalizer_path=None,
+    env_id='None', #ISOEnv-v0 ,PCSUnitEnv-v0
     env_config_path='configs/environment_config.yaml',
     iso_config_path='configs/iso_config.yaml',
     pcs_unit_config_path='configs/pcs_unit_config.yaml',
     log_file='logs/eval_environments.log',
     num_episodes=5,
-    algo_type='PPO' 
+    algo_type='PPO',
+    pricing_policy=None,
 ):
     """Evaluate a trained model using our existing callbacks"""
     
@@ -40,7 +58,8 @@ def evaluate_trained_model(
         env_config_path=env_config_path,
         iso_config_path=iso_config_path,
         pcs_unit_config_path=pcs_unit_config_path,
-        log_file=log_file
+        log_file=log_file,
+        pricing_policy=pricing_policy
     )
     env = Monitor(env, filename=os.path.join('logs', 'evaluation_monitor.csv'))
 
@@ -48,7 +67,7 @@ def evaluate_trained_model(
     if algo_type == 'DQN':
         env = DiscretizeActionWrapper(env)
     else:  # PPO or A2C
-        env = RescaleAction(env, min_action=-10, max_action=10)
+        env = RescaleAction(env, min_action=1, max_action=10)
 
     env = DummyVecEnv([lambda: env])
     env = VecNormalize.load(normalizer_path, env)
@@ -110,7 +129,7 @@ def evaluate_trained_model(
             # Record original action value for plotting
             if algo_type == 'DQN':
                 # Convert discrete action back to continuous value for plotting
-                step_size = 20.0 / (21 - 1)  # -10 to +10 range with 21 steps
+                step_size = 20.0 / (21 - 1)  
                 action_value = -10.0 + (action[0] * step_size)
             else:
                 action_value = float(action[0,0]) if len(action.shape) == 2 else float(action[0])
@@ -119,8 +138,8 @@ def evaluate_trained_model(
             step_data = {
                 'step': step,
                 'action': action_value,  # Store the continuous equivalent
-                'buy_price': info.get('buy_price', 0),
-                'sell_price': info.get('sell_price', 0),
+                'iso_sell_price': info.get('iso_sell_price', 0),
+                'iso_buy_price': info.get('iso_buy_price', 0),
                 'battery_level': info.get('battery_level', 0),
                 'net_exchange': info.get('net_exchange', 0),
                 'production': info.get('production', 0),
@@ -129,6 +148,7 @@ def evaluate_trained_model(
                 'realized_demand': info.get('realized_demand', 0),
                 'dispatch_cost': info.get('dispatch_cost', 0),
                 'reserve_cost': info.get('reserve_cost', 0),
+                'dispatch': info.get('dispatch', 0),
                 'reward': float(reward)
             }
             
@@ -150,22 +170,12 @@ def evaluate_trained_model(
 
 if __name__ == "__main__":
     # Example usage with different algorithms
-   # evaluate_trained_model(
-   #     algo_type='PPO',
-   #     model_path='models/agent_pcs/ppo_model.zip',
-   #     normalizer_path='models/agent_pcs/ppo_normalizer.pkl'
-  #  )
-    
-   # evaluate_trained_model(
-   #     algo_type='A2C',
-   #     model_path='/Users/matanlevi/energy-net/models/agent_pcs/agent_pcs_iter_0.zip',
-   #     normalizer_path='/Users/matanlevi/energy-net/models/agent_pcs/agent_pcs_normalizer.pkl'
-   # )
-    
     evaluate_trained_model(
-        algo_type='PPO',
-        model_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_final.zip',
-        normalizer_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_normalizer.pkl'
+    algo_type='PPO',
+    model_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_final.zip',
+    normalizer_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_normalizer.pkl',
+    pricing_policy=PricingPolicy.QUADRATIC,
+    env_id='ISOEnv-v0', #ISOEnv-v0 ,PCSUnitEnv-v0
     )
     
    
