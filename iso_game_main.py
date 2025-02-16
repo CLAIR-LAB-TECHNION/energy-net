@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import numpy as np
 
+
 from stable_baselines3 import A2C, PPO, DQN, DDPG, SAC, TD3
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.evaluation import evaluate_policy
@@ -31,7 +32,7 @@ class DiscreteActionWrapper(gym.ActionWrapper):
             self.min_action = price_config.get('min', 1.0)
             self.max_action = price_config.get('max', 10.0)
         else:  # QUADRATIC
-            # For quadratic policy, use polynomial coefficient bounds
+            # For quadratic policy, use polynomial coeffiRescaleActioncient bounds
             poly_config = action_spaces_config.get('quadratic', {}).get('polynomial', {})
             self.min_action = poly_config.get('min', 0.0)
             self.max_action = poly_config.get('max', 100.0)
@@ -168,12 +169,12 @@ def main():
 def train_and_evaluate_agent(
     algo_type='PPO',
     env_id_iso='ISOEnv-v0',
-    total_iterations=10,             
-    train_timesteps_per_iteration=48*10,  
+    total_iterations=None,             
+    train_timesteps_per_iteration=None,  
     eval_episodes=5,                 
     log_dir_iso='logs/agent_iso',
     model_save_path_iso='models/agent_iso/agent_iso',
-    seed=422,
+    seed=None,
     trained_pcs_model_path=None,
     pricing_policy=None  
 ):
@@ -311,7 +312,7 @@ def train_and_evaluate_agent(
                       seed=seed,
                       tensorboard_log=log_dir)
         if algo_type == 'PPO':
-            return PPO('MlpPolicy', env, verbose=1, seed=seed, tensorboard_log=log_dir, gamma=1)
+            return PPO('MlpPolicy', env, verbose=0, seed=seed, tensorboard_log=log_dir, gamma=1)
         elif algo_type == 'A2C':
             return A2C('MlpPolicy', 
                       env, 
@@ -581,9 +582,38 @@ def train_and_evaluate_agent(
 
 
 if __name__ == "__main__":
-    # Example usage with trained PCS model
+    import argparse
+    from iso_game_main import train_and_evaluate_agent, PricingPolicy
+
+    parser = argparse.ArgumentParser(description="Train and Evaluate Agent")
+    parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")
+    parser.add_argument("--trained_pcs_model_path", required=True, help="Path to the trained PCSs model")
+    parser.add_argument("--pricing_policy", required=True, help="Pricing policy: QUADRATIC, ONLINE, or CONSTANT")
+    parser.add_argument("--total_iterations", type=int, default=10, help="Total iterations for training")
+    parser.add_argument("--train_timesteps_per_iteration", type=int, default=10000, help="Timesteps per iteration")
+    parser.add_argument("--eval_episodes", type=int, default=5, help="Number of evaluation episodes")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    
+    args = parser.parse_args()
+
+    # Convert pricing_policy argument (a string) to the corresponding enum value:
+    policy = args.pricing_policy.upper()
+    if policy == "QUADRATIC":
+        pricing_policy_enum = PricingPolicy.QUADRATIC
+    elif policy == "ONLINE":
+        pricing_policy_enum = PricingPolicy.ONLINE
+    elif policy == "CONSTANT":
+        pricing_policy_enum = PricingPolicy.CONSTANT
+    else:
+        raise ValueError("Invalid pricing_policy value provided. Use QUADRATIC, ONLINE, or CONSTANT.")
+
+    # Directly call train_and_evaluate_agent with the parsed arguments:
     train_and_evaluate_agent(
-        algo_type='PPO',
-        trained_pcs_model_path= None,
-        pricing_policy=PricingPolicy.QUADRATIC, 
+        algo_type=args.algo_type,
+        trained_pcs_model_path=args.trained_pcs_model_path,
+        pricing_policy=pricing_policy_enum,
+        total_iterations=args.total_iterations,
+        train_timesteps_per_iteration=args.train_timesteps_per_iteration,
+        eval_episodes=args.eval_episodes,
+        seed=args.seed
     )
