@@ -16,6 +16,8 @@ from gymnasium.wrappers import RescaleAction, ClipAction
 from gymnasium import spaces
 from stable_baselines3.common.noise import NormalActionNoise
 from energy_net.env import PricingPolicy
+from energy_net.dynamics.iso.demand_patterns import DemandPattern
+from energy_net.dynamics.iso.cost_types import CostType
 
 class DiscreteActionWrapper(gym.ActionWrapper):
     def __init__(self, env, n_actions=21):
@@ -176,7 +178,10 @@ def train_and_evaluate_agent(
     model_save_path_iso='models/agent_iso/agent_iso',
     seed=None,
     trained_pcs_model_path=None,
-    pricing_policy=None  
+    pricing_policy=None,
+    demand_pattern=None,
+    num_pcs_agents=None,  
+    cost_type=None
 ):
     """
     Implements an iterative training process for two agents (ISO and ISO) using different RL algorithms.
@@ -218,12 +223,18 @@ def train_and_evaluate_agent(
     train_env_iso = gym.make(
         env_id_iso,
         trained_pcs_model_path=trained_pcs_model_path,
-        pricing_policy=pricing_policy
+        pricing_policy=pricing_policy,
+        demand_pattern=demand_pattern,  
+        cost_type=cost_type,
+        num_pcs_agents=num_pcs_agents
     )
     eval_env_iso = gym.make(
         env_id_iso,
         trained_pcs_model_path=trained_pcs_model_path,
-        pricing_policy=pricing_policy
+        pricing_policy=pricing_policy,
+        demand_pattern=demand_pattern, 
+        cost_type=cost_type,
+        num_pcs_agents=num_pcs_agents
     )
 
     if algo_type == 'DQN':
@@ -440,7 +451,7 @@ def train_and_evaluate_agent(
             # Reload normalization statistics and update model environment
             new_normalizer = VecNormalize.load(
                 f"{model_save_path_iso}_normalizer.pkl",
-                DummyVecEnv([lambda: gym.make(env_id_iso, pricing_policy=pricing_policy)])
+                DummyVecEnv([lambda: gym.make(env_id_iso, pricing_policy=pricing_policy, demand_pattern=demand_pattern, cost_type=cost_type, num_pcs_agents=num_pcs_agents)])
             )
             new_normalizer.training = True
             new_normalizer.norm_reward = True
@@ -484,12 +495,12 @@ def train_and_evaluate_agent(
   
 
 
-    def load_env_and_normalizer(env_id, normalizer_path, log_dir, pricing_policy):
+    def load_env_and_normalizer(env_id, normalizer_path, log_dir, pricing_policy,demand_pattern, cost_type, num_pcs_agents):
         """
         Loads a gym environment along with its VecNormalize normalizer.
         """
-        env = gym.make(env_id, pricing_policy=pricing_policy)
-        
+        env = gym.make(env_id, pricing_policy=pricing_policy, demand_pattern=demand_pattern, cost_type=cost_type, num_pcs_agents=num_pcs_agents)
+
         if pricing_policy == PricingPolicy.ONLINE:
             env = RescaleAction(
                 env,
@@ -505,7 +516,6 @@ def train_and_evaluate_agent(
         vec_env.training = False      
         vec_env.norm_reward = False    
         return vec_env
-
 
 
     # Plot Training Rewards - separate plots for each agent
@@ -555,7 +565,7 @@ def train_and_evaluate_agent(
 
     print("Training and evaluation process completed.")
 
-    iso_eval_env = load_env_and_normalizer(env_id_iso, f"{model_save_path_iso}_normalizer.pkl", log_dir_iso, pricing_policy)
+    iso_eval_env = load_env_and_normalizer(env_id_iso, f"{model_save_path_iso}_normalizer.pkl", log_dir_iso, pricing_policy, demand_pattern, cost_type, num_pcs_agents)
     
     if algo_type == 'PPO':
         iso_model_final = PPO.load(f"{model_save_path_iso}_final.zip", env=iso_eval_env)
@@ -584,6 +594,7 @@ def train_and_evaluate_agent(
 if __name__ == "__main__":
     import argparse
     from iso_game_main import train_and_evaluate_agent, PricingPolicy
+    from energy_net.dynamics.iso.demand_patterns import DemandPattern
 
     parser = argparse.ArgumentParser(description="Train and Evaluate Agent")
     parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")
@@ -593,6 +604,22 @@ if __name__ == "__main__":
     parser.add_argument("--train_timesteps_per_iteration", type=int, default=10000, help="Timesteps per iteration")
     parser.add_argument("--eval_episodes", type=int, default=5, help="Number of evaluation episodes")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--num_pcs_agents", type=int, default=1, help="Number of agents")
+    
+    parser.add_argument(
+        "--demand_pattern",
+        default="SINUSOIDAL",
+        choices=["SINUSOIDAL", "CONSTANT", "DOUBLE_PEAK"],
+        help="Demand pattern type"
+    )
+
+    parser.add_argument(
+        "--cost_type",
+        default="CONSTANT",
+        choices=["CONSTANT"], 
+        help="Cost structure type"
+    )
+
     
     args = parser.parse_args()
 
@@ -607,13 +634,21 @@ if __name__ == "__main__":
     else:
         raise ValueError("Invalid pricing_policy value provided. Use QUADRATIC, ONLINE, or CONSTANT.")
 
+    # Convert demand pattern string to enum
+    cost_type = CostType[args.cost_type.upper()]
+
+    demand_pattern = DemandPattern[args.demand_pattern.upper()]
+
     # Directly call train_and_evaluate_agent with the parsed arguments:
     train_and_evaluate_agent(
+        cost_type=cost_type,
         algo_type=args.algo_type,
         trained_pcs_model_path=args.trained_pcs_model_path,
         pricing_policy=pricing_policy_enum,
+        demand_pattern=demand_pattern,  
         total_iterations=args.total_iterations,
         train_timesteps_per_iteration=args.train_timesteps_per_iteration,
         eval_episodes=args.eval_episodes,
+        num_pcs_agents=args.num_pcs_agents,
         seed=args.seed
     )

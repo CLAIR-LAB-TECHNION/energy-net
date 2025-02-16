@@ -6,12 +6,15 @@ import logging
 from stable_baselines3 import PPO
 from gymnasium import spaces
 from energy_net.env import PricingPolicy  
+from energy_net.dynamics.iso.demand_patterns import DemandPattern, calculate_demand
+from energy_net.dynamics.iso.cost_types import CostType, calculate_costs
 
 from energy_net.utils.logger import setup_logger
 from energy_net.rewards.base_reward import BaseReward
 from energy_net.rewards.iso_reward import ISOReward
 from energy_net.components.pcsunit import PCSUnit
 from energy_net.dynamics.iso.quadratic_pricing_iso import QuadraticPricingISO
+from energy_net.dynamics.iso.pcs_manager import PCSManager
 
 
 class ISOController:
@@ -31,7 +34,10 @@ class ISOController:
     
     def __init__(
         self,
+        num_pcs_agents: int = 1,  # Add this parameter
         pricing_policy: PricingPolicy = None,  
+        demand_pattern=None,
+        cost_type=None, 
         render_mode: Optional[str] = None,
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
@@ -46,6 +52,10 @@ class ISOController:
         self.logger.info(f"Initializing ISO Controller with {pricing_policy.value} policy")
         
         self.pricing_policy = pricing_policy
+        self.demand_pattern = demand_pattern  # Store it as instance variable
+        self.logger.info(f"Using demand pattern: {demand_pattern.value}")
+        self.cost_type = cost_type
+        self.logger.info(f"Using cost type: {cost_type.value}")
 
         # Load configurations
         self.env_config = self.load_config(env_config_path)
@@ -156,8 +166,12 @@ class ISOController:
 
         uncertainty_config = self.env_config.get('demand_uncertainty', {})
         self.sigma = uncertainty_config.get('sigma', 0.0)
-        self.reserve_price = self.env_config.get('reserve_price', 0.0)
-        self.dispatch_price = self.env_config.get('dispatch_price', 0.0)
+
+        # Get costs from cost type
+        self.reserve_price, self.dispatch_price = calculate_costs(
+            cost_type,
+            self.env_config
+        )
 
         # Initialize ISO prices with default values
         self.iso_sell_price = self.min_price
@@ -187,6 +201,16 @@ class ISOController:
             except Exception as e:
                 self.logger.error(f"Failed to load trained PCS agent: {e}")
 
+        self.demand_pattern = demand_pattern
+        self.logger.info(f"Using demand pattern: {demand_pattern.value}")
+
+        # Replace single PCS with PCSManager
+        self.pcs_manager = PCSManager(
+            num_agents=num_pcs_agents,
+            pcs_unit_config=self.pcs_unit_config,
+            log_file=log_file
+        )
+
     def load_config(self, config_path: str) -> Dict[str, Any]:
         if not os.path.exists(config_path):
             self.logger.error(f"Configuration file not found: {config_path}")
@@ -204,12 +228,14 @@ class ISOController:
         ], dtype=np.float32)
 
     def calculate_predicted_demand(self, time: float) -> float:
-        demand_config = self.env_config['predicted_demand']
-        interval = time * demand_config['interval_multiplier']
-        predicted_demand = demand_config['base_load'] + demand_config['amplitude'] * np.cos(
-            (interval + demand_config['phase_shift']) * np.pi / demand_config['period_divisor']
+        """
+        Calculate predicted demand using selected pattern
+        """
+        return calculate_demand(
+            time=time,
+            pattern=self.demand_pattern,
+            config=self.env_config['predicted_demand']
         )
-        return float(predicted_demand)
 
     def translate_to_pcs_observation(self) -> np.ndarray:
         """
@@ -317,6 +343,7 @@ class ISOController:
         self.logger.debug(f"Initial observation: {observation}")
 
         info = {"status": "reset"}
+        self.pcs_manager.reset_all()
         return observation, info
 
     def step(self, action: Union[float, np.ndarray, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
@@ -432,60 +459,12 @@ class ISOController:
 
 
 
-        # 3. Get PCS response
-        if self.trained_pcs_agent is not None:
-            try:
-                pcs_obs = self.translate_to_pcs_observation()
-                battery_action = self.simulate_pcs_response(pcs_obs)
-                self.PCSUnit.update(time=self.current_time, battery_action=battery_action)
-                self.production = self.PCSUnit.get_self_production()
-                self.consumption = self.PCSUnit.get_self_consumption()
-                if battery_action > 0:
-                    net_exchange = (self.consumption + battery_action) - self.production
-                    self.logger.debug(f"Battery charging: {battery_action:.2f} MWh")
-                elif battery_action < 0:
-                    net_exchange = self.consumption - (self.production + abs(battery_action))
-                    self.logger.debug(f"Battery discharging: {abs(battery_action):.2f} MWh")
-                else:
-                    net_exchange = self.consumption - self.production
-                    self.logger.debug("Battery idle (no charge/discharge)")
-                self.pcs_demand = net_exchange
-                self.logger.info(f"PCS response: battery_action={battery_action:.3f}, production={self.production:.3f}, consumption={self.consumption:.3f}, net_exchange={net_exchange:.3f}")
-            except Exception as e:
-                self.logger.error(f"Failed to get PCS response on step: {e}")
-        else:
-            # Simulate maximum charging behavior when no PCS agent is present
-            # This helps validate that ISO responds correctly to constant buying behavior
-            charge_rate_max = self.pcs_unit_config['battery']['model_parameters']['charge_rate_max']
-            battery_action = self.rng.uniform(max(-self.PCSUnit.battery.get_state(),-charge_rate_max), charge_rate_max)
-            net_exchange = (self.consumption + battery_action) - self.production
-            self.pcs_demand = net_exchange
-            
-            self.PCSUnit.update(time=self.current_time, battery_action=battery_action)
-            self.production = self.PCSUnit.get_self_production()
-            self.consumption = self.PCSUnit.get_self_consumption()
-            
-            # Net exchange will be consumption + charging - production
-            self.pcs_demand = (self.consumption + battery_action) - self.production
-            
-            # Validate ISO's pricing response
-            if self.iso_sell_price < self.max_price * 0.9:  # Allow for some wiggle room
-                self.logger.warning(
-                    f"Suboptimal ISO behavior detected: "
-                    f"When PCS is constantly buying (charging at {battery_action:.2f} MWh), "
-                    f"ISO sell price ({self.iso_sell_price:.2f}) should be closer to "
-                    f"maximum ({self.max_price:.2f})"
-                )
-            
-            self.logger.info(
-                f"No PCS agent - simulating constant charging: "
-                f"battery_action={battery_action:.2f}, "
-                f"consumption={self.consumption:.2f}, "
-                f"production={self.production:.2f}, "
-                f"net_demand={self.pcs_demand:.2f}"
-            )
-
-
+        # 3. Get PCS responses
+        self.production, self.consumption, self.pcs_demand = self.pcs_manager.simulate_step(
+            current_time=self.current_time,
+            iso_buy_price=self.iso_buy_price,
+            iso_sell_price=self.iso_sell_price
+        )
 
         # 4. Calculate grid state and costs
         noise = np.random.normal(0, self.sigma)
@@ -567,15 +546,9 @@ class ISOController:
                 logger.removeHandler(handler)
         self.logger.info("ISO Controller environment closed successfully.")
 
-    def set_trained_pcs_agent(self, pcs_agent):
-        self.trained_pcs_agent = pcs_agent
-        try:
-            test_obs = np.array([0.5, 0.5, 50.0, 50.0], dtype=np.float32)
-            test_action, _ = self.trained_pcs_agent.predict(test_obs, deterministic=True)
-            self.logger.info(f"PCS agent test - observation: {test_obs}, action: {test_action}")
-        except Exception as e:
-            self.logger.error(f"PCS agent validation failed: {e}")
-            raise e
+    def set_trained_pcs_agent(self, agent_idx: int, pcs_agent_path: str):
+        """Set trained agent for specific PCS unit"""
+        return self.pcs_manager.set_trained_agent(agent_idx, pcs_agent_path)
 
     def simulate_pcs_response(self, observation: np.ndarray) -> float:
         """

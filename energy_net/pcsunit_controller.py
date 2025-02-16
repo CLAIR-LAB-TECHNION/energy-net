@@ -18,6 +18,7 @@ from energy_net.dynamics.energy_dynamcis import DataDrivenDynamics
 from energy_net.utils.iso_factory import iso_factory
 from energy_net.utils.logger import setup_logger  
 
+from energy_net.dynamics.iso.demand_patterns import DemandPattern, calculate_demand  
 
 # Import all reward classes
 from energy_net.rewards.base_reward import BaseReward
@@ -58,6 +59,7 @@ class PCSUnitController:
     def __init__(
         self,
         render_mode: Optional[str] = None,
+        demand_pattern= None,  
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
         pcs_unit_config_path: Optional[str] = 'configs/pcs_unit_config.yaml',
@@ -166,6 +168,9 @@ class PCSUnitController:
         self.time_steps_per_day_ratio = self.env_config['time']['time_steps_per_day_ratio']
         self.time_step_duration = self.env_config['time']['step_duration']
         self.max_steps_per_episode = self.env_config['time']['max_steps_per_episode']
+
+        self.demand_pattern = demand_pattern
+        self.logger.info(f"Using demand pattern: {demand_pattern.value}")
 
         # Initialize the Reward Function
         self.logger.info(f"Setting up reward function: {reward_type}")
@@ -567,14 +572,14 @@ class PCSUnitController:
         self.logger.info("Environment closed successfully.")
             
     def calculate_predicted_demand(self, time: float) -> float:
-        """Calculate base grid demand using cosine function"""
-        demand_config = self.env_config['predicted_demand']
-        interval = time * demand_config['interval_multiplier']
-        predicted_demand = demand_config['base_load'] + demand_config['amplitude'] * np.cos(
-            (interval + demand_config['phase_shift']) * np.pi / demand_config['period_divisor']
+        """
+        Calculate predicted demand using selected pattern
+        """
+        return calculate_demand(
+            time=time,
+            pattern=self.demand_pattern,
+            config=self.env_config['predicted_demand']
         )
-        self.logger.debug(f"Calculated predicated demand for time {time}: {predicted_demand}")
-        return predicted_demand
 
     def set_trained_iso_agent(self, iso_agent):
         """Set the trained ISO agent for price determination"""

@@ -25,6 +25,7 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 from energy_net.iso_controller import ISOController
 from energy_net.env import PricingPolicy  # Add this import
+from energy_net.dynamics.iso.demand_patterns import DemandPattern
 
 class ISOEnv(gym.Env):
     """
@@ -45,7 +46,9 @@ class ISOEnv(gym.Env):
     
     def __init__(
         self,
+        cost_type=None,
         pricing_policy=None,
+        num_pcs_agents= None,
         render_mode: Optional[str] = None,
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
@@ -53,7 +56,8 @@ class ISOEnv(gym.Env):
         log_file: Optional[str] = 'logs/environments.log',
         reward_type: str = 'iso',
         trained_pcs_model_path: Optional[str] = None,  
-        model_iteration: Optional[int] = None  
+        model_iteration: Optional[int] = None,
+        demand_pattern=None,
     ):
         """
         Initializes the ISOEnv environment.
@@ -68,12 +72,19 @@ class ISOEnv(gym.Env):
             reward_type (str, optional): Type of reward function. Defaults to 'iso'.
             trained_pcs_model_path (Optional[str], optional): Path to trained PCS model. Defaults to None.
             model_iteration (Optional[int], optional): Model iteration number. Defaults to None.
+            demand_pattern (DemandPattern): Type of demand pattern to use
         """
         super().__init__()
         self.pricing_policy = pricing_policy
+        self.cost_type = cost_type
+        self.num_pcs_agents = num_pcs_agents
+        self.demand_pattern = demand_pattern
         
         self.controller = ISOController(
+            cost_type=cost_type,
+            num_pcs_agents=num_pcs_agents,
             pricing_policy=pricing_policy,
+            demand_pattern=demand_pattern,  
             render_mode=render_mode,
             env_config_path=env_config_path,
             iso_config_path=iso_config_path,

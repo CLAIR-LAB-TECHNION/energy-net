@@ -1,5 +1,8 @@
 import gymnasium as gym
 import os
+import sys
+import energy_net.env
+
 from stable_baselines3 import PPO, A2C, DQN, DDPG, SAC, TD3
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -8,6 +11,9 @@ from gymnasium.wrappers import RescaleAction
 from gymnasium import spaces
 import numpy as np
 from energy_net.env import PricingPolicy
+from energy_net.dynamics.iso.demand_patterns import DemandPattern
+from energy_net.dynamics.iso.cost_types import CostType
+
 
 
 class DiscreteActionWrapper(gym.ActionWrapper):
@@ -37,37 +43,6 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return np.array([self.min_action + action_idx * step_size], dtype=np.float32)
 
 
-def load_env_and_normalizer(env_id, normalizer_path, pricing_policy, log_dir='logs'):
-    """
-    Loads a gym environment along with its VecNormalize normalizer.
-    Handles different action spaces based on pricing policy.
-    """
-    env = gym.make(
-        env_id,
-        pricing_policy=pricing_policy,
-        disable_env_checker=True
-    )
-    
-    if pricing_policy == PricingPolicy.ONLINE:
-        env = RescaleAction(
-            env,
-            min_action=np.array([1.0, 1.0], dtype=np.float32),
-            max_action=np.array([10.0, 10.0], dtype=np.float32)
-        )
-    else:  # QUADRATIC or CONSTANT
-        env = RescaleAction(
-            env, 
-            min_action=0.0, 
-            max_action=100.0
-        )
-    
-    env = Monitor(env, filename=os.path.join(log_dir, 'eval_monitor.csv'))
-    vec_env = DummyVecEnv([lambda: env])
-    vec_env = VecNormalize.load(normalizer_path, vec_env)
-    vec_env.training = False
-    vec_env.norm_reward = False
-    return vec_env
-
 def evaluate_trained_model(
     trained_model_path=None,
     normalizer_path=None,
@@ -79,20 +54,45 @@ def evaluate_trained_model(
     eval_episodes=None,
     algo_type='PPO',
     pricing_policy=None,
-    trained_pcs_model_path=None
+    cost_type=None,
+    num_pcs_agents=None,
+    trained_pcs_model_path=None,
+    demand_pattern=None  
 ):
     """Evaluate a trained model using our existing callbacks"""
     
-    # Create evaluation directory
-    os.makedirs('evaluation_results', exist_ok=True)
-    
-    # Load environment with appropriate normalizer and action space
-    env = load_env_and_normalizer(
-        env_id=env_id,
-        normalizer_path=normalizer_path,
+    # Create base environment with demand pattern
+    env = gym.make(
+        env_id,
+        num_pcs_agents=num_pcs_agents,  
+        disable_env_checker=True,
+        env_config_path=env_config_path,
+        iso_config_path=iso_config_path,
+        pcs_unit_config_path=pcs_unit_config_path,
+        log_file=log_file,
         pricing_policy=pricing_policy,
-        log_dir='evaluation_results'
+        demand_pattern=demand_pattern,
+        cost_type=cost_type  
     )
+    env = Monitor(env, filename=os.path.join('logs', 'evaluation_monitor.csv'))
+
+    # Apply appropriate wrappers based on algorithm type
+    if algo_type == 'DQN':
+        env = DiscreteActionWrapper(env)
+    else:
+        if pricing_policy == PricingPolicy.ONLINE:
+            env = RescaleAction(
+                env,
+                min_action=np.array([1.0, 1.0], dtype=np.float32),
+                max_action=np.array([10.0, 10.0], dtype=np.float32)
+            )
+        else:  # For QUADRATIC or other policies
+            env = RescaleAction(env, min_action=0.0, max_action=100.0)
+
+    env = DummyVecEnv([lambda: env])
+    env = VecNormalize.load(normalizer_path, env)
+    env.training = False
+    env.norm_reward = False
     
     # Load appropriate model type
     if algo_type == 'PPO':
@@ -188,9 +188,11 @@ def evaluate_trained_model(
 
     print("Evaluation completed - Check evaluation_results directory for plots")
     
+   
 if __name__ == "__main__":
     import argparse
     from eval_agent import evaluate_trained_model, PricingPolicy
+    from energy_net.dynamics.iso.demand_patterns import DemandPattern
 
     parser = argparse.ArgumentParser(description="Evaluate Agent")
     parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")
@@ -198,11 +200,30 @@ if __name__ == "__main__":
     parser.add_argument("--trained_model_path", required=True, help="Path to the trained model")
     parser.add_argument("--normalizer_path", required=True, help="Path to the normalizer")
     parser.add_argument("--pricing_policy", required=True, help="Pricing policy: QUADRATIC, ONLINE, or CONSTANT")
+    parser.add_argument("--num_pcs_agents", type=int, default=1, help="Number of agents")
     parser.add_argument("--eval_episodes", type=int, default=5, help="Number of evaluation episodes")
+    parser.add_argument(
+        "--demand_pattern",
+        default="SINUSOIDAL",
+        choices=["SINUSOIDAL", "CONSTANT", "DOUBLE_PEAK"],
+        help="Demand pattern type"
+    )
+
+    parser.add_argument(
+        "--cost_type",
+        default="CONSTANT",
+        choices=["CONSTANT"], 
+        help="Cost structure type"
+    )
+
     
     args = parser.parse_args()
 
-    # Convert pricing_policy argument (a string) to the corresponding enum value
+    # Convert demand pattern string to enum
+    demand_pattern = DemandPattern[args.demand_pattern.upper()]
+    cost_type = CostType[args.cost_type.upper()]
+
+    # Convert pricing_policy argument (a string) to the corresponding enum value:
     policy = args.pricing_policy.upper()
     if policy == "QUADRATIC":
         pricing_policy_enum = PricingPolicy.QUADRATIC
@@ -215,11 +236,14 @@ if __name__ == "__main__":
 
     evaluate_trained_model(
         algo_type=args.algo_type,
+        cost_type=cost_type,
         trained_pcs_model_path=args.trained_pcs_model_path,
         trained_model_path=args.trained_model_path,
         normalizer_path=args.normalizer_path,
         pricing_policy=pricing_policy_enum,
+        demand_pattern=demand_pattern,  
         env_id='ISOEnv-v0', #ISOEnv-v0 ,PCSUnitEnv-v0
+        num_pcs_agents=args.num_pcs_agents,
         eval_episodes=args.eval_episodes
     )
 
