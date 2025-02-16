@@ -1,49 +1,41 @@
-# configs/pcs_unit_config.yaml
-
-battery:
-  dynamic_type: "model_based"              # Options: "model_based", "data_driven"
-  model_type: "deterministic_battery"      # Specify the concrete model type
-  model_parameters:
-    min: 0.0                              # Minimum state of charge (MWh)
-    max: 100.0                            # Maximum state of charge (MWh)
-    charge_rate_max: 10.0                    # Maximum charging rate (MW)
-    discharge_rate_max: 10.0                 # Maximum discharging rate (MW)
-    charge_efficiency: 1.0                 # Charging efficiency (0 < charge_efficiency <= 1)
-    discharge_efficiency: 1.0              # Discharging efficiency (0 < discharge_efficiency <= 1)
-    init: 0.0                             # Initial state of charge (MWh)
-    lifetime_constant: 100.0               # Lifetime constant (> 0), adjust as needed
-
-
-
-production_unit:
-  dynamic_type: "model_based"              # Options: "model_based", "data_driven"
-  model_type: "deterministic_production"   # Specify the concrete model type
-  model_parameters:
-    production_capacity: 0.0              # Production capacity (MWh)
-    peak_production: 0.0                  # Maximum production (MWh)
-    peak_time: 0.5                          # Peak at midday (fraction of day)
-    width: 0.1                              # Width of the peak
-
-consumption_unit:
-  dynamic_type: "model_based"              # Options: "model_based", "data_driven"
-  model_type: "deterministic_consumption"  # Specify the concrete model type
-  model_parameters:
-    consumption_capacity: 0.0            # Consumption capacity (MWh)
-    peak_consumption1: 0.0                # First peak consumption (MWh)
-    peak_time1: 0.4                          # First peak at midday (fraction of day)
-    width1: 0.05                             # Width of the first peak
-    peak_consumption2: 0.0                   # Second peak consumption (MWh)
-    peak_time2: 0.7                          # Second peak in the evening (fraction of day)
-    width2: 0.1                             # Width of the second peak
-
-
 action:
-  multi_action: false                       # Flag to enable/disable additional actions
-  production_action:
-    enabled: false
-    min: -10.0                              # Minimum production action value
-    max: 10.0                               # Maximum production action value
   consumption_action:
     enabled: false
-    min: -10.0                              # Minimum consumption action value
-    max: 10.0                               # Maximum consumption action value
+    max: 10.0
+    min: -10.0
+  multi_action: false
+  production_action:
+    enabled: false
+    max: 10.0
+    min: -10.0
+battery:
+  dynamic_type: model_based
+  model_parameters:
+    charge_efficiency: 1.0
+    charge_rate_max: 10.0
+    discharge_efficiency: 1.0
+    discharge_rate_max: 10.0
+    init: 0.0
+    lifetime_constant: 100.0
+    max: 100.0
+    min: 0.0
+  model_type: deterministic_battery
+consumption_unit:
+  dynamic_type: model_based
+  model_parameters:
+    consumption_capacity: 0.0
+    peak_consumption1: 0.0
+    peak_consumption2: 0.0
+    peak_time1: 0.4
+    peak_time2: 0.7
+    width1: 0.05
+    width2: 0.1
+  model_type: deterministic_consumption
+production_unit:
+  dynamic_type: model_based
+  model_parameters:
+    peak_production: 0.0
+    peak_time: 0.5
+    production_capacity: 0.0
+    width: 0.1
+  model_type: deterministic_production

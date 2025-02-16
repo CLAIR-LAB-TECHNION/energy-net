@@ -37,56 +37,76 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return np.array([self.min_action + action_idx * step_size], dtype=np.float32)
 
 
+def load_env_and_normalizer(env_id, normalizer_path, pricing_policy, log_dir='logs'):
+    """
+    Loads a gym environment along with its VecNormalize normalizer.
+    Handles different action spaces based on pricing policy.
+    """
+    env = gym.make(
+        env_id,
+        pricing_policy=pricing_policy,
+        disable_env_checker=True
+    )
+    
+    if pricing_policy == PricingPolicy.ONLINE:
+        env = RescaleAction(
+            env,
+            min_action=np.array([1.0, 1.0], dtype=np.float32),
+            max_action=np.array([10.0, 10.0], dtype=np.float32)
+        )
+    else:  # QUADRATIC or CONSTANT
+        env = RescaleAction(
+            env, 
+            min_action=0.0, 
+            max_action=100.0
+        )
+    
+    env = Monitor(env, filename=os.path.join(log_dir, 'eval_monitor.csv'))
+    vec_env = DummyVecEnv([lambda: env])
+    vec_env = VecNormalize.load(normalizer_path, vec_env)
+    vec_env.training = False
+    vec_env.norm_reward = False
+    return vec_env
+
 def evaluate_trained_model(
-    model_path=None,
+    trained_model_path=None,
     normalizer_path=None,
-    env_id='None', #ISOEnv-v0 ,PCSUnitEnv-v0
+    env_id=None, #ISOEnv-v0 ,PCSUnitEnv-v0
     env_config_path='configs/environment_config.yaml',
     iso_config_path='configs/iso_config.yaml',
     pcs_unit_config_path='configs/pcs_unit_config.yaml',
     log_file='logs/eval_environments.log',
-    num_episodes=5,
+    eval_episodes=None,
     algo_type='PPO',
     pricing_policy=None,
+    trained_pcs_model_path=None
 ):
     """Evaluate a trained model using our existing callbacks"""
     
-    # Create base environment
-    env = gym.make(
-        env_id,
-        disable_env_checker=True,
-        env_config_path=env_config_path,
-        iso_config_path=iso_config_path,
-        pcs_unit_config_path=pcs_unit_config_path,
-        log_file=log_file,
-        pricing_policy=pricing_policy
+    # Create evaluation directory
+    os.makedirs('evaluation_results', exist_ok=True)
+    
+    # Load environment with appropriate normalizer and action space
+    env = load_env_and_normalizer(
+        env_id=env_id,
+        normalizer_path=normalizer_path,
+        pricing_policy=pricing_policy,
+        log_dir='evaluation_results'
     )
-    env = Monitor(env, filename=os.path.join('logs', 'evaluation_monitor.csv'))
-
-    # Apply appropriate wrappers based on algorithm type
-    if algo_type == 'DQN':
-        env = DiscretizeActionWrapper(env)
-    else:  # PPO or A2C
-        env = RescaleAction(env, min_action=1, max_action=10)
-
-    env = DummyVecEnv([lambda: env])
-    env = VecNormalize.load(normalizer_path, env)
-    env.training = False
-    env.norm_reward = False
     
     # Load appropriate model type
     if algo_type == 'PPO':
-        model = PPO.load(model_path, env=env)
+        model = PPO.load(trained_model_path, env=env)
     elif algo_type == 'A2C':
-        model = A2C.load(model_path, env=env)
+        model = A2C.load(trained_model_path, env=env)
     elif algo_type == 'DQN':
-        model = DQN.load(model_path, env=env)
+        model = DQN.load(trained_model_path, env=env)
     elif algo_type == 'DDPG':
-        model = DDPG.load(model_path, env=env)
+        model = DDPG.load(trained_model_path, env=env)
     elif algo_type == 'SAC':
-        model = SAC.load(model_path, env=env)
+        model = SAC.load(trained_model_path, env=env)
     elif algo_type == 'TD3':
-        model = TD3.load(model_path, env=env)
+        model = TD3.load(trained_model_path, env=env)
     else:
         raise ValueError(f"Unsupported algorithm type: {algo_type}")
     
@@ -94,7 +114,7 @@ def evaluate_trained_model(
     action_tracker = ActionTrackingCallback(env_id)
     
     # Run evaluation episodes
-    for episode in range(num_episodes):
+    for episode in range(eval_episodes):
         obs = env.reset()[0]
         done = False
         truncated = False
@@ -102,7 +122,7 @@ def evaluate_trained_model(
         step = 0
         step_data_list = []
         
-        print(f"\nStarting Episode {episode + 1}/{num_episodes}")
+        print(f"\nStarting Episode {episode + 1}/{eval_episodes}")
         
         while not done and not truncated:
             action, _ = model.predict(obs, deterministic=True)
@@ -167,16 +187,39 @@ def evaluate_trained_model(
         action_tracker.plot_episode_results(episode, 'evaluation_results')
 
     print("Evaluation completed - Check evaluation_results directory for plots")
-
-if __name__ == "__main__":
-    # Example usage with different algorithms
-    evaluate_trained_model(
-    algo_type='PPO',
-    model_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_final.zip',
-    normalizer_path='/Users/matanlevi/energy-net/models/agent_iso/agent_iso_normalizer.pkl',
-    pricing_policy=PricingPolicy.QUADRATIC,
-    env_id='ISOEnv-v0', #ISOEnv-v0 ,PCSUnitEnv-v0
-    )
     
-   
+if __name__ == "__main__":
+    import argparse
+    from eval_agent import evaluate_trained_model, PricingPolicy
+
+    parser = argparse.ArgumentParser(description="Evaluate Agent")
+    parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")
+    parser.add_argument("--trained_pcs_model_path", required=True, help="Path to the trained PCSs model")
+    parser.add_argument("--trained_model_path", required=True, help="Path to the trained model")
+    parser.add_argument("--normalizer_path", required=True, help="Path to the normalizer")
+    parser.add_argument("--pricing_policy", required=True, help="Pricing policy: QUADRATIC, ONLINE, or CONSTANT")
+    parser.add_argument("--eval_episodes", type=int, default=5, help="Number of evaluation episodes")
+    
+    args = parser.parse_args()
+
+    # Convert pricing_policy argument (a string) to the corresponding enum value
+    policy = args.pricing_policy.upper()
+    if policy == "QUADRATIC":
+        pricing_policy_enum = PricingPolicy.QUADRATIC
+    elif policy == "ONLINE":
+        pricing_policy_enum = PricingPolicy.ONLINE
+    elif policy == "CONSTANT":
+        pricing_policy_enum = PricingPolicy.CONSTANT
+    else:
+        raise ValueError("Invalid pricing_policy value provided. Use QUADRATIC, ONLINE, or CONSTANT.")
+
+    evaluate_trained_model(
+        algo_type=args.algo_type,
+        trained_pcs_model_path=args.trained_pcs_model_path,
+        trained_model_path=args.trained_model_path,
+        normalizer_path=args.normalizer_path,
+        pricing_policy=pricing_policy_enum,
+        env_id='ISOEnv-v0', #ISOEnv-v0 ,PCSUnitEnv-v0
+        eval_episodes=args.eval_episodes
+    )
 

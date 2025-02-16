@@ -2,6 +2,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import pickle  # Import pickle to save data
+
 
 class ActionTrackingCallback(BaseCallback):
     """
@@ -229,3 +231,14 @@ class ActionTrackingCallback(BaseCallback):
         """
         # Don't clear episode actions here anymore
         return True
+    
+    def _on_training_end(self) -> None:
+        """
+        This method is called at the end of training.
+        It saves all runtime information (all episodes' actions) to a file.
+        """
+        file_path = os.path.join("runtime_info.pkl")
+        with open(file_path, "wb") as f:
+            pickle.dump(self.all_episodes_actions, f)
+        print(f"Runtime info saved to {file_path}")
+
