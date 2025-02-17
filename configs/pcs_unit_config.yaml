@@ -11,13 +11,13 @@ action:
 battery:
   dynamic_type: model_based
   model_parameters:
-    charge_efficiency: 1.0
-    charge_rate_max: 10.0
-    discharge_efficiency: 1.0
-    discharge_rate_max: 10.0
-    init: 0.0
+    charge_efficiency: 0.9
+    charge_rate_max: 9.0
+    discharge_efficiency: 0.9
+    discharge_rate_max: 9.0
+    init: 9.0
     lifetime_constant: 100.0
-    max: 100.0
+    max: 99.0
     min: 0.0
   model_type: deterministic_battery
 consumption_unit:

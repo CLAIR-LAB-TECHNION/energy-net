@@ -14,6 +14,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RescaleAction, ClipAction
 from gymnasium import spaces
 from stable_baselines3.common.noise import NormalActionNoise
+from energy_net.dynamics.iso.demand_patterns import DemandPattern
+import argparse
 
 class DiscreteActionWrapper(gym.ActionWrapper):
     def __init__(self, env, n_actions=21, min_action=-10.0, max_action=10.0):
@@ -150,6 +152,7 @@ def main():
 def train_and_evaluate_agent(
     algo_type='PPO',
     env_id_pcs='PCSUnitEnv-v0',
+    demand_pattern=DemandPattern.SINUSOIDAL,  
     total_iterations=100,             
     train_timesteps_per_iteration=48*400,  
     eval_episodes=5,                 
@@ -192,9 +195,15 @@ def train_and_evaluate_agent(
     os.makedirs(log_dir_pcs, exist_ok=True)
     os.makedirs(os.path.dirname(model_save_path_pcs), exist_ok=True)
 
-    # Create base environments
-    train_env_pcs = gym.make(env_id_pcs)
-    eval_env_pcs = gym.make(env_id_pcs)
+    # Create base environments with pattern
+    train_env_pcs = gym.make(
+        env_id_pcs,
+        demand_pattern=demand_pattern  
+    )
+    eval_env_pcs = gym.make(
+        env_id_pcs,
+        demand_pattern=demand_pattern  
+    )
 
     if algo_type == 'DQN':
         # Wrap with discrete-action wrapper
@@ -536,5 +545,33 @@ def train_and_evaluate_agent(
 
 
 if __name__ == "__main__":
-    # Example usage with different algorithms
-    train_and_evaluate_agent(algo_type='PPO')
+    parser = argparse.ArgumentParser(description="Train and Evaluate PCS Agent")
+    parser.add_argument("--algo_type", default="PPO", 
+                      choices=["PPO", "A2C", "DQN", "DDPG", "SAC", "TD3"],
+                      help="Algorithm type to use")
+    parser.add_argument("--total_iterations", type=int, default=100,
+                      help="Number of training iterations")
+    parser.add_argument("--train_timesteps_per_iteration", type=int, default=48*400,
+                      help="Number of timesteps per training iteration")
+    parser.add_argument("--eval_episodes", type=int, default=5,
+                      help="Number of evaluation episodes")
+    parser.add_argument("--seed", type=int, default=42,
+                      help="Random seed for reproducibility")
+    parser.add_argument("--demand_pattern",
+                      default="SINUSOIDAL",
+                      choices=["SINUSOIDAL", "CONSTANT", "DOUBLE_PEAK"],
+                      help="Demand pattern type")
+    
+    args = parser.parse_args()
+    
+    # Convert demand pattern string to enum
+    demand_pattern = DemandPattern[args.demand_pattern.upper()]
+    
+    train_and_evaluate_agent(
+        algo_type=args.algo_type,
+        total_iterations=args.total_iterations,
+        train_timesteps_per_iteration=args.train_timesteps_per_iteration,
+        eval_episodes=args.eval_episodes,
+        seed=args.seed,
+        demand_pattern=demand_pattern
+    )
