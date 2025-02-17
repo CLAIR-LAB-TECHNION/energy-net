@@ -11,17 +11,23 @@ class PCSManager:
         self.num_agents = num_agents
         self.pcs_units = []
         self.trained_agents = []
-        self.default_config = pcs_unit_config  # Store default config
+        self.default_config = pcs_unit_config
         
-        # Load individual configs
+        # Try to load individual configs, fallback to default if not found
         configs_path = os.path.join("configs", "pcs_configs.yaml")
-        with open(configs_path, "r") as file:
-            all_configs = yaml.safe_load(file)
+        try:
+            with open(configs_path, "r") as file:
+                all_configs = yaml.safe_load(file)
+                logging.info("Loaded individual PCS configs from pcs_configs.yaml")
+        except FileNotFoundError:
+            logging.info(f"No individual configs found at {configs_path}, using default config for all agents")
+            all_configs = {}
         
-        # Initialize PCS units with their specific configs
+        # Initialize PCS units
         for i in range(num_agents):
             agent_key = f"pcs_{i + 1}"
-            agent_config = all_configs.get(agent_key, pcs_unit_config)  # Fallback to default if not found
+            # Use agent-specific config if available, otherwise use default
+            agent_config = all_configs.get(agent_key, pcs_unit_config)
             
             pcs_unit = PCSUnit(
                 config=agent_config,
@@ -29,6 +35,11 @@ class PCSManager:
             )
             self.pcs_units.append(pcs_unit)
             self.trained_agents.append(None)
+            
+            if agent_config == pcs_unit_config:
+                logging.info(f"Using default config for agent {agent_key}")
+            else:
+                logging.info(f"Using custom config for agent {agent_key}")
             
     def set_trained_agent(self, agent_idx: int, model_path: str) -> bool:
         """Set trained agent for specific PCS unit"""
@@ -74,10 +85,7 @@ class PCSManager:
                 # Default behavior for units without trained agent
                 battery_params = self.default_config['battery']['model_parameters']  # Use default config
                 charge_rate_max = battery_params['charge_rate_max']
-                battery_action = np.random.uniform(
-                    max(-pcs_unit.battery.get_state(), -charge_rate_max),
-                    charge_rate_max
-                )
+                battery_action = 0
                 
             # Update PCS unit state
             pcs_unit.update(time=current_time, battery_action=battery_action)

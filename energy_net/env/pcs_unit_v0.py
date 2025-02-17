@@ -24,6 +24,8 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
 from energy_net.pcsunit_controller import PCSUnitController
+from energy_net.dynamics.iso.demand_patterns import DemandPattern
+from energy_net.dynamics.iso.cost_types import CostType
 
 class PCSUnitEnv(gym.Env):
     """
@@ -42,6 +44,8 @@ class PCSUnitEnv(gym.Env):
     """
     def __init__(
         self,
+        cost_type=None,               
+        demand_pattern=None,        
         render_mode: Optional[str] = None,
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
@@ -66,8 +70,10 @@ class PCSUnitEnv(gym.Env):
         """
         super().__init__()
         
-        # Initialize controller with base configurations
+        # Initialize controller with base configurations and new parameters
         self.controller = PCSUnitController(
+            cost_type=cost_type,              
+            demand_pattern=demand_pattern,      
             render_mode=render_mode,
             env_config_path=env_config_path,
             iso_config_path=iso_config_path,
@@ -76,6 +82,10 @@ class PCSUnitEnv(gym.Env):
             reward_type=reward_type,
             trained_iso_model_path=trained_iso_model_path 
         )
+
+        # Store new parameters
+        self.cost_type = cost_type
+        self.demand_pattern = demand_pattern
 
         # Use controller's logger
         self.logger = self.controller.logger
