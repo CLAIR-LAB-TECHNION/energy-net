@@ -34,7 +34,7 @@ class ISOController:
     
     def __init__(
         self,
-        num_pcs_agents: int = 1,  # Add this parameter
+        num_pcs_agents: int = 1, 
         pricing_policy: PricingPolicy = None,  
         demand_pattern=None,
         cost_type=None, 
@@ -86,18 +86,18 @@ class ISOController:
             dispatch_config = policy_config.get('dispatch', {})
             poly_config = policy_config.get('polynomial', {})
             
-            dispatch_min = dispatch_config.get('min', 0.0)
-            dispatch_max = dispatch_config.get('max', 300.0)
+            self.dispatch_min = dispatch_config.get('min', 0.0)
+            self.dispatch_max = dispatch_config.get('max', 300.0)
             low_poly = poly_config.get('min', -100.0)
             high_poly = poly_config.get('max', 100.0)
 
             low_array = np.concatenate((
                 np.full(6, low_poly, dtype=np.float32),
-                np.full(self.max_steps_per_episode, dispatch_min, dtype=np.float32)
+                np.full(self.max_steps_per_episode, self.dispatch_min, dtype=np.float32)
             ))
             high_array = np.concatenate((
                 np.full(6, high_poly, dtype=np.float32),
-                np.full(self.max_steps_per_episode, dispatch_max, dtype=np.float32)
+                np.full(self.max_steps_per_episode, self.dispatch_max, dtype=np.float32)
             ))
                     
             self.action_space = spaces.Box(
@@ -106,21 +106,20 @@ class ISOController:
                 dtype=np.float32
             )
         elif self.pricing_policy == PricingPolicy.CONSTANT:
-            # New branch for constant pricing: only 2 coefficients (buy & sell) + dispatch profile
             dispatch_config = policy_config.get('dispatch', {})
             poly_config = policy_config.get('polynomial', {})
-            dispatch_min = dispatch_config.get('min', 0.0)
-            dispatch_max = dispatch_config.get('max', 300.0)
+            self.dispatch_min = dispatch_config.get('min', 0.0)
+            self.dispatch_max = dispatch_config.get('max', 300.0)
             low_const = poly_config.get('min', self.min_price)
             high_const = poly_config.get('max', self.max_price)
 
             low_array = np.concatenate((
                 np.array([self.min_price, self.min_price], dtype=np.float32),
-                np.full(self.max_steps_per_episode, dispatch_min, dtype=np.float32)
+                np.full(self.max_steps_per_episode, self.dispatch_min, dtype=np.float32)
             ))
             high_array = np.concatenate((
                 np.array([self.max_price, self.max_price], dtype=np.float32),
-                np.full(self.max_steps_per_episode, dispatch_max, dtype=np.float32)
+                np.full(self.max_steps_per_episode, self.dispatch_max, dtype=np.float32)
             ))
             
             self.action_space = spaces.Box(
@@ -377,6 +376,8 @@ class ISOController:
                 self.buy_coef = action[0:3]    # [b0, b1, b2] 
                 self.sell_coef = action[3:6]   # [s0, s1, s2] 
                 self.dispatch_profile = action[6:]  # 48 values for dispatch profile
+                self.dispatch_profile = np.clip(self.dispatch_profile, self.dispatch_min, self.dispatch_max)
+            
 
                 self.buy_iso = QuadraticPricingISO(
                     buy_a=float(self.buy_coef[0]),
@@ -399,10 +400,10 @@ class ISOController:
                 self.logger.debug("Ignoring action - day-ahead polynomial & dispatch are already set.")
         
             buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': self.predicted_demand})
-            self.iso_buy_price = buy_pricing_fn(1.0)
+            self.iso_buy_price = max(buy_pricing_fn(1.0),0)
 
             sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': self.predicted_demand})
-            self.iso_sell_price = sell_pricing_fn(1.0)
+            self.iso_sell_price = max(sell_pricing_fn(1.0),0)
             dispatch = self.dispatch_profile[self.count - 1]
             self.logger.info(f"Step {self.count} - ISO Prices: Sell {self.iso_sell_price:.2f}, Buy {self.iso_buy_price:.2f}")
 

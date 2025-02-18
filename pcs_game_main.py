@@ -16,6 +16,8 @@ from gymnasium import spaces
 from stable_baselines3.common.noise import NormalActionNoise
 from energy_net.dynamics.iso.demand_patterns import DemandPattern
 import argparse
+from energy_net.env import PricingPolicy  
+from energy_net.dynamics.iso.cost_types import CostType  
 
 class DiscreteActionWrapper(gym.ActionWrapper):
     def __init__(self, env, n_actions=21, min_action=-10.0, max_action=10.0):
@@ -152,57 +154,36 @@ def main():
 def train_and_evaluate_agent(
     algo_type='PPO',
     env_id_pcs='PCSUnitEnv-v0',
-    demand_pattern=DemandPattern.SINUSOIDAL,  
     total_iterations=100,             
     train_timesteps_per_iteration=48*400,  
     eval_episodes=5,                 
     log_dir_pcs='logs/agent_pcs',
     model_save_path_pcs='models/agent_pcs/agent_pcs',
-    seed=42
+    seed=42,
+    demand_pattern=None,
+    cost_type=None
 ):
     """
-    Implements an iterative training process for two agents (ISO and PCS) using different RL algorithms.
-    
-    Training Process:
-    1. Create and configure both environments
-    2. Initialize models for both agents
-    3. For each iteration:
-       - Train PCS agent while using current ISO model
-       - Evaluate PCS agent performance
-       - Train ISO agent while using current PCS model
-       - Evaluate ISO agent performance
-    4. Save final models and generate performance plots
+    Training process for PCS agent using different RL algorithms.
     
     Args:
-        algo_type (str): Algorithm to use ('PPO', 'A2C')
-        env_id_pcs (str): Gymnasium environment ID for PCS agent
-        env_id_iso (str): Gymnasium environment ID for ISO agent
-        total_iterations (int): Number of training iterations
-        train_timesteps_per_iteration (int): Steps per training iteration
-        eval_episodes (int): Number of evaluation episodes
-        log_dir_pcs (str): Directory for PCS training logs
-        log_dir_iso (str): Directory for ISO training logs
-        model_save_path_pcs (str): Save path for PCS model
-        model_save_path_iso (str): Save path for ISO model
-        seed (int): Random seed for reproducibility
-    
-    Results:
-    - Saves trained models at specified intervals
-    - Generates training and evaluation plots
-    - Creates CSV files with evaluation metrics
+        cost_type (CostType): The cost structure to use
+        demand_pattern (DemandPattern): The demand pattern to use
     """
     # --- Prepare environments for pcs
     os.makedirs(log_dir_pcs, exist_ok=True)
     os.makedirs(os.path.dirname(model_save_path_pcs), exist_ok=True)
 
-    # Create base environments with pattern
+    # Create base environment with all parameters
     train_env_pcs = gym.make(
         env_id_pcs,
-        demand_pattern=demand_pattern  
+        demand_pattern=demand_pattern,
+        cost_type=cost_type
     )
     eval_env_pcs = gym.make(
         env_id_pcs,
-        demand_pattern=demand_pattern  
+        demand_pattern=demand_pattern,
+        cost_type=cost_type
     )
 
     if algo_type == 'DQN':
@@ -253,11 +234,6 @@ def train_and_evaluate_agent(
     eval_env_pcs.obs_rms = train_env_pcs.obs_rms
     eval_env_pcs.ret_rms = train_env_pcs.ret_rms
 
-    # debug prints for initial observation spaces
-  #  print("\nInitial Observation/Action Spaces:")
-   # print(f"PCS Raw Observation Space: {train_env_pcs.observation_space}")
-    #print(f"PCS Raw Action Space: {train_env_pcs.action_space}")
-
     # Create algorithm instances based on type
     def create_model(env, log_dir, seed):
         if algo_type == 'DQN':
@@ -275,9 +251,9 @@ def train_and_evaluate_agent(
                       batch_size=64,
                       tau=0.001,
                       gamma=0.99,
-                      train_freq=1,  # Train every step
+                      train_freq=1, 
                       gradient_steps=1,
-                      target_update_interval=48,  # Update target network every episode
+                      target_update_interval=48,  
                       exploration_fraction=0.2,
                       exploration_initial_eps=2.0,
                       exploration_final_eps=0.2,
@@ -291,7 +267,7 @@ def train_and_evaluate_agent(
                       verbose=1, 
                       seed=seed, 
                       tensorboard_log=log_dir,
-                      n_steps=48)  # Set steps per update to match episode length
+                      n_steps=48)  
         elif algo_type == 'DDPG':
             return DDPG('MlpPolicy', 
                        env,
@@ -316,7 +292,7 @@ def train_and_evaluate_agent(
                       gamma=0.99,
                       train_freq=1,
                       gradient_steps=1,
-                      ent_coef='auto',  # Automatically adjust entropy coefficient
+                      ent_coef='auto',  
                       seed=seed,
                       tensorboard_log=log_dir)
         elif algo_type == 'TD3':
@@ -412,7 +388,7 @@ def train_and_evaluate_agent(
             # Reload normalization statistics and update model environment
             new_normalizer = VecNormalize.load(
                 f"{model_save_path_pcs}_normalizer.pkl",
-                DummyVecEnv([lambda: gym.make(env_id_pcs)])
+                DummyVecEnv([lambda: gym.make(env_id_pcs, demand_pattern=demand_pattern, cost_type=cost_type)])
             )
             new_normalizer.training = True
             new_normalizer.norm_reward = True
@@ -447,7 +423,7 @@ def train_and_evaluate_agent(
 
     # Save final models
     pcs_model.save(f"{model_save_path_pcs}_final")
-    vec_env_pcs.save(f"{model_save_path_pcs}_normalizer.pkl")  # This should now work
+    vec_env_pcs.save(f"{model_save_path_pcs}_normalizer.pkl")  
     print(f"Final PCS model saved to {model_save_path_pcs}_final.zip")
 
     # Save normalizer states after training
@@ -561,11 +537,20 @@ if __name__ == "__main__":
                       default="SINUSOIDAL",
                       choices=["SINUSOIDAL", "CONSTANT", "DOUBLE_PEAK"],
                       help="Demand pattern type")
-    
+        
+    parser.add_argument(
+        "--cost_type",
+        default="CONSTANT",
+        choices=["CONSTANT"],
+        help="Cost structure type"
+    )
+
     args = parser.parse_args()
     
     # Convert demand pattern string to enum
     demand_pattern = DemandPattern[args.demand_pattern.upper()]
+    cost_type = CostType[args.cost_type.upper()]
+    
     
     train_and_evaluate_agent(
         algo_type=args.algo_type,
@@ -573,5 +558,6 @@ if __name__ == "__main__":
         train_timesteps_per_iteration=args.train_timesteps_per_iteration,
         eval_episodes=args.eval_episodes,
         seed=args.seed,
-        demand_pattern=demand_pattern
+        demand_pattern=demand_pattern,
+        cost_type=cost_type
     )

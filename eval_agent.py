@@ -33,8 +33,8 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         else:  # QUADRATIC
             # For quadratic policy, use polynomial coefficient bounds
             poly_config = action_spaces_config.get('quadratic', {}).get('polynomial', {})
-            self.min_action = poly_config.get('min', 0.0)
-            self.max_action = poly_config.get('max', 100.0)
+            self.min_action = poly_config.get('min', -100.0)
+            self.max_action = poly_config.get('max', 300.0)
             
         self.action_space = spaces.Discrete(n_actions)
     
@@ -87,7 +87,7 @@ def evaluate_trained_model(
                 max_action=np.array([10.0, 10.0], dtype=np.float32)
             )
         else:  # For QUADRATIC or other policies
-            env = RescaleAction(env, min_action=0.0, max_action=100.0)
+            env = RescaleAction(env, min_action=-100.0, max_action=300.0)
 
     env = DummyVecEnv([lambda: env])
     env = VecNormalize.load(normalizer_path, env)
@@ -131,7 +131,7 @@ def evaluate_trained_model(
             if algo_type == 'DQN':
                 # For DQN, we need to wrap the scalar action in a list for DummyVecEnv
                 action = [int(action)]  # Convert to list for vectorized env
-            else:  # PPO or A2C
+            else:
                 # Ensure action is 2D array with shape (1, action_dim)
                 if len(action.shape) == 1:
                     action = action.reshape(1, -1)

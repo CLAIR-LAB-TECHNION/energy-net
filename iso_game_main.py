@@ -36,7 +36,7 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         else:  # QUADRATIC
             # For quadratic policy, use polynomial coeffiRescaleActioncient bounds
             poly_config = action_spaces_config.get('quadratic', {}).get('polynomial', {})
-            self.min_action = poly_config.get('min', 0.0)
+            self.min_action = poly_config.get('min', -100.0)
             self.max_action = poly_config.get('max', 100.0)
             
         self.action_space = spaces.Discrete(n_actions)
@@ -64,7 +64,7 @@ def main():
     log_file = 'logs/environments.log'
     pcs_id = 'PCSUnitEnv-v0'
     iso_id = 'ISOEnv-v0'
-    pricing_policy = PricingPolicy.ONLINE  # Set the pricing policy here
+    pricing_policy = PricingPolicy.ONLINE 
     # Attempt to create the environment using gym.make
     try:
         env = gym.make(
@@ -254,8 +254,8 @@ def train_and_evaluate_agent(
                 max_action=np.array([10.0, 10.0], dtype=np.float32)
             )
         else:  # QUADRATIC
-            train_env_iso = RescaleAction(train_env_iso, min_action=0.0, max_action=100.0)
-            eval_env_iso = RescaleAction(eval_env_iso, min_action=0.0, max_action=100.0)
+            train_env_iso = RescaleAction(train_env_iso, min_action=-100.0, max_action=100.0)
+            eval_env_iso = RescaleAction(eval_env_iso, min_action=-100.0, max_action=100.0)
 
     # Add monitoring
     train_env_iso = Monitor(train_env_iso, filename=os.path.join(log_dir_iso, 'train_monitor_iso.csv'))
@@ -314,23 +314,23 @@ def train_and_evaluate_agent(
                       batch_size=64,
                       tau=0.001,
                       gamma=0.99,
-                      train_freq=1,  # Train every step
+                      train_freq=1,  
                       gradient_steps=1,
-                      target_update_interval=48,  # Update target network every episode
+                      target_update_interval=48, 
                       exploration_fraction=0.2,
                       exploration_initial_eps=2.0,
                       exploration_final_eps=0.2,
                       seed=seed,
                       tensorboard_log=log_dir)
         if algo_type == 'PPO':
-            return PPO('MlpPolicy', env, verbose=0, seed=seed, tensorboard_log=log_dir, gamma=1)
+            return PPO('MlpPolicy', env, verbose=0, seed=seed, tensorboard_log=log_dir)
         elif algo_type == 'A2C':
             return A2C('MlpPolicy', 
                       env, 
                       verbose=1, 
                       seed=seed, 
                       tensorboard_log=log_dir,
-                      n_steps=48)  # Set steps per update to match episode length
+                      n_steps=48)   
         elif algo_type == 'DDPG':
             return DDPG('MlpPolicy', 
                        env,
@@ -355,7 +355,7 @@ def train_and_evaluate_agent(
                       gamma=0.99,
                       train_freq=1,
                       gradient_steps=1,
-                      ent_coef='auto',  # Automatically adjust entropy coefficient
+                      ent_coef='auto',  
                       seed=seed,
                       tensorboard_log=log_dir)
         elif algo_type == 'TD3':
@@ -486,7 +486,7 @@ def train_and_evaluate_agent(
 
     # Save final models
     iso_model.save(f"{model_save_path_iso}_final")
-    vec_env_iso.save(f"{model_save_path_iso}_normalizer.pkl")  # This should now work
+    vec_env_iso.save(f"{model_save_path_iso}_normalizer.pkl")  
     print(f"Final ISO model saved to {model_save_path_iso}_final.zip")
 
     # Save normalizer states after training
@@ -508,7 +508,7 @@ def train_and_evaluate_agent(
                 max_action=np.array([10.0, 10.0], dtype=np.float32)
             )
         else:
-            env = RescaleAction(env, min_action=0.0, max_action=100.0)
+            env = RescaleAction(env, min_action=-100.0, max_action=100.0)
         
         env = Monitor(env, filename=os.path.join(log_dir, 'eval_monitor.csv'))
         vec_env = DummyVecEnv([lambda: env])

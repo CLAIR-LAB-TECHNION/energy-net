@@ -13,14 +13,15 @@ from energy_net.dynamics.energy_dynamcis import EnergyDynamics
 from energy_net.dynamics.energy_dynamcis import ModelBasedDynamics
 from energy_net.dynamics.production_dynamics.deterministic_production import DeterministicProduction
 from energy_net.dynamics.consumption_dynamics.deterministic_consumption import DeterministicConsumption
-from energy_net.dynamics.storage_dynamics.deterministic_battery import DeterministicBattery  # Import the new dynamics
+from energy_net.dynamics.storage_dynamics.deterministic_battery import DeterministicBattery
 from energy_net.dynamics.energy_dynamcis import DataDrivenDynamics
 from energy_net.utils.iso_factory import iso_factory
 from energy_net.utils.logger import setup_logger  
 
 from energy_net.dynamics.iso.demand_patterns import DemandPattern, calculate_demand  
+from energy_net.dynamics.iso.cost_types import CostType, calculate_costs
+from energy_net.dynamics.iso.quadratic_pricing_iso import QuadraticPricingISO  
 
-# Import all reward classes
 from energy_net.rewards.base_reward import BaseReward
 from energy_net.rewards.cost_reward import CostReward
 
@@ -58,8 +59,9 @@ class PCSUnitController:
 
     def __init__(
         self,
+        cost_type=None,            
+        demand_pattern=None,          
         render_mode: Optional[str] = None,
-        demand_pattern= None,  
         env_config_path: Optional[str] = 'configs/environment_config.yaml',
         iso_config_path: Optional[str] = 'configs/iso_config.yaml',
         pcs_unit_config_path: Optional[str] = 'configs/pcs_unit_config.yaml',
@@ -80,9 +82,14 @@ class PCSUnitController:
         """
         super().__init__()  # Initialize the parent class
 
+        # Store new parameters
+        self.cost_type = cost_type
+        self.demand_pattern = demand_pattern
+        
         # Set up logger
-        self.logger = setup_logger('PCSunitEnv', log_file)
-        self.logger.info("Initializing PCSunitEnv.")
+        self.logger = setup_logger('PCSUnitController', log_file)
+        self.logger.info(f"Using demand pattern: {demand_pattern.value}")
+        self.logger.info(f"Using cost type: {cost_type.value}")
 
         # Load configurations
         self.env_config: Dict[str, Any] = self.load_config(env_config_path)
@@ -185,6 +192,13 @@ class PCSUnitController:
             except Exception as e:
                 self.logger.error(f"Failed to load ISO model: {e}")
         
+        self.buy_iso = QuadraticPricingISO(
+            buy_a=1,  
+            buy_b=2,    
+            buy_c=5.0
+        )
+
+
         self.logger.info("PCSunitEnv initialization complete.")
                 
     def load_config(self, config_path: str) -> Dict[str, Any]:
@@ -264,7 +278,7 @@ class PCSUnitController:
         #self.battery_level = self.rng.uniform(low=energy_config['min'], high=energy_config['max'])
         
         # Pass the random initial energy level to PCSUnit
-        self.PCSUnit.reset(initial_battery_level=self.battery_level)  # Changed: pass initial level
+        self.PCSUnit.reset(initial_battery_level=self.battery_level) 
 
         self.reward_type = 0  # Default reward type
 
@@ -389,12 +403,12 @@ class PCSUnitController:
                     f"  - ISO Buy Price: {self.iso_buy_price:.2f} $/MWh"
                 )
         else:
-            self.iso_sell_price = self.iso_buy_price = 10.0
-            if (10<=self.count<=30):
-                self.iso_sell_price = 4.0
-            self.iso_buy_price = 0.8 * self.iso_sell_price
+            buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': self.predicted_demand})
+            self.iso_sell_price = max(buy_pricing_fn(1.0), 0)
+            self.iso_buy_price = 0.85 * self.iso_sell_price
+            
             self.logger.info(
-                f"Using default prices (no ISO agent):\n"
+                f"Using quadratic pricing (no ISO agent):\n"
                 f"  - ISO Sell Price: {self.iso_sell_price:.2f} $/MWh\n"
                 f"  - ISO Buy Price: {self.iso_buy_price:.2f} $/MWh"
             )
@@ -507,7 +521,6 @@ class PCSUnitController:
             'net_demand': net_demand
         }
 
-        # Add detailed logging for battery actions
         self.logger.info(
             f"PCS State Step {self.count}:\n"
             f"  Time: {self.time:.3f}\n"
@@ -518,7 +531,6 @@ class PCSUnitController:
             f"  Net Exchange: {net_exchange:.2f} MWh"
         )
 
-        # Add financial logging
         self.logger.info(
             f"Financial Metrics:\n"
             f"  ISO Buy Price: ${self.iso_buy_price:.2f}/MWh\n"

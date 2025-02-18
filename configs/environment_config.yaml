@@ -34,6 +34,6 @@ predicted_demand:
 demand_uncertainty:
   sigma: 10.0
 
-reserve_price: 20.0
+reserve_price: 50.0
 dispatch_price: 10.0
 
