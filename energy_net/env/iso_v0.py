@@ -20,12 +20,13 @@ Key Features:
 
 from __future__ import annotations
 from typing import Optional, Tuple, Dict, Any, Union
+import os  
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
 from energy_net.iso_controller import ISOController
 from energy_net.env import PricingPolicy 
-from energy_net.dynamics.iso.demand_patterns import DemandPattern
+from energy_net.market.iso.demand_patterns import DemandPattern
 
 class ISOEnv(gym.Env):
     """
@@ -99,11 +100,25 @@ class ISOEnv(gym.Env):
         # Load trained PCS model if provided
         if trained_pcs_model_path:
             try:
-                trained_pcs_agent = PPO.load(trained_pcs_model_path)
-                self.controller.set_trained_pcs_agent(trained_pcs_agent)
+                print(f"Attempting to load PCS model from: {trained_pcs_model_path}")
+                print(f"Number of PCS agents: {num_pcs_agents}")
+                
+                if not os.path.exists(trained_pcs_model_path):
+                    raise FileNotFoundError(f"Model file not found: {trained_pcs_model_path}")
+                    
+                # Try loading the model first to verify it's valid
+                test_model = PPO.load(trained_pcs_model_path)
+                print("Successfully loaded model, now setting for each agent")
+                
+                for i in range(num_pcs_agents):
+                    success = self.controller.set_trained_pcs_agent(i, trained_pcs_model_path)
+                    print(f"Agent {i} loading status: {'Success' if success else 'Failed'}")
+                    
                 self.logger.info(f"Loaded PCS model: {trained_pcs_model_path}")
             except Exception as e:
                 self.logger.error(f"Failed to load PCS model: {e}")
+                print(f"Error loading model: {str(e)}")
+                raise  # Re-raise the exception to see the full traceback
 
         self.model_iteration = model_iteration
         self.observation_space = self.controller.observation_space

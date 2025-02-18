@@ -11,8 +11,8 @@ from gymnasium.wrappers import RescaleAction
 from gymnasium import spaces
 import numpy as np
 from energy_net.env import PricingPolicy
-from energy_net.dynamics.iso.demand_patterns import DemandPattern
-from energy_net.dynamics.iso.cost_types import CostType
+from energy_net.market.iso.demand_patterns import DemandPattern
+from energy_net.market.iso.cost_types import CostType
 
 
 
@@ -111,7 +111,7 @@ def evaluate_trained_model(
         raise ValueError(f"Unsupported algorithm type: {algo_type}")
     
     # Create callback for tracking
-    action_tracker = ActionTrackingCallback(env_id)
+    action_tracker = ActionTrackingCallback(env_id,is_training=False)
     
     # Run evaluation episodes
     for episode in range(eval_episodes):
@@ -186,13 +186,16 @@ def evaluate_trained_model(
         # Plot results for this episode
         action_tracker.plot_episode_results(episode, 'evaluation_results')
 
+    # Call on_training_end to save the runtime info
+    action_tracker._on_training_end()
+    
     print("Evaluation completed - Check evaluation_results directory for plots")
     
    
 if __name__ == "__main__":
     import argparse
     from eval_agent import evaluate_trained_model, PricingPolicy
-    from energy_net.dynamics.iso.demand_patterns import DemandPattern
+    from energy_net.market.iso.demand_patterns import DemandPattern
 
     parser = argparse.ArgumentParser(description="Evaluate Agent")
     parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")

@@ -1,5 +1,5 @@
 from typing import Callable, Dict
-from energy_net.dynamics.iso.iso_base import ISOBase
+from energy_net.market.iso.iso_base import ISOBase
 
 class QuadraticPricingISO(ISOBase):
     """

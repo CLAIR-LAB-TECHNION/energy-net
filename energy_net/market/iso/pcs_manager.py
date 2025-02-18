@@ -12,6 +12,8 @@ class PCSManager:
         self.pcs_units = []
         self.trained_agents = []
         self.default_config = pcs_unit_config
+        self.battery_actions = []  
+        self.battery_levels = [] 
         
         # Try to load individual configs, fallback to default if not found
         configs_path = os.path.join("configs", "pcs_configs.yaml")
@@ -44,11 +46,28 @@ class PCSManager:
     def set_trained_agent(self, agent_idx: int, model_path: str) -> bool:
         """Set trained agent for specific PCS unit"""
         try:
+            print(f"Loading model for agent {agent_idx} from {model_path}")
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+                
             trained_agent = PPO.load(model_path)
+            print(f"Model loaded successfully, testing prediction...")
+            
+            # Test the model with a dummy observation
+            test_obs = np.zeros(4, dtype=np.float32)  # 4 is the observation space size
+            try:
+                test_action = trained_agent.predict(test_obs, deterministic=True)
+                print(f"Test prediction successful: {test_action}")
+            except Exception as e:
+                print(f"Test prediction failed: {e}")
+                return False
+            
             self.trained_agents[agent_idx] = trained_agent
+            print(f"Agent {agent_idx} fully initialized")
             return True
         except Exception as e:
             logging.error(f"Failed to load agent {agent_idx}: {e}")
+            print(f"Error in set_trained_agent: {str(e)}")
             return False
             
     def simulate_step(
@@ -68,10 +87,11 @@ class PCSManager:
         total_production = 0.0
         total_consumption = 0.0
         total_net_exchange = 0.0
+        current_actions = [] 
+        current_levels = []  
         
         for idx, (pcs_unit, trained_agent) in enumerate(zip(self.pcs_units, self.trained_agents)):
             if trained_agent is not None:
-                # Create observation for this PCS
                 pcs_obs = np.array([
                     pcs_unit.battery.get_state(),
                     current_time,
@@ -79,13 +99,18 @@ class PCSManager:
                     pcs_unit.get_self_consumption()
                 ], dtype=np.float32)
                 
-                # Get action from trained agent
-                battery_action = trained_agent.predict(pcs_obs, deterministic=True)[0].item()
+                try:
+                    logging.info(f"PCS Agent {idx} making prediction with observation: {pcs_obs}")
+                    battery_action = trained_agent.predict(pcs_obs, deterministic=True)[0].item()
+                    logging.info(f"PCS Agent {idx} action: {battery_action}")
+                except Exception as e:
+                    logging.error(f"Error in PCS Agent {idx} prediction: {e}")
+                    battery_action = 0
             else:
-                # Default behavior for units without trained agent
-                battery_params = self.default_config['battery']['model_parameters']  # Use default config
-                charge_rate_max = battery_params['charge_rate_max']
                 battery_action = 0
+
+            current_actions.append(battery_action)  
+            current_levels.append(pcs_unit.battery.get_state()) 
                 
             # Update PCS unit state
             pcs_unit.update(time=current_time, battery_action=battery_action)
@@ -107,9 +132,13 @@ class PCSManager:
             total_consumption += consumption
             total_net_exchange += net_exchange
             
+        self.battery_actions.append(current_actions)  
+        self.battery_levels.append(current_levels) 
         return total_production, total_consumption, total_net_exchange
         
     def reset_all(self) -> None:
         """Reset all PCS units"""
         for pcs_unit in self.pcs_units:
             pcs_unit.reset()
+        self.battery_actions = []
+        self.battery_levels = []

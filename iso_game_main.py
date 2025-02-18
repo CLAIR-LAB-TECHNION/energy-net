@@ -16,8 +16,8 @@ from gymnasium.wrappers import RescaleAction, ClipAction
 from gymnasium import spaces
 from stable_baselines3.common.noise import NormalActionNoise
 from energy_net.env import PricingPolicy
-from energy_net.dynamics.iso.demand_patterns import DemandPattern
-from energy_net.dynamics.iso.cost_types import CostType
+from energy_net.market.iso.demand_patterns import DemandPattern
+from energy_net.market.iso.cost_types import CostType
 
 class DiscreteActionWrapper(gym.ActionWrapper):
     def __init__(self, env, n_actions=21):
@@ -323,7 +323,7 @@ def train_and_evaluate_agent(
                       seed=seed,
                       tensorboard_log=log_dir)
         if algo_type == 'PPO':
-            return PPO('MlpPolicy', env, verbose=0, seed=seed, tensorboard_log=log_dir)
+            return PPO('MlpPolicy', env, verbose=0, seed=seed, tensorboard_log=log_dir, clip_range=0.2,ent_coef=0.01,gamma=1, learning_rate=0.00025)
         elif algo_type == 'A2C':
             return A2C('MlpPolicy', 
                       env, 
@@ -347,15 +347,6 @@ def train_and_evaluate_agent(
         elif algo_type == 'SAC':
             return SAC('MlpPolicy',
                       env,
-                      learning_rate=0.001,
-                      buffer_size=100000,
-                      learning_starts=1000,
-                      batch_size=64,
-                      tau=0.005,
-                      gamma=0.99,
-                      train_freq=1,
-                      gradient_steps=1,
-                      ent_coef='auto',  
                       seed=seed,
                       tensorboard_log=log_dir)
         elif algo_type == 'TD3':
@@ -594,7 +585,7 @@ def train_and_evaluate_agent(
 if __name__ == "__main__":
     import argparse
     from iso_game_main import train_and_evaluate_agent, PricingPolicy
-    from energy_net.dynamics.iso.demand_patterns import DemandPattern
+    from energy_net.market.iso.demand_patterns import DemandPattern
 
     parser = argparse.ArgumentParser(description="Train and Evaluate Agent")
     parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")

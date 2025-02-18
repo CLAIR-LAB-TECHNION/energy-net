@@ -1,0 +1,32 @@
+pcs_1:
+  battery:
+    dynamic_type: model_based
+    model_parameters:
+      charge_efficiency: 1.0
+      charge_rate_max: 10.0
+      discharge_efficiency: 1.0
+      discharge_rate_max: 10.0
+      init: 0.0
+      max: 100.0
+      lifetime_constant: 100.0
+      min: 0.0
+      model_type: deterministic_battery
+  consumption_unit:
+    dynamic_type: model_based
+    model_type: deterministic_consumption
+    model_parameters:
+      consumption_capacity: 0.0
+      peak_consumption1: 0.0
+      peak_consumption2: 0.0
+      peak_time1: 0.4
+      peak_time2: 0.7
+      width1: 0.05
+      width2: 0.1
+  production_unit:
+    dynamic_type: model_based
+    model_type: deterministic_production
+    model_parameters:
+      peak_production: 0.0
+      peak_time: 0.5
+      production_capacity: 0.0
+      width: 0.1

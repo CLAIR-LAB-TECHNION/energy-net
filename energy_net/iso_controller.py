@@ -6,15 +6,15 @@ import logging
 from stable_baselines3 import PPO
 from gymnasium import spaces
 from energy_net.env import PricingPolicy  
-from energy_net.dynamics.iso.demand_patterns import DemandPattern, calculate_demand
-from energy_net.dynamics.iso.cost_types import CostType, calculate_costs
+from energy_net.market.iso.demand_patterns import DemandPattern, calculate_demand
+from energy_net.market.iso.cost_types import CostType, calculate_costs
 
 from energy_net.utils.logger import setup_logger
 from energy_net.rewards.base_reward import BaseReward
 from energy_net.rewards.iso_reward import ISOReward
 from energy_net.components.pcsunit import PCSUnit
-from energy_net.dynamics.iso.quadratic_pricing_iso import QuadraticPricingISO
-from energy_net.dynamics.iso.pcs_manager import PCSManager
+from energy_net.market.iso.quadratic_pricing_iso import QuadraticPricingISO
+from energy_net.market.iso.pcs_manager import PCSManager
 
 
 class ISOController:
@@ -474,6 +474,12 @@ class ISOController:
         self.logger.debug(f"Net demand: {net_demand:.2f} MWh")
         dispatch_cost = self.dispatch_price * dispatch
         shortfall = max(0.0, net_demand - dispatch)
+        if self.pcs_demand>0: 
+            price = self.iso_sell_price
+        else:
+            price = self.iso_buy_price
+
+        pcs_costs = self.pcs_demand*price
         reserve_cost = self.reserve_price * shortfall
 
         self.logger.warning(
@@ -489,13 +495,15 @@ class ISOController:
             'realized_demand': self.realized_demand,
             'production': self.production,
             'consumption': self.consumption,
-            'battery_level': self.PCSUnit.battery.get_state(),
+            'battery_level': self.pcs_manager.battery_levels[-1] if self.pcs_manager.battery_levels else [],  
             'net_exchange': self.pcs_demand,
             'dispatch_cost': dispatch_cost,
             'shortfall': shortfall,
             'reserve_cost': reserve_cost,
             'dispatch': dispatch,
-            'pcs_demand': self.pcs_demand
+            'pcs_demand': self.pcs_demand,
+            'pcs_costs': pcs_costs,
+            'pcs_actions': self.pcs_manager.battery_actions[-1] if self.pcs_manager.battery_actions else []  
         }
 
         # 5. Compute reward
@@ -549,7 +557,12 @@ class ISOController:
 
     def set_trained_pcs_agent(self, agent_idx: int, pcs_agent_path: str):
         """Set trained agent for specific PCS unit"""
-        return self.pcs_manager.set_trained_agent(agent_idx, pcs_agent_path)
+        success = self.pcs_manager.set_trained_agent(agent_idx, pcs_agent_path)
+        if success:
+            self.logger.info(f"Successfully set trained agent {agent_idx} from {pcs_agent_path}")
+        else:
+            self.logger.error(f"Failed to set trained agent {agent_idx} from {pcs_agent_path}")
+        return success
 
     def simulate_pcs_response(self, observation: np.ndarray) -> float:
         """
