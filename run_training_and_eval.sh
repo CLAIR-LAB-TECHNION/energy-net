@@ -15,17 +15,25 @@ mkdir -p ${ISO_MODEL_DIR}
 
 # First run training with iso_game_main.py
 echo "Starting ISO training..."
+echo "Checking PCS model path: /Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip"
+if [ -f "/Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip" ]; then
+    echo "PCS model file exists"
+else
+    echo "Error: PCS model file not found at /Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip"
+    exit 1
+fi
+
 python iso_game_main.py \
     --algo_type "PPO" \
-    --trained_pcs_model_path None \
+    --trained_pcs_model_path '/Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip' \
     --pricing_policy "QUADRATIC" \
     --demand_pattern "SINUSOIDAL" \
     --cost_type "CONSTANT" \
     --num_pcs_agents 1 \
-    --total_iterations 400 \
-    --train_timesteps_per_iteration 4000 \
+    --total_iterations 30 \
+    --train_timesteps_per_iteration 5 \
     --eval_episodes 5 \
-    --seed 24
+    --seed 576
 
 TRAIN_EXIT_CODE=$?
 
@@ -41,7 +49,7 @@ if [ ${TRAIN_EXIT_CODE} -eq 0 ]; then
     
     python eval_agent.py \
         --algo_type "PPO" \
-        --trained_pcs_model_path None \
+        --trained_pcs_model_path '/Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip' \
         --trained_model_path "${ISO_FINAL_MODEL}" \
         --normalizer_path "${ISO_NORMALIZER}" \
         --pricing_policy "QUADRATIC" \

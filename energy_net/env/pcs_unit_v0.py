@@ -24,8 +24,8 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
 from energy_net.pcsunit_controller import PCSUnitController
-from energy_net.dynamics.iso.demand_patterns import DemandPattern
-from energy_net.dynamics.iso.cost_types import CostType
+from energy_net.market.iso.demand_patterns import DemandPattern
+from energy_net.market.iso.cost_types import CostType
 
 class PCSUnitEnv(gym.Env):
     """

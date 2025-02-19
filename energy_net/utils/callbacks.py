@@ -9,7 +9,7 @@ class ActionTrackingCallback(BaseCallback):
     """
     A custom callback for tracking actions during training.
     """
-    def __init__(self, agent_name: str, env_config=None, verbose=0):
+    def __init__(self, agent_name: str, env_config=None, verbose=0, is_training=True):
         super().__init__(verbose)
         """
         Initializes the ActionTrackingCallback.
@@ -18,6 +18,7 @@ class ActionTrackingCallback(BaseCallback):
             agent_name (str): Name of the agent being tracked.
             env_config (dict, optional): Environment configuration. Defaults to None.
             verbose (int, optional): Verbosity level. Defaults to 0.
+            is_training (bool, optional): Flag to distinguish between training and evaluation. Defaults to True.
         """
         self.agent_name = agent_name
         self.env_config = env_config or {'Dispatch_price': 5.0}  # Default if not provided
@@ -39,6 +40,8 @@ class ActionTrackingCallback(BaseCallback):
         self.iso_sell_prices = [] 
         self.iso_buy_prices = []
         self.dispatch = []   
+        self.is_training = is_training 
+        self.pcs_actions = [] 
         
     def _on_step(self) -> bool:
         """
@@ -80,7 +83,9 @@ class ActionTrackingCallback(BaseCallback):
             'reserve_cost': info.get('reserve_cost', 0.0),
             'shortfall': info.get('shortfall', 0.0),
             'dispatch': info.get('dispatch', 0.0),
-            'net_demand': info.get('net_demand', 0.0)
+            'net_demand': info.get('net_demand', 0.0),
+            'pcs_cost': info.get('pcs_cost', 0.0),
+            'pcs_actions': info.get('pcs_actions', []), 
         }
         
         
@@ -133,9 +138,9 @@ class ActionTrackingCallback(BaseCallback):
         reserve_costs = [d['reserve_cost'] for d in episode_data]
 
         # ===== Figure 1: Energy flows + Battery levels and Prices =====
-        fig = plt.figure(figsize=(15, 12))
+        fig = plt.figure(figsize=(15, 12))  # Back to original height
         
-        ax1 = plt.subplot(2, 1, 1)
+        ax1 = plt.subplot(2, 1, 1)  # Back to 2 rows
         
         # Dispatch bar as originally defined
         ax1.bar(steps, dispatch, width=0.8, color='lightblue', label='dispatch')
@@ -150,28 +155,38 @@ class ActionTrackingCallback(BaseCallback):
         ax1.grid(True, alpha=0.3)
         ax1.legend(loc='upper right', fontsize=10)
 
-        # Plot 2: Battery Level and Prices (Middle)
+        # Plot 2: Battery Levels and Prices (Bottom)
         ax2 = plt.subplot(2, 1, 2)
         
-        # Battery level on primary y-axis
-        color = 'blue'
-        ax2.plot(steps, battery_level, color=color, linewidth=2, label='Battery Level')
-        ax2.set_ylabel('Battery Level (MWh)', color=color, fontsize=12)
-        ax2.tick_params(axis='y', labelcolor=color)
-        ax2.grid(True, alpha=0.3)
-        
+        # Battery levels for all PCS agents
+        pcs_battery_levels = []
+        for d in episode_data:
+            levels = d.get('battery_level', [])
+            if not isinstance(levels, list):
+                levels = [levels]
+            pcs_battery_levels.append(levels)
+            
+        if pcs_battery_levels and len(pcs_battery_levels[0]) > 0:
+            for agent_idx in range(len(pcs_battery_levels[0])):
+                agent_levels = [step_levels[agent_idx] for step_levels in pcs_battery_levels]
+                ax2.plot(steps, agent_levels, '-', linewidth=2, label=f'PCS {agent_idx + 1} Battery')
+
         # Prices on secondary y-axis
         ax3 = ax2.twinx()
-        ax3.plot(steps, iso_sell_prices, 'r-', linewidth=2, label='ISO Sell Price')
-        ax3.plot(steps, iso_buy_prices, 'g-', linewidth=2, label='ISO Buy Price')
+        ax3.plot(steps, iso_sell_prices, 'r--', linewidth=2, label='ISO Sell Price')
+        ax3.plot(steps, iso_buy_prices, 'g--', linewidth=2, label='ISO Buy Price')
         ax3.set_ylabel('Price ($/MWh)', color='black', fontsize=12)
         ax3.tick_params(axis='y', labelcolor='black')
+        
+        # Set labels and grid for battery axis
+        ax2.set_ylabel('Battery Level (MWh)', fontsize=12)
+        ax2.grid(True, alpha=0.3)
         
         # Combine legends
         lines1, labels1 = ax2.get_legend_handles_labels()
         lines2, labels2 = ax3.get_legend_handles_labels()
         ax3.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=10)
-        
+
         plt.tight_layout()
         fig_path_1 = os.path.join(save_path, f'episode_{episode_num}_flows_prices.png')
         plt.savefig(fig_path_1, dpi=300, bbox_inches='tight')
@@ -224,6 +239,23 @@ class ActionTrackingCallback(BaseCallback):
         plt.savefig(final_cost_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Saved final cost distribution plot to {final_cost_path}")
+        
+        if episode_data and any('pcs_actions' in d for d in episode_data):
+            plt.figure(figsize=(10, 6))
+            steps = range(len(episode_data))
+            pcs_actions = [d.get('pcs_actions', []) for d in episode_data]
+            
+            for agent_idx in range(len(pcs_actions[0])):
+                agent_actions = [step_actions[agent_idx] for step_actions in pcs_actions]
+                plt.plot(steps, agent_actions, label=f'PCS Agent {agent_idx + 1}')
+            
+            plt.xlabel('Step')
+            plt.ylabel('Battery Action')
+            plt.title(f'PCS Agents Actions - Episode {episode_num}')
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(os.path.join(save_path, f'episode_{episode_num}_pcs_actions.png'))
+            plt.close()
 
     def _on_rollout_end(self) -> bool:
         """
@@ -234,11 +266,12 @@ class ActionTrackingCallback(BaseCallback):
     
     def _on_training_end(self) -> None:
         """
-        This method is called at the end of training.
+        This method is called at the end of training or evaluation.
         It saves all runtime information (all episodes' actions) to a file.
         """
-        file_path = os.path.join("runtime_info.pkl")
+        mode = "training" if self.is_training else "evaluation"
+        file_path = os.path.join(f"runtime_info_{mode}.pkl")
         with open(file_path, "wb") as f:
             pickle.dump(self.all_episodes_actions, f)
-        print(f"Runtime info saved to {file_path}")
+        print(f"{mode.capitalize()} runtime info saved to {file_path}")
 

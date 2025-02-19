@@ -14,10 +14,10 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RescaleAction, ClipAction
 from gymnasium import spaces
 from stable_baselines3.common.noise import NormalActionNoise
-from energy_net.dynamics.iso.demand_patterns import DemandPattern
+from energy_net.market.iso.demand_patterns import DemandPattern
 import argparse
 from energy_net.env import PricingPolicy  
-from energy_net.dynamics.iso.cost_types import CostType  
+from energy_net.market.iso.cost_types import CostType  
 
 class DiscreteActionWrapper(gym.ActionWrapper):
     def __init__(self, env, n_actions=21, min_action=-10.0, max_action=10.0):
