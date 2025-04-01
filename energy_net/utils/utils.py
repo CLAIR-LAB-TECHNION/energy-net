@@ -1,6 +1,6 @@
 from scipy.integrate import quad
 from scipy.misc import derivative
-from typing import Callable, Any, TypedDict
+from typing import Callable, Any, TypedDict, List, Dict, Tuple  # Add Tuple import
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -9,10 +9,10 @@ import os
 
 from ..model.state import State
 
-AggFunc = Callable[[list[dict[str, Any]]], dict[str, Any]]
+AggFunc = Callable[[List[Dict[str, Any]]], Dict[str, Any]]
 
 
-def agg_func_sum(element_arr:list[dict[str, Any]])-> dict[str, Any]:
+def agg_func_sum(element_arr:List[Dict[str, Any]])-> Dict[str, Any]:
     sum_dict = {}
     for element in element_arr:
         for entry in element:
@@ -47,7 +47,7 @@ def get_value_by_type(dict, wanted_type):
     
     return None
 
-def unit_conversion(dest_units: str, x: float, T: tuple[float, float]) -> float:
+def unit_conversion(dest_units: str, x: float, T: Tuple[float, float]) -> float:
     """
     Function for unit conversion. Calculate energy by integrating the power function
     over the specified time interval. Calculate energy by derivating the energy function.

@@ -8,6 +8,39 @@ action:
     enabled: false
     max: 10.0
     min: -10.0
+
+# Observation space configuration
+observation_space:
+  battery_level:
+    min: "from_battery_config"  # Will use battery min from battery config
+    max: "from_battery_config"  # Will use battery max from battery config
+  time:
+    min: 0.0
+    max: 1.0
+  iso_buy_price:
+    min: 0.0
+    max: 100.0
+  iso_sell_price:
+    min: 0.0
+    max: 100.0
+
+# Default ISO agent parameters
+default_iso_params:
+  quadratic:
+    buy_a: 1.0
+    buy_b: 2.0
+    buy_c: 5.0
+
+# Dispatch cost configuration
+dispatch_cost:
+  thresholds:
+    - level: 100.0
+      rate: 5.0
+    - level: 170.0
+      rate: 7.0
+    - level: "inf"
+      rate: 8.0
+
 battery:
   dynamic_type: model_based
   model_parameters:
@@ -15,27 +48,29 @@ battery:
     charge_rate_max: 10.0
     discharge_efficiency: 1.0
     discharge_rate_max: 10.0
-    init: 0.0
+    init: 40.0
     lifetime_constant: 100.0
     max: 100.0
     min: 0.0
   model_type: deterministic_battery
+
 consumption_unit:
   dynamic_type: model_based
   model_parameters:
     consumption_capacity: 0.0
     peak_consumption1: 0.0
     peak_consumption2: 0.0
-    peak_time1: 0.4
-    peak_time2: 0.7
-    width1: 0.05
-    width2: 0.1
+    peak_time1: 0.0
+    peak_time2: 0.0
+    width1: 1.0
+    width2: 1.0
   model_type: deterministic_consumption
+
 production_unit:
   dynamic_type: model_based
   model_parameters:
     peak_production: 0.0
-    peak_time: 0.5
+    peak_time: 0.0
     production_capacity: 0.0
-    width: 0.1
+    width: 1.0
   model_type: deterministic_production

@@ -70,6 +70,18 @@ class PCSUnitEnv(gym.Env):
         """
         super().__init__()
         
+        # Convert demand_pattern to enum if it's a string
+        if isinstance(demand_pattern, str):
+            demand_pattern = DemandPattern[demand_pattern.upper()]
+        elif demand_pattern is None:
+            demand_pattern = DemandPattern.SINUSOIDAL  # Default pattern
+            
+        # Convert cost_type to enum if it's a string
+        if isinstance(cost_type, str):
+            cost_type = CostType[cost_type.upper()]
+        elif cost_type is None:
+            cost_type = CostType.CONSTANT  # Default cost type
+        
         # Initialize controller with base configurations and new parameters
         self.controller = PCSUnitController(
             cost_type=cost_type,              

@@ -3,9 +3,5 @@
 # Import the registration script to register the environments
 from .register_envs import *
 
-from enum import Enum
-
-class PricingPolicy(Enum):
-    QUADRATIC = "quadratic"
-    ONLINE = "online"
-    CONSTANT = "constant"
+# Import EnergyNetV0 environment for direct access
+from .energy_net_v0 import EnergyNetV0

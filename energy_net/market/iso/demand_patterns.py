@@ -34,5 +34,12 @@ def calculate_demand(time: float, pattern: DemandPattern, config: dict) -> float
         )
     elif pattern == DemandPattern.CONSTANT:
         return base_load
+    elif pattern == DemandPattern.DOUBLE_PEAK:
+        # Create a double peak pattern with morning and evening peaks
+        morning_peak = 0.25  # 6 AM
+        evening_peak = 0.75  # 6 PM
+        morning_factor = np.exp(-20 * ((interval - morning_peak) ** 2))
+        evening_factor = np.exp(-20 * ((interval - evening_peak) ** 2))
+        return base_load + amplitude * (morning_factor + evening_factor)
     else:
         raise ValueError(f"Unknown demand pattern: {pattern}")

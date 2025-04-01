@@ -1,35 +1,33 @@
-from typing import Callable, Dict
-from energy_net.dynamics.iso.iso_base import ISOBase
+from typing import Dict, Any, Callable
+from energy_net.market.iso.iso_base import ISOBase
+import numpy as np
 
 class DynamicPricingISO(ISOBase):
     """
-    ISO implementation that adjusts prices dynamically based on real-time factors.
+    ISO implementation that uses dynamic pricing based on demand.
     """
-
-    def __init__(
-        self,
-        base_price: float = 50.0,
-        demand_factor: float = 1.0,
-        supply_factor: float = 1.0,
-        elasticity: float = 0.5
-    ):
+    def __init__(self, base_price: float = 50.0, demand_sensitivity: float = 0.1):
+        """
+        Args:
+            base_price (float): Base price when demand equals supply
+            demand_sensitivity (float): How much price changes with demand
+        """
         self.base_price = base_price
-        self.demand_factor = demand_factor
-        self.supply_factor = supply_factor
-        self.elasticity = elasticity
-
-    def reset(self) -> None:
-        pass
-
-    def get_pricing_function(self, observation: Dict) -> Callable[[float], float]:
-        demand = observation.get('demand', 1.0)
-        supply = observation.get('supply', 1.0)
-
-        price = self.base_price * (1 + self.elasticity * (demand - supply))
+        self.demand_sensitivity = demand_sensitivity
         
-
-        def pricing(buy: float) -> float:
-            return (buy * price) 
-
-        # Ensure we return the pricing callable
-        return pricing
+    def get_pricing_function(self, state: Dict[str, Any]) -> Callable[[float], float]:
+        """
+        Returns a pricing function that increases with demand.
+        
+        Args:
+            state (Dict[str, Any]): Current state including predicted demand
+            
+        Returns:
+            Callable[[float], float]: Pricing function that takes demand and returns price
+        """
+        predicted_demand = state.get('predicted_demand', 0.0)
+        
+        def price_fn(demand: float) -> float:
+            return self.base_price * (1 + self.demand_sensitivity * (demand - predicted_demand))
+            
+        return price_fn

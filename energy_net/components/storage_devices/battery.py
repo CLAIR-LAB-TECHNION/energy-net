@@ -45,6 +45,7 @@ class Battery(ElementaryGridEntity):
         self.discharge_efficiency: float = config['discharge_efficiency']
         self.initial_energy: float = config['init']
         self.energy_level: float = self.initial_energy
+        self.energy_change: float = 0.0  # Initialize energy_change
 
         self.logger.info(f"Battery initialized with energy level: {self.energy_level} MWh")
 

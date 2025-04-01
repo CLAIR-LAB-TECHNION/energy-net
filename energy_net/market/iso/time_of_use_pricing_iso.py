@@ -1,41 +1,40 @@
-from typing import Callable, Dict
-from energy_net.dynamics.iso.iso_base import ISOBase
+from typing import Dict, Any, Callable
+from energy_net.market.iso.iso_base import ISOBase
+import numpy as np
 
 class TimeOfUsePricingISO(ISOBase):
     """
-    ISO implementation that sets prices based on time-of-use (TOU) periods.
+    ISO implementation that uses time-of-use pricing.
     """
-
-    def __init__(
-        self,
-        peak_hours: list,
-        off_peak_hours: list,
-        peak_price: float = 60.0,
-        off_peak_price: float = 30.0
-    ):
-        self.peak_hours = peak_hours
-        self.off_peak_hours = off_peak_hours
+    def __init__(self, peak_price: float = 80.0, off_peak_price: float = 30.0, 
+                 peak_start: float = 0.25, peak_end: float = 0.75):
+        """
+        Args:
+            peak_price (float): Price during peak hours
+            off_peak_price (float): Price during off-peak hours
+            peak_start (float): Start of peak period (fraction of day)
+            peak_end (float): End of peak period (fraction of day)
+        """
         self.peak_price = peak_price
         self.off_peak_price = off_peak_price
-
-    def reset(self) -> None:
-        pass
-
-    def get_pricing_function(self, observation: Dict) -> Callable[[float], float]:
-        current_time_fraction = observation.get('time', 0.0)
-        current_hour = int(current_time_fraction * 24) % 24
-
-        if current_hour in self.peak_hours:
-            price = self.peak_price
+        self.peak_start = peak_start
+        self.peak_end = peak_end
+        
+    def get_pricing_function(self, state: Dict[str, Any]) -> Callable[[float], float]:
+        """
+        Returns a pricing function based on time of day.
+        
+        Args:
+            state (Dict[str, Any]): Current state including time
             
-        elif current_hour in self.off_peak_hours:
-            price = self.off_peak_price
+        Returns:
+            Callable[[float], float]: Pricing function that takes demand and returns price
+        """
+        time = state.get('time', 0.0)
+        is_peak = self.peak_start <= time <= self.peak_end
+        price = self.peak_price if is_peak else self.off_peak_price
+        
+        def price_fn(demand: float) -> float:
+            return price
             
-        else:
-            price = (self.peak_price + self.off_peak_price) / 2
-            
-
-        def pricing(buy: float) -> float:
-            return buy * price
-
-        return pricing
+        return price_fn

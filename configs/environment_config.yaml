@@ -30,10 +30,9 @@ predicted_demand:
   phase_shift: 5           # Phase shift in the cosine function
   period_divisor: 24       # Period divisor for the cosine function
 
-
 demand_uncertainty:
   sigma: 10.0
 
-reserve_price: 50.0
-dispatch_price: 10.0
+reserve_price: 200.0
+dispatch_price: 100.0
 

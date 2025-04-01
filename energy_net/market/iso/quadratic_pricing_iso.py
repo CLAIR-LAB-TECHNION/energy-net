@@ -1,32 +1,33 @@
-from typing import Callable, Dict
+from typing import Dict, Any, Callable
 from energy_net.market.iso.iso_base import ISOBase
+import numpy as np
 
 class QuadraticPricingISO(ISOBase):
     """
-    ISO implementation that uses a quadratic function to determine prices based on demand or other factors.
+    ISO implementation that uses quadratic pricing function.
     """
-
-    def __init__(self, buy_a: float = 1.0, buy_b: float = 0.0, buy_c: float = 50.0):
-        if not isinstance(buy_a, (float, int)):
-            raise TypeError(f"a must be a float or int, got {type(buy_a).__name__}")
-        if not isinstance(buy_b, (float, int)):
-            raise TypeError(f"b must be a float or int, got {type(buy_b).__name__}")
-        if not isinstance(buy_c, (float, int)):
-            raise TypeError(f"c must be a float or int, got {type(buy_c).__name__}")
-
-        self.a = float(buy_a)
-        self.b = float(buy_b)
-        self.c = float(buy_c)
-
-    def reset(self) -> None:
-        pass
-
-    def get_pricing_function(self, observation: Dict) -> Callable[[float], float]:
-        demand = observation.get('demand', 1.0)
-        price = self.a * (demand ** 2) + self.b * demand + self.c
+    def __init__(self, buy_a: float = 0.0, buy_b: float = 0.0, buy_c: float = 50.0):
+        """
+        Args:
+            buy_a (float): Quadratic coefficient
+            buy_b (float): Linear coefficient
+            buy_c (float): Constant term
+        """
+        self.buy_a = buy_a
+        self.buy_b = buy_b
+        self.buy_c = buy_c
         
-
-        def pricing(buy: float) -> float:
-            return (buy * price) 
-
-        return pricing
+    def get_pricing_function(self, state: Dict[str, Any]) -> Callable[[float], float]:
+        """
+        Returns a quadratic pricing function.
+        
+        Args:
+            state (Dict[str, Any]): Current state (not used in this implementation)
+            
+        Returns:
+            Callable[[float], float]: Pricing function that takes demand and returns price
+        """
+        def price_fn(demand: float) -> float:
+            return self.buy_a * demand**2 + self.buy_b * demand + self.buy_c
+            
+        return price_fn

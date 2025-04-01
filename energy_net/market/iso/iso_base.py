@@ -1,35 +1,27 @@
 # iso_base.py
 
 from abc import ABC, abstractmethod
-from typing import Callable, Dict
+from typing import Dict, Any, Callable
 
 
 class ISOBase(ABC):
     """
-    Abstract Base Class for ISO (Independent System Operator) implementations.
-    Defines the required interface for all ISO pricing strategies.
+    Base class for Independent System Operator (ISO) implementations.
+    
+    All ISO implementations must inherit from this class and implement
+    the get_pricing_function method.
     """
 
     @abstractmethod
-    def reset(self) -> None:
+    def get_pricing_function(self, state: Dict[str, Any]) -> Callable[[float], float]:
         """
-        Resets the ISO's internal state.
-        Called at the beginning of each new episode.
-        """
-        pass
-
-    @abstractmethod
-    def get_pricing_function(self, observation: Dict) -> Callable[[float], float]:
-        """
-        Returns a pricing function based on the current observation.
-        The pricing function calculates the reward given buy and sell amounts.
-
+        Returns a pricing function based on the current state.
+        
         Args:
-            observation (Dict): Current state observation containing relevant information.
-
+            state (Dict[str, Any]): Current state of the system
+            
         Returns:
-            Callable[[float, float], float]: A function that takes buy and sell amounts
-                                              and returns the calculated reward.
+            Callable[[float], float]: Function that takes demand and returns price
         """
         pass
 

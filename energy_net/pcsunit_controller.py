@@ -1,3 +1,22 @@
+"""
+PCSUnit Controller Module
+
+This module implements the controller for Power Consumption and Storage Units (PCSUnit).
+It manages the battery charging/discharging strategies in response to electricity prices
+from the ISO and coordinates the various components involved in PCS operations.
+
+Key responsibilities:
+1. Interfacing with the PCSUnit component to manage battery operations
+2. Processing agent actions and translating them to battery commands
+3. Calculating energy production, consumption, and grid exchange
+4. Managing state transitions and reward calculations
+5. Providing standardized observations for the RL agent
+
+The controller serves as the bridge between the reinforcement learning agent
+and the physical battery simulation, enabling intelligent energy management
+that can respond to market conditions.
+"""
+
 from energy_net.components.grid_entity import GridEntity
 from typing import Optional, Tuple, Dict, Any, Union, Callable
 import numpy as np
@@ -25,6 +44,10 @@ from energy_net.market.iso.quadratic_pricing_iso import QuadraticPricingISO
 from energy_net.rewards.base_reward import BaseReward
 from energy_net.rewards.cost_reward import CostReward
 
+# Import controller components
+from energy_net.controllers.pcs.metrics_handler import PCSMetricsHandler
+from energy_net.controllers.pcs.battery_manager import BatteryManager
+from energy_net.controllers.pcs.market_interface import MarketInterface
 
 
 class PCSUnitController:
@@ -104,21 +127,31 @@ class PCSUnitController:
         self.logger.info("Initialized PCSUnit with all components.")
 
         # Define observation and action spaces
-
         energy_config: Dict[str, Any] = self.pcs_unit_config['battery']['model_parameters']
+        obs_config = self.pcs_unit_config.get('observation_space', {})
+
+        # Get battery level bounds from battery config if specified
+        battery_level_config = obs_config.get('battery_level', {})
+        battery_min = energy_config['min'] if battery_level_config.get('min') == "from_battery_config" else battery_level_config.get('min', energy_config['min'])
+        battery_max = energy_config['max'] if battery_level_config.get('max') == "from_battery_config" else battery_level_config.get('max', energy_config['max'])
+
+        # Get other observation space bounds from config
+        time_config = obs_config.get('time', {})
+        buy_price_config = obs_config.get('iso_buy_price', {})
+        sell_price_config = obs_config.get('iso_sell_price', {})
 
         self.observation_space: spaces.Box = spaces.Box(
             low=np.array([
-                energy_config['min'],
-                0.0,
-                0.0,
-                0.0
+                battery_min,
+                time_config.get('min', 0.0),
+                buy_price_config.get('min', 0.0),
+                sell_price_config.get('min', 0.0)
             ], dtype=np.float32),
             high=np.array([
-                energy_config['max'],
-                1.0,
-                100.0,
-                100.0
+                battery_max,
+                time_config.get('max', 1.0),
+                buy_price_config.get('max', 100.0),
+                sell_price_config.get('max', 100.0)
             ], dtype=np.float32),
             dtype=np.float32
         )
@@ -128,10 +161,6 @@ class PCSUnitController:
         self.multi_action: bool = self.pcs_unit_config.get('action', {}).get('multi_action', False)
         self.production_action_enabled: bool = self.pcs_unit_config.get('action', {}).get('production_action', {}).get('enabled', False)
         self.consumption_action_enabled: bool = self.pcs_unit_config.get('action', {}).get('consumption_action', {}).get('enabled', False)
-        pricing_config = self.iso_config.get('pricing', {})
-        price_params = pricing_config.get('parameters', {})
-        self.min_price = price_params.get('min_price', pricing_config.get('default_sell_price', 1.0))
-        self.max_price = price_params.get('max_price', pricing_config.get('default_buy_price', 10.0))
 
         self.action_space: spaces.Box = spaces.Box(
             low=np.array([
@@ -147,57 +176,59 @@ class PCSUnitController:
 
         # Initialize state variables
         self.time = 0.0
-        self.predicted_demand = 0.0
-        self.pcs_demand = 0.0  
-        # Tracking variables for ISO state
-        self.iso_sell_price = self.min_price  
-        self.iso_buy_price = self.min_price  
+        
         # Internal State
         self.init: bool = False
         self.rng = np.random.default_rng()
-        self.avg_price: float = 0.0
-        self.battery_level: float = energy_config['init']
-        self.reward_type: int = 0
         self.count: int = 0        # Step counter
         self.terminated: bool = False
         self.truncated: bool = False
 
-        # reference to trained ISO agent
-        self.trained_iso_agent = None
+        # Initialize component modules
+        
+        # Initialize battery manager with reference to PCSUnit for direct access
+        self.battery_manager = BatteryManager(
+            battery_config=self.pcs_unit_config['battery']['model_parameters'],
+            pcsunit=self.PCSUnit,  # Pass PCSUnit reference to use direct battery access
+            logger=self.logger
+        )
+        self.battery_level = self.battery_manager.get_level()  # Get initial battery level from manager
+        self.logger.info(f"Initialized battery manager with level: {self.battery_level}")
+        
+        # Initialize market interface
+        self.market_interface = MarketInterface(
+            env_config=self.env_config,
+            iso_config=self.iso_config,
+            pcs_config=self.pcs_unit_config,
+            logger=self.logger
+        )
+        self.logger.info("Initialized market interface")
 
-        uncertainty_config = self.env_config.get('demand_uncertainty', {})
-        self.sigma = uncertainty_config.get('sigma', 0.0)
-        self.reserve_price = self.env_config.get('reserve_price', 0.0)
-        self.dispatch_price = self.env_config.get('dispatch_price', 0.0)
-
-        # Extract other configurations if necessary
-        self.pricing_eta = self.env_config['pricing']['eta']
+        # Initialize timing parameters
         self.time_steps_per_day_ratio = self.env_config['time']['time_steps_per_day_ratio']
         self.time_step_duration = self.env_config['time']['step_duration']
         self.max_steps_per_episode = self.env_config['time']['max_steps_per_episode']
 
-        self.demand_pattern = demand_pattern
-        self.logger.info(f"Using demand pattern: {demand_pattern.value}")
-
         # Initialize the Reward Function
         self.logger.info(f"Setting up reward function: {reward_type}")
         self.reward: BaseReward = self.initialize_reward(reward_type)
+        
+        # Initialize the Metrics Handler
+        self.metrics_handler = PCSMetricsHandler(
+            config=self.pcs_unit_config,
+            reward_function=self.reward,
+            logger=self.logger
+        )
+        self.logger.info("Initialized metrics handler")
                 
         # Load trained ISO model if provided
         if trained_iso_model_path:
             try:
                 trained_iso_agent = PPO.load(trained_iso_model_path)
-                self.set_trained_iso_agent(trained_iso_agent)
+                self.market_interface.set_trained_iso_agent(trained_iso_agent)
                 self.logger.info(f"Loaded ISO model: {trained_iso_model_path}")
             except Exception as e:
                 self.logger.error(f"Failed to load ISO model: {e}")
-        
-        self.buy_iso = QuadraticPricingISO(
-            buy_a=1,  
-            buy_b=2,    
-            buy_c=5.0
-        )
-
 
         self.logger.info("PCSunitEnv initialization complete.")
                 
@@ -267,154 +298,188 @@ class PCSUnitController:
             self.rng = np.random.default_rng()
             self.logger.debug("Random number generator initialized without seed.")
 
+        # If this is not the first reset and we have metrics, end the previous episode
+        if self.init and hasattr(self, 'metrics_handler'):
+            self.metrics_handler.end_episode()
+
         # Reset PCSUnit and ISO
         self.PCSUnit.reset()
         self.logger.debug("PCSUnit has been reset.")
 
-        # Reset internal state
-        energy_config = self.pcs_unit_config['battery']['model_parameters']
-        self.avg_price = 0.0
-        self.energy_lvl = energy_config['init']
-        #self.battery_level = self.rng.uniform(low=energy_config['min'], high=energy_config['max'])
+        # Reset market interface
+        self.market_interface.reset()
+        self.logger.debug("Market interface reset")
         
-        # Pass the random initial energy level to PCSUnit
-        self.PCSUnit.reset(initial_battery_level=self.battery_level) 
-
-        self.reward_type = 0  # Default reward type
-
-        # Handle options
-        if options and 'reward' in options:
-            if options.get('reward') == 1:
-                self.reward_type = 1
-                self.logger.debug("Reward type set to 1 based on options.")
-            else:
-                self.logger.debug(f"Reward type set to {self.reward_type} based on options.")
-        else:
-            self.logger.debug("No reward type option provided; using default.")
-
-        # Reset step counter
+        # Reset step counter and state
         self.count = 0
-        self.terminated = False
-        self.truncated = False
-        self.init = True
-
-        # Initialize current time (fraction of day)
         self.time = 0.0
-        time: float = (self.count * self.time_step_duration) / 1440  # 1440 minutes in a day
-        self.logger.debug(f"Initial time set to {time} fraction of day.")
-
-
-        self.predicted_demand = self.calculate_predicted_demand(self.time)
-        self.pcs_demand = 0.0
-        noise = np.random.normal(0, self.sigma)
-        self.realized_demand = float(self.predicted_demand + noise)
-
-
-        # Update PCSUnit with current time and no action
-        self.PCSUnit.update(time=time, battery_action=0.0)
-        self.logger.debug("PCSUnit updated with initial time and no action.")
-
-        # Fetch self-production and self-consumption
-        production: float = self.PCSUnit.get_self_production()
-        consumption: float = self.PCSUnit.get_self_consumption()
-        self.logger.debug(f"Initial pcs-production: {production}, pcs-consumption: {consumption}")
         
-        if self.trained_iso_agent is not None:
-            try:
-                prices = self.trained_iso_agent.predict(self.translate_to_iso_observation(), deterministic=True)[0]
-                self.iso_sell_price, self.iso_buy_price = prices
-                self.logger.info(f"Updated ISO agent prices on reset: Sell {self.iso_sell_price:.2f}, Buy {self.iso_buy_price:.2f}")
-            except Exception as e:
-                self.logger.error(f"Failed to update ISO prices on reset: {e}")
-
-        observation: np.ndarray = np.array([
+        # Reset metrics handler and reward function
+        self.metrics_handler.reset()
+        self.reward.reset()  # Reset reward function state
+        self.logger.debug("Metrics handler and reward function reset")
+        
+        # Initialize time step
+        time = self.time
+        
+        # Get initial market state
+        predicted_demand = self.calculate_predicted_demand(time)
+        self.market_interface.update_market_prices(time, predicted_demand, 0.0)
+        realized_demand = self.market_interface.update_realized_demand()
+        market_state = {
+            'iso_buy_price': self.market_interface.iso_buy_price,
+            'iso_sell_price': self.market_interface.iso_sell_price,
+            'predicted_demand': predicted_demand,
+            'realized_demand': realized_demand,
+            'pcs_demand': 0.0
+        }
+        
+        # Get initial production and consumption
+        production = self.PCSUnit.get_self_production()
+        consumption = self.PCSUnit.get_self_consumption()
+        
+        # Build state dictionary
+        battery_state = self.battery_manager.get_state()
+        self.state = {
+            **battery_state,
+            'time': time,
+            'current_time': time * self.env_config['time']['minutes_per_day'],  # Convert to minutes
+            'production': production,
+            'consumption': consumption,
+            'battery_action': 0.0,
+            'net_exchange': 0.0,
+            **market_state  # Include all market state metrics
+        }
+        
+        # Create initial observation
+        observation = np.array([
             self.battery_level,
             time,
-            self.iso_buy_price,   
-            self.iso_sell_price   
+            self.market_interface.iso_buy_price,
+            self.market_interface.iso_sell_price
         ], dtype=np.float32)
-        self.logger.debug(f"Initial observation: {observation}")
 
-        info = {"status": "reset"}
-        self.logger.debug(f"Initial info: {info}")
-
-        return (observation, info)
-
-    def step(self, action: Union[float, np.ndarray, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
-        """
-        Executes one time step of the PCS unit.
+        self.logger.info(f"Environment reset complete. Initial observation: {observation}")
         
-        Process flow:
-        1. Update time and get current ISO prices
-        2. Validate and process battery action
-        3. Update PCS unit state
-        4. Calculate costs and rewards
+        # Set initialization flag
+        self.init = True
+
+        return observation, self.get_info()
+
+    def validate_battery_action(self, action: float) -> float:
+        """
+        Simple validation for battery action - only prevents attempting to discharge more energy
+        than is available in the battery. The battery component's internal update method will 
+        handle other constraints like charge/discharge rates and capacity limits.
         
         Args:
-            action: Battery charging/discharging power
-                   Positive = charging, Negative = discharging
+            action: Proposed battery action (+ for charging, - for discharging)
+            
+        Returns:
+            Validated action within allowable bounds
+        """
+        # Get current battery state
+        current_level = self.PCSUnit.battery.get_state()
+        
+        # Only validate discharge actions - charging validation happens in the battery component
+        if action < 0:  # Discharging
+            # Simple physics constraint: can't discharge more than available
+            max_possible_discharge = -current_level
+            
+            if action < max_possible_discharge:
+                self.logger.warning(
+                    f"Physics constraint: Attempted to discharge {abs(action):.4f} MWh "
+                    f"with only {current_level:.4f} MWh available. "
+                    f"Limiting to {abs(max_possible_discharge):.4f} MWh."
+                )
+                return max_possible_discharge
+        
+        # For all other cases (charging or valid discharge), let the battery component handle it
+        return action
+    
+    def get_battery_state(self) -> Dict[str, float]:
+        """
+        Get current battery state information.
+        
+        Retrieves comprehensive information about the current state of the battery,
+        including current level, physical constraints, and rate limits. This information
+        is essential for understanding the battery's operational context and constraints.
+        
+        Returns:
+            Dictionary containing:
+                - battery_level: Current state of charge (MWh)
+                - energy_change: Most recent change in energy level (MWh)
+                - battery_min: Minimum allowed battery level (MWh)
+                - battery_max: Maximum battery capacity (MWh)
+                - charge_rate_max: Maximum charging rate (MWh/step)
+                - discharge_rate_max: Maximum discharging rate (MWh/step)
+        """
+        return {
+            'battery_level': self.battery_level,
+            'energy_change': self.PCSUnit.battery.energy_change if hasattr(self.PCSUnit.battery, 'energy_change') else 0.0,
+            'battery_min': self.PCSUnit.battery.energy_min,
+            'battery_max': self.PCSUnit.battery.energy_max,
+            'charge_rate_max': self.PCSUnit.battery.charge_rate_max,
+            'discharge_rate_max': self.PCSUnit.battery.discharge_rate_max
+        }
+    
+    def step(self, action: Union[float, np.ndarray, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        """
+        Executes one time step of the PCS unit environment.
+        
+        This is the core simulation method that advances the state by one time step.
+        The detailed process flow is:
+        
+        1. Update time and get current ISO prices based on the time and demand
+        2. Process and validate the battery action (ensure it respects physical constraints)
+        3. Update PCS unit state including battery level, production, and consumption
+        4. Calculate net exchange with the grid (buying or selling electricity)
+        5. Determine financial impacts (revenue, costs) based on market prices
+        6. Calculate grid impacts (demand, shortfall, dispatch costs)
+        7. Compute reward based on the updated state
+        8. Build observation vector for the agent
+        
+        Args:
+            action: Battery charging/discharging power. Can be:
+                   - float: Simple battery action (positive = charging, negative = discharging)
+                   - np.ndarray: For single action [battery] or multi-action [battery, consumption, production]
+                   - int: Will be converted to float for battery action
                    
         Returns:
             observation: Current state [battery_level, time, buy_price, sell_price]
-            reward: Cost-based reward for this step
-            done: Whether episode is complete
-            truncated: Whether episode was truncated
-            info: Additional metrics and state information
+            reward: Cost-based reward for this step (typically negative, representing costs)
+            done: Whether episode is complete (always False for this environment)
+            truncated: Whether episode was truncated due to reaching max steps
+            info: Dictionary containing detailed metrics including:
+                  - Battery state (level, energy_change)
+                  - Market position (net_exchange, revenue)
+                  - Grid impact (shortfall, reserve_cost)
+                  - Production and consumption values
+        
+        Raises:
+            ValueError: If the action doesn't match the expected format or dimensions
+            TypeError: If the action type is invalid
         """
         assert self.init, "Environment must be reset before stepping."
         
-        # 1. Update time and predicted demand
-
-        # Update time and state
+        # 1. Update time and state
         self.count += 1
         self.time = (self.count * self.time_step_duration) / self.env_config['time']['minutes_per_day']
         self.logger.debug(f"Time updated to {self.time:.3f} (day fraction)")
 
-        # Update predicated and realized demand
-        self.predicted_demand = self.calculate_predicted_demand(self.time)
-        noise = np.random.normal(0, self.sigma)
-        self.realized_demand = float(self.predicted_demand + noise)
-        self.logger.debug(f"Predicted demand: {self.predicted_demand:.2f} MWh")
+        # Calculate predicted demand for this timestep
+        predicted_demand = self.calculate_predicted_demand(self.time)
+        
+        # Get PCS demand from previous step (or 0.0 if first step)
+        pcs_demand = self.state.get('pcs_demand', 0.0)
+        
+        # 2. Update market prices based on time and demand
+        self.market_interface.update_market_prices(self.time, predicted_demand, pcs_demand)
+        
+        # Update realized demand with noise
+        realized_demand = self.market_interface.update_realized_demand()
 
-        # 2. Process ISO action
-        if self.trained_iso_agent is not None:
-            iso_obs = self.translate_to_iso_observation()
-            self.logger.debug(f"Sending observation to ISO: {iso_obs}")
-            try:
-                prices = self.trained_iso_agent.predict(iso_obs, deterministic=True)[0]
-                self.logger.debug(f"Raw ISO prediction: {prices}")
-                
-                self.iso_sell_price, self.iso_buy_price = prices
-                if self.iso_sell_price == 0 and self.iso_buy_price == 0:
-                    self.logger.warning("ISO agent returned zero prices - this might indicate an issue")
-                
-                self.logger.info(
-                    f"Using ISO agent prices:\n"
-                    f"  - ISO Sell Price: {self.iso_sell_price:.2f} $/MWh\n"
-                    f"  - ISO Buy Price: {self.iso_buy_price:.2f} $/MWh"
-                )
-            except Exception as e:
-                self.logger.error(f"Failed to get prices from ISO agent: {e}")
-                self.iso_sell_price = self.iso_config.get('pricing', {}).get('default_buy_price', 50.0)
-                self.iso_buy_price = self.iso_config.get('pricing', {}).get('default_sell_price', 45.0)
-                self.logger.warning(
-                    f"Falling back to default prices:\n"
-                    f"  - ISO Sell Price: {self.iso_sell_price:.2f} $/MWh\n"
-                    f"  - ISO Buy Price: {self.iso_buy_price:.2f} $/MWh"
-                )
-        else:
-            buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': self.predicted_demand})
-            self.iso_sell_price = max(buy_pricing_fn(1.0), 0)
-            self.iso_buy_price = 0.85 * self.iso_sell_price
-            
-            self.logger.info(
-                f"Using quadratic pricing (no ISO agent):\n"
-                f"  - ISO Sell Price: {self.iso_sell_price:.2f} $/MWh\n"
-                f"  - ISO Buy Price: {self.iso_buy_price:.2f} $/MWh"
-            )
-
-
-        # 3. Get PCS response
+        # 3. Process action: Convert to proper format
         self.logger.debug(f"Processing PCS action: {action}")
         if isinstance(action, np.ndarray):
             if self.multi_action and action.shape != (3,):
@@ -433,146 +498,186 @@ class PCSUnitController:
                 consumption_action = None
                 production_action = None
                 
-        elif isinstance(action, float):
+        elif isinstance(action, float) or isinstance(action, int):
             if self.multi_action:
                 raise TypeError("Expected array action for multi-action mode")
-            battery_action = action
+            battery_action = float(action)  # Ensure it's a float
             consumption_action = None
             production_action = None
         else:
             raise TypeError(f"Invalid action type: {type(action)}")
 
-                        
-
-        # Validate battery action based on current state
-        current_battery_level = self.PCSUnit.battery.get_state()
+        # Store original action for reference
+        original_action = battery_action
         
-        # If trying to discharge (negative action) with insufficient battery level
-        if battery_action < 0:  # Discharging
-            max_possible_discharge = -current_battery_level  # Maximum amount we can discharge
-            if battery_action < max_possible_discharge:
-                self.logger.warning(
-                    f"Attempted to discharge {abs(battery_action):.2f} MWh with only {current_battery_level:.2f} MWh available. "
-                    "Limiting discharge to available energy."
-                )
-                battery_action = max_possible_discharge
+        # 4. Validate battery action (using simplified approach following the old controller)
+        # Note: We only validate the basic physics constraint here (can't discharge more than available)
+        # The battery component's internal update method will handle the remaining constraints
+        # like charge/discharge rates and capacity limits
+        previous_battery_level = self.PCSUnit.battery.get_state()
+        validated_battery_action = self.validate_battery_action(battery_action)
         
-        if self.multi_action:
-            self.PCSUnit.update(
-                time=self.time,
-                battery_action=battery_action,
-                consumption_action=consumption_action,
-                production_action=production_action
-            )
-        else:
-            self.PCSUnit.update(
-                time=self.time,
-                battery_action=battery_action
-            )
-
-        # Get updated production and consumption
+        # 5. Update the PCSUnit with validated action
+        self.PCSUnit.update(time=self.time, battery_action=validated_battery_action)
+        
+        # 6. Get updated battery state
+        self.battery_level = self.PCSUnit.battery.get_state()
+        energy_change = self.PCSUnit.battery.energy_change if hasattr(self.PCSUnit.battery, 'energy_change') else (self.battery_level - previous_battery_level)
+        
+        # Get current production and consumption
         production = self.PCSUnit.get_self_production()
         consumption = self.PCSUnit.get_self_consumption()
         
-        # 4. Calculate grid state and costs
-        # Calculate net exchange based on battery action
-        if battery_action > 0:  # Charging
-            net_exchange = (consumption + battery_action) - production
-        elif battery_action < 0:  # Discharging
-            net_exchange = consumption - (production + abs(battery_action))
+        # 7. Calculate net exchange using the validated battery action
+        # Store the old calculation method for comparison
+        if validated_battery_action > 0:  # Charging
+            old_net_exchange = (consumption + validated_battery_action) - production
+        elif validated_battery_action < 0:  # Discharging
+            old_net_exchange = consumption - (production + abs(validated_battery_action))
         else:
-            net_exchange = consumption - production
-            
+            old_net_exchange = consumption - production
 
-        # Update energy level and tracking variables
-        self.battery_level = self.PCSUnit.battery.get_state()
+        # New, clearer calculation with same logic but explicit components
+        battery_effect = validated_battery_action if validated_battery_action > 0 else -abs(validated_battery_action)
+        consumption_total = consumption + max(0, battery_effect)  # Add charging to consumption
+        production_total = production + max(0, -battery_effect)   # Add discharging to production
+        net_exchange = consumption_total - production_total
+        
+        # Verify calculations match for safety
+        if abs(net_exchange - old_net_exchange) > 1e-6:
+            self.logger.warning(
+                f"Net exchange calculation mismatch: old={old_net_exchange:.6f}, new={net_exchange:.6f}, "
+                f"diff={abs(net_exchange - old_net_exchange):.6f}"
+            )
+            
+        # Save for the next step
         self.pcs_demand = net_exchange
-        net_demand = self.realized_demand + net_exchange
-        self.logger.debug(f"Net demand: {net_demand:.2f} MWh")
-        # Calculate dispatch and costs (matching ISO calculations)
-        dispatch = self.predicted_demand
-        if (dispatch<=100):
-            dispatch_cost = 5.0 * dispatch
-        elif (100<dispatch<170):
-            dispatch_cost = 7.0 * dispatch
-        elif (170<=dispatch):
-            dispatch_cost = 8.0 * dispatch
-        else:
-            dispatch_cost = 0.0
-        #dispatch_cost = self.dispatch_price * dispatch
+        
+        # 8. Create market position dictionary
+        market_position = {
+            'net_exchange': net_exchange,
+            'consumption_total': consumption_total,
+            'production_total': production_total,
+            'predicted_demand': predicted_demand,
+            'realized_demand': realized_demand,
+            'iso_buy_price': self.market_interface.iso_buy_price,
+            'iso_sell_price': self.market_interface.iso_sell_price
+        }
+        
+        # Calculate financial impact with clearer diagnostics
+        if net_exchange > 0:  # Buying from grid
+            revenue = -net_exchange * self.market_interface.iso_sell_price  # Negative revenue (cost)
+            self.logger.debug(
+                f"Buying {net_exchange:.4f} MWh @ ${self.market_interface.iso_sell_price:.2f}/MWh = ${revenue:.2f}"
+            )
+        else:  # Selling to grid
+            revenue = -net_exchange * self.market_interface.iso_buy_price  # Positive revenue
+            self.logger.debug(
+                f"Selling {abs(net_exchange):.4f} MWh @ ${self.market_interface.iso_buy_price:.2f}/MWh = ${revenue:.2f}"
+            )
+            
+        market_position['revenue'] = revenue
+        
+        # Calculate grid impact
+        net_demand = realized_demand + net_exchange
+        market_position['net_demand'] = net_demand
+        
+        # Calculate dispatch cost and reserve costs
+        dispatch = predicted_demand
+        dispatch_cost = self.market_interface.dispatch_price * dispatch
         shortfall = max(0.0, net_demand - dispatch)
-        reserve_cost = self.reserve_price * shortfall
-    
-        # Update info dictionary with all cost components
-        info = {
-            'iso_sell_price': self.iso_sell_price,
-            'iso_buy_price': self.iso_buy_price,
-            'predicted_demand': self.predicted_demand,
-            'realized_demand': self.realized_demand,
+        reserve_cost = self.market_interface.reserve_price * shortfall
+        
+        market_position['dispatch'] = dispatch
+        market_position['dispatch_cost'] = dispatch_cost
+        market_position['shortfall'] = shortfall
+        market_position['reserve_cost'] = reserve_cost
+        
+        # 9. Get battery state directly
+        battery_state = self.get_battery_state()
+        
+        # 10. Update state with current metrics
+        self.state = {
+            **battery_state,  # Include all battery state metrics 
+            'time': self.time,
+            'current_time': self.time * self.env_config['time']['minutes_per_day'],  # Convert to minutes
             'production': production,
             'consumption': consumption,
-            'battery_level': self.battery_level,
-            'net_exchange': net_exchange,
-            'pcs_demand': self.pcs_demand,
-            'dispatch_cost': dispatch_cost,
-            'shortfall': shortfall,
-            'reserve_cost': reserve_cost,
-            'dispatch': dispatch,
-            'net_demand': net_demand
+            'battery_action': validated_battery_action,  # Use validated action
+            'original_action': original_action,  # Store original action for reference
+            'energy_change': energy_change,  # Store actual energy change
+            **market_position  # Include market position metrics
         }
-
-        self.logger.info(
-            f"PCS State Step {self.count}:\n"
-            f"  Time: {self.time:.3f}\n"
-            f"  Battery Level: {self.battery_level:.2f} MWh\n"
-            f"  Battery Action: {battery_action:.2f} MWh\n"
-            f"  Production: {production:.2f} MWh\n"
-            f"  Consumption: {consumption:.2f} MWh\n"
-            f"  Net Exchange: {net_exchange:.2f} MWh"
-        )
-
-        self.logger.info(
-            f"Financial Metrics:\n"
-            f"  ISO Buy Price: ${self.iso_buy_price:.2f}/MWh\n"
-            f"  ISO Sell Price: ${self.iso_sell_price:.2f}/MWh\n"
-            f"  Energy Cost: ${abs(net_exchange * (self.iso_buy_price if net_exchange > 0 else self.iso_sell_price)):.2f}"
-        )
-
-        # 5. Compute reward
-        reward = self.reward.compute_reward(info)
-        self.logger.info(f"Step reward: {reward:.2f}")
-
-        # 6. Create next observation
         
+        # 11. Calculate reward based on state
+        reward = self.reward.compute_reward(info=self.state)
+        
+        # Add reward to state for logging
+        self.state['reward'] = reward
+        self.state['step'] = self.count
+        
+        # Create current observation
         observation = np.array([
             self.battery_level,
             self.time,
-            self.iso_buy_price,
-            self.iso_sell_price
+            self.market_interface.iso_buy_price,
+            self.market_interface.iso_sell_price
         ], dtype=np.float32)
 
-        # Check if episode is done
-        done = self.count >= self.max_steps_per_episode
-        if done:
-            self.logger.info("Episode complete")
+        # Check for episode termination
+        self.terminated = False  # PCS environment doesn't have a specific termination condition
+        self.truncated = (self.count >= self.max_steps_per_episode)
         
-        return observation, float(reward), done, False, info
-
+        # Add debugging for truncation condition
+        if self.truncated:
+            self.logger.info(f"Episode truncated at step {self.count}/{self.max_steps_per_episode}")
+            # Get episode summary from metrics handler
+            summary = self.metrics_handler.get_metrics_summary()  # Just get summary without ending episode
+            self.logger.info(f"Episode summary: {summary}")
+            
+            # Store the summary in state for the final info dict
+            self.state['episode_summary'] = summary
+        
+        # Simple but comprehensive debugging
+        self.logger.debug(
+            f"Step {self.count}: Action {original_action:.4f}→{validated_battery_action:.4f}, "
+            f"Battery {previous_battery_level:.2f}→{self.battery_level:.2f}, "
+            f"Net Exchange {net_exchange:.4f}, Reward {reward:.4f}"
+        )
+        
+        return observation, reward, self.terminated, self.truncated, self.get_info()
 
     def get_info(self) -> Dict[str, float]:
         """
         Provides additional information about the environment's state.
 
         Returns:
-            Dict[str, float]: Dictionary containing the running average price.
+            Dict[str, float]: Dictionary containing environment summary metrics and state values.
         """
-        return {"running_avg": self.avg_price}
+        # Get the metrics summary
+        metrics = self.metrics_handler.get_metrics_summary()
+        
+        # Add the current state values to the info
+        info = {
+            **metrics,  # Include the metrics summary
+            **self.state  # Include all the state values (production, consumption, etc.)
+        }
+        
+        # If we have an episode summary (from truncation), include it
+        if 'episode_summary' in self.state:
+            info['episode'] = self.state['episode_summary']
+        
+        return info
  
     def close(self):
         """
         Cleanup method. Closes loggers and releases resources.
         """
         self.logger.info("Closing environment.")
+        
+        # Get final metrics summary
+        metrics_summary = self.metrics_handler.get_metrics_summary()
+        self.logger.info(f"Final metrics summary: {metrics_summary}")
 
         logger_names = ['PCSunitEnv', 'Battery', 'ProductionUnit', 'ConsumptionUnit', 'PCSUnit'] 
         for logger_name in logger_names:
@@ -585,51 +690,21 @@ class PCSUnitController:
             
     def calculate_predicted_demand(self, time: float) -> float:
         """
-        Calculate predicted demand using selected pattern
+        Calculate predicted demand using selected pattern.
+        
+        This method determines the predicted electricity demand for a given time using
+        the configured demand pattern (e.g., SINUSOIDAL, RANDOM). The predicted demand
+        is used by the ISO to set prices and prepare dispatch.
+        
+        Args:
+            time: Current time as a fraction of day (0.0 to 1.0)
+            
+        Returns:
+            float: Predicted demand value (MWh) for the given time
         """
         return calculate_demand(
             time=time,
             pattern=self.demand_pattern,
             config=self.env_config['predicted_demand']
         )
-
-    def set_trained_iso_agent(self, iso_agent):
-        """Set the trained ISO agent for price determination"""
-        self.trained_iso_agent = iso_agent
-    
-        # Test that the agent works
-        test_obs = self.translate_to_iso_observation()
-        try:
-            prices = self.trained_iso_agent.predict(test_obs, deterministic=True)[0]
-            self.logger.info(f"ISO agent test successful - got prices: {prices}")
-        except Exception as e:
-            self.logger.error(f"ISO agent validation failed: {e}")
-            self.trained_iso_agent = None  # Reset if validation fails
-            raise e
-
-    def translate_to_iso_observation(self) -> np.ndarray:
-        """
-        Converts current PCS state to ISO observation format.
-        
-        Creates observation vector containing:
-        - Current time of day
-        - Predicted grid demand
-        - PCS net demand (consumption - production + battery)
-        
-        Returns:
-            np.ndarray: Observation for ISO agent
-        """
-        iso_observation = np.array([
-            self.time,
-            self.predicted_demand,
-            self.pcs_demand 
-        ], dtype=np.float32)
-        
-        self.logger.debug(
-            f"ISO Observation:\n"
-            f"  Time: {self.time:.3f}\n"
-            f"  Predicted Demand: {self.predicted_demand:.2f} MWh\n"
-            f"  PCS Demand: {self.pcs_demand:.2f} MWh"
-        )
-        return iso_observation
 
