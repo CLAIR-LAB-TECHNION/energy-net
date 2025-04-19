@@ -16,7 +16,7 @@ the unified simulation.
 
 import logging
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple, Union
 import matplotlib.pyplot as plt
 
 # Import reward classes
@@ -198,11 +198,23 @@ class UnifiedMetricsHandler:
         
         # If actual demand is not provided, simulate it with noise
         if actual_demand is None:
-            noise = np.random.normal(0, self.sigma)
+            # determine what fraction of the day we’re at
+            max_steps = self.env_config['time'].get('max_steps_per_episode', 48)
+            frac = (self.step_count / max_steps) if max_steps > 0 else 0.0
+           # early under‐peak (less consumption than predicted)
+            if 0.1 < frac < 0.4:
+                noise = -0.2 * predicted_demand
+            # late over‐peak (higher consumption than predicted)
+            elif 0.6 < frac < 0.9:
+                noise = +0.3 * predicted_demand
+           # otherwise small random jitter
+            else:
+                noise = np.random.normal(0, self.sigma)
             self.realized_demand = predicted_demand + noise
         else:
-            self.realized_demand = actual_demand
-        
+             self.realized_demand = actual_demand  
+             
+                   
         self.iso_metrics['predicted_demands'].append(self.predicted_demand)
         self.iso_metrics['realized_demands'].append(self.realized_demand)
         

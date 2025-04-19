@@ -24,23 +24,34 @@ separate environments and provides a more realistic simulation.
 """
 
 import numpy as np
+import gymnasium as gym
 from gymnasium import spaces
+import logging
 import yaml
-from typing import Dict, Any, Optional
+import os
+from typing import Dict, Any, Tuple, Union, List, Optional
+from stable_baselines3 import PPO
 
 from energy_net.utils.logger import setup_logger
-from energy_net.market.pricing.cost_types import calculate_costs
-from energy_net.dynamics.consumption_dynamics.demand_patterns import calculate_demand
+from energy_net.market.pricing_policy import PricingPolicy
+from energy_net.market.iso.cost_types import CostType, calculate_costs
+from energy_net.market.iso.demand_patterns import DemandPattern, calculate_demand
 from energy_net.controllers.iso.pricing_strategy import PricingStrategyFactory
 from energy_net.controllers.unified_metrics_handler import UnifiedMetricsHandler
 from energy_net.controllers.pcs.battery_manager import BatteryManager
 
 # Import PCSUnit for full functionality
 from energy_net.components.pcsunit import PCSUnit
+from energy_net.dynamics.energy_dynamcis import EnergyDynamics, ModelBasedDynamics
+from energy_net.dynamics.production_dynamics.deterministic_production import DeterministicProduction
+from energy_net.dynamics.consumption_dynamics.deterministic_consumption import DeterministicConsumption
+from energy_net.dynamics.storage_dynamics.deterministic_battery import DeterministicBattery
 
 # Import reward classes for reference in metrics handler
 from energy_net.model.rewards.base_reward import BaseReward
-from energy_net.model.rewards import CostReward
+from energy_net.model.rewards.cost_reward import CostReward
+from energy_net.model.rewards.iso_reward import ISOReward
+
 
 
 class EnergyNetController:
@@ -150,6 +161,8 @@ class EnergyNetController:
         
         # Initialize ISO components
         self._init_iso_components(dispatch_config)
+        # Initialize ISO reward function from external reward file
+        self.iso_reward_function = ISOReward()
         
         # Initialize PCS components
         self._init_pcs_components()
@@ -309,8 +322,7 @@ class EnergyNetController:
                 pcs_time_config.get('max', 1.0),
                 buy_price_config.get('max', 100.0),
                 sell_price_config.get('max', 100.0)
-            ], dtype=np.float32),
-            dtype=np.float32
+            ], dtype=np.float32)
         )
         
         self.logger.info(f"ISO observation space: {self.iso_observation_space}")
@@ -583,6 +595,11 @@ class EnergyNetController:
         # Calculate shortfall (if net demand exceeds what was prepared for)
         shortfall = max(0.0, self.actual_demand - self.dispatch)
         self.metrics.iso_metrics['shortfalls'].append(shortfall)
+        # Record dispatch level in metrics
+        if hasattr(self.metrics, 'update_dispatch_level'):
+            self.metrics.update_dispatch_level(self.dispatch)
+        else:
+            self.metrics.iso_metrics.setdefault('dispatch_levels', []).append(self.dispatch)
         
         # Calculate reserve cost (cost of addressing shortfall)
         reserve_cost = shortfall * self.reserve_price
@@ -647,19 +664,20 @@ class EnergyNetController:
             self.iso_sell_price
         ], dtype=np.float32)
 
-    def _calculate_iso_reward(self):
-        """Calculate reward for ISO agent"""
-        # Use unified metrics handler to calculate ISO reward
-        iso_reward = self.metrics.calculate_iso_reward()
-        
-        return iso_reward
+    def _calculate_iso_reward(self) -> float:
+        """Calculate ISO reward using iso_reward.py function"""
+        # Create a comprehensive info dictionary with all relevant state variables
+        info = self._get_detailed_info()
+        # Use external ISOReward - pass the entire info dictionary
+        return self.iso_reward_function.compute_reward(info)
 
-    def _calculate_pcs_reward(self):
-        """Calculate reward for PCS agent"""
-        # Use unified metrics handler to calculate PCS reward
-        pcs_reward = self.metrics.calculate_pcs_reward()
-        
-        return pcs_reward
+    def _calculate_pcs_reward(self) -> float:
+        """Calculate PCS reward using cost_reward.py function"""
+        # Create a comprehensive info dictionary with all relevant state variables
+        info = self._get_detailed_info()
+        # Use external CostReward - pass the entire info dictionary
+        pcs_reward_func = CostReward()
+        return pcs_reward_func.compute_reward(info)
 
     def _get_info(self):
         """Generate info dictionary with metrics"""
