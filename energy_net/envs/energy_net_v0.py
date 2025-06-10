@@ -25,6 +25,7 @@ from typing import Dict, Any, Tuple, Union, List, Optional
 from energy_net.controllers.energy_net_controller import EnergyNetController
 from energy_net.market.pricing.pricing_policy import PricingPolicy
 from energy_net.dynamics.consumption_dynamics.demand_patterns import DemandPattern
+from energy_net.envs.env_utils import bounds_to_gym
 from energy_net.market.pricing.cost_types import CostType
 
 
@@ -131,13 +132,13 @@ class EnergyNetV0(gym.Env):
         self.agents = ["iso", "pcs"]
         
         self.observation_space = {
-            "iso": self.controller.get_iso_observation_space(),
-            "pcs": self.controller.get_pcs_observation_space()
+            "iso": bounds_to_gym(self.controller.get_iso_observation_space()),
+            "pcs": bounds_to_gym(self.controller.get_pcs_observation_space())
         }
         
         self.action_space = {
-            "iso": self.controller.get_iso_action_space(),
-            "pcs": self.controller.get_pcs_action_space()
+            "iso": bounds_to_gym(self.controller.get_iso_action_space()),
+            "pcs": bounds_to_gym(self.controller.get_pcs_action_space())
         }
 
     def reset(self, seed=None, options=None):

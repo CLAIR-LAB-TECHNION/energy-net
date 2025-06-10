@@ -7,9 +7,9 @@ import math
 from energy_net.components.storage_devices.battery import Battery
 from energy_net.components.production_devices.production_unit import ProductionUnit
 from energy_net.components.consumption_devices.consumption_unit import ConsumptionUnit
-from energy_net.dynamics.storage_dynamics.battery_dynamics_det import BatteryDynamicsDet
-from energy_net.dynamics.production_dynamics.production_dynmaics_det import ProductionDynamicsDet
-from energy_net.dynamics.consumption_dynamics.consumption_dynamics_det import ConsumptionDynamicsDet
+from energy_net.dynamics.storage_dynamics.battery_dynamics_det import DeterministicBattery
+from energy_net.dynamics.production_dynamics.production_dynmaics_det import DeterministicProduction
+from energy_net.dynamics.consumption_dynamics.consumption_dynamics_det import DeterministicConsumption
 from energy_net.components.pcsunit import PCSUnit
 
 
@@ -21,7 +21,7 @@ class TestBattery(unittest.TestCase):
             'discharge_efficiency': 0.6,
             'lifetime_constant': 100.0
         }
-        self.battery_dynamics = BatteryDynamicsDet(model_parameters=battery_model_params)
+        self.battery_dynamics = DeterministicBattery(model_parameters=battery_model_params)
 
         # Define configuration for Battery
         self.battery_config: Dict[str, Any] = {
@@ -114,7 +114,7 @@ class TestProductionUnit(unittest.TestCase):
             'peak_time': 0.5,  # Midday
             'width': 0.1
         }
-        self.production_dynamics = ProductionDynamicsDet(model_parameters=production_model_params)
+        self.production_dynamics = DeterministicProduction(model_parameters=production_model_params)
 
         # Define configuration for ProductionUnit
         self.production_config: Dict[str, Any] = {
@@ -182,7 +182,7 @@ class TestConsumptionUnit(unittest.TestCase):
             'peak_time2': 0.7,  # Evening
             'width2': 0.05
         }
-        self.consumption_dynamics = ConsumptionDynamicsDet(model_parameters=consumption_model_params)
+        self.consumption_dynamics = DeterministicConsumption(model_parameters=consumption_model_params)
 
         # Define configuration for ConsumptionUnit
         self.consumption_config: Dict[str, Any] = {

@@ -596,7 +596,13 @@ class EnergyNetController:
             # Track efficiency losses
             efficiency_loss = abs(energy_change - actual_energy_change)
             self.metrics.pcs_metrics['efficiency_losses'].append(efficiency_loss)
-
+        
+        # Incorporate background process residuals into grid exchange
+        bg_res = self.pcs_unit.get_background_residuals()
+        extra = sum(bg_res.values())
+        print(f"[Controller] Background residuals: {bg_res}, extra: {extra:.4f} MWh")
+        energy_needed += extra
+        print(f"[Controller] Total energy_needed after background: {energy_needed:.4f} MWh")
         # FIRST: Calculate the PCS demand for tracking and observation
         time_step = self.time_step_duration / self.env_config['time']['minutes_per_day']
         self.pcs_demand = energy_needed / time_step  # Convert energy to power
@@ -815,7 +821,12 @@ class EnergyNetController:
             'episode_iso_reward': self.metrics.total_iso_reward,
             'episode_pcs_reward': self.metrics.total_pcs_reward
         })
-
+        
+        # Include background process actions
+        if hasattr(self.pcs_unit, 'get_background_actions'):
+            for name, amount in self.pcs_unit.get_background_actions().items():
+                info[f'background_{name}'] = amount
+        
         return info
 
     def get_metrics(self):
