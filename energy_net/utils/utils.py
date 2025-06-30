@@ -122,3 +122,29 @@ def dict_to_numpy_array(dict, index_mapping=None):
         current_position += size
 
     return result_array
+
+
+def _load_config(logger, config_path: str) -> Dict[str, Any]:
+    # Normalize incoming path to make sure slashes are handled correctly
+    config_path = os.path.normpath(config_path)
+    parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+    possible_paths = [
+        config_path,
+        os.path.join(os.getcwd(), config_path),
+        os.path.join(os.path.dirname(__file__), config_path),
+        os.path.join(parent_dir, config_path),
+        os.path.join(parent_dir, config_path)
+
+    ]
+
+    for path in possible_paths:
+        normalized_path = os.path.normpath(path)
+        try:
+            with open(normalized_path, 'r') as file:
+                return yaml.safe_load(file)
+        except Exception as e:
+            logger.error(f"Failed to load config from {normalized_path}: {e}")
+
+    raise FileNotFoundError(f"Could not load config from any of the tried paths:\n" +
+                            "\n".join(os.path.abspath(p) for p in possible_paths))

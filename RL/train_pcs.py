@@ -10,17 +10,14 @@ import os
 import argparse
 import numpy as np
 import logging
-import torch
 from stable_baselines3 import PPO, TD3
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise, ActionNoise
 
 # Import helper functions from ISO trainer
-from train_iso import create_ppo_model, create_recurrent_model, create_td3_model, LinearDecayActionNoise
+from RL.train_iso import create_ppo_model, create_recurrent_model, create_td3_model, LinearDecayActionNoise
 
 # Import env factory and plotting callback
-import energy_net.envs.register_envs
 from energy_net.controllers.alternating_wrappers import make_pcs_env
 from energy_net.controllers.plot_callback import PlotCallback
 

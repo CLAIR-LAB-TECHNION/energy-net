@@ -336,13 +336,13 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
             cost_type=env_config.get('cost_type', 'CONSTANT'),
             pricing_policy=env_config.get('pricing_policy', 'ONLINE'),
             demand_pattern=env_config.get('demand_pattern', 'CONSTANT'),
-            log_dir="logs",
-            model_dir="models",
-            plot_dir="plots",
+            log_dir="../logs",
+            model_dir="../models",
+            plot_dir="../plots",
             pcs_policy=pcs_model,
             pcs_action_sequence=pcs_action_sequence,  # Add predefined sequence
             use_dispatch_action=env_config.get('use_dispatch_action', False),
-            norm_path=os.path.join("logs", "iso", "vec_normalize.pkl"),  # Load saved normalization from training path
+            norm_path=os.path.join("../logs", "iso", "vec_normalize.pkl"),  # Load saved normalization from training path
             eval_mode=True,  # Enable evaluation mode
             demand_data_path=env_config.get('demand_data_path', None)  # Add demand data path
         )
@@ -355,7 +355,7 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
     iso_lstm_states = None
     
     # Determine plot directory
-    eval_plots_dir = plot_dir or os.path.join("eval_plots", "iso")
+    eval_plots_dir = plot_dir or os.path.join("../eval_plots", "iso")
     os.makedirs(eval_plots_dir, exist_ok=True)
     
     # Run evaluation episodes
@@ -607,7 +607,7 @@ def main():
             if not os.path.exists(best_model):
                 best_model = f"{args.model_dir}/iso_best.zip"
         
-        norm_path = args.norm_path or os.path.join("logs", "iso", "vec_normalize.pkl")
+        norm_path = args.norm_path or os.path.join("../logs", "iso", "vec_normalize.pkl")
         print(f"Evaluation-only mode. Loading model: {best_model}\nNormalization file: {norm_path}")
         # Load fixed PCS policy if provided
         pcs_policy = None
@@ -705,9 +705,9 @@ def main():
     os.makedirs(f"{args.log_dir}/iso/tensorboard", exist_ok=True)
     os.makedirs(f"{args.model_dir}", exist_ok=True)
     os.makedirs(f"{args.plot_dir}/iso", exist_ok=True)
-    os.makedirs("eval_plots/iso", exist_ok=True)
+    os.makedirs("../eval_plots/iso", exist_ok=True)
     # Create temp directory for iteration tracking
-    os.makedirs("temp", exist_ok=True)
+    os.makedirs("../temp", exist_ok=True)
     
     # Environment configuration
     env_config = {
@@ -908,7 +908,7 @@ def main():
         print(f"\n{'='*20} Iteration {iteration}/{args.iterations} {'='*20}")
         
         # Save current iteration to file for PlotCallback
-        with open("temp/current_iteration.txt", "w") as f:
+        with open("../temp/current_iteration.txt", "w") as f:
             f.write(str(iteration))
         
         # Create callback for plotting

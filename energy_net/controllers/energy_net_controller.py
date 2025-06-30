@@ -24,15 +24,12 @@ separate environments and provides a more realistic simulation.
 """
 
 import numpy as np
-import gymnasium as gym
 from gymnasium import spaces
-import logging
-import yaml
-import os
-from typing import Dict, Any, Tuple, Union, List, Optional
+from typing import Dict, Any, Optional
+
+
 from energy_net.utils.logger import setup_logger
-from energy_net.market.pricing.pricing_policy import PricingPolicy
-from energy_net.market.pricing.cost_types import CostType, calculate_costs
+from energy_net.market.pricing.cost_types import calculate_costs
 from energy_net.dynamics.consumption_dynamics.demand_patterns import DemandPattern, calculate_demand
 from energy_net.controllers.iso.pricing_strategy import PricingStrategyFactory, QuadraticPricingStrategy
 from energy_net.controllers.unified_metrics_handler import UnifiedMetricsHandler
@@ -40,16 +37,12 @@ from energy_net.controllers.pcs.battery_manager import BatteryManager
 
 # Import PCSUnit for full functionality
 from energy_net.components.pcsunit import PCSUnit
-from energy_net.dynamics.energy_dynamcis import EnergyDynamics, ModelBasedDynamics
-from energy_net.dynamics.production_dynamics.production_dynmaics_det import DeterministicProduction
-from energy_net.dynamics.consumption_dynamics.consumption_dynamics_det import DeterministicConsumption
-from energy_net.dynamics.storage_dynamics.battery_dynamics_det import DeterministicBattery
 
 # Import reward classes for reference in metrics handler
 from energy_net.model.rewards.base_reward import BaseReward
 from energy_net.model.rewards.cost_reward import CostReward
 from energy_net.model.rewards.iso_reward import ISOReward
-
+from energy_net.utils.utils import _load_config
 
 
 class EnergyNetController:
@@ -134,9 +127,9 @@ class EnergyNetController:
                 self.logger.warning("DATA_DRIVEN pattern selected but no demand_data_path provided")
 
         # Load configurations
-        self.env_config = self._load_config(env_config_path)
-        self.iso_config = self._load_config(iso_config_path)
-        self.pcs_unit_config = self._load_config(pcs_unit_config_path)
+        self.env_config = _load_config(self.logger, env_config_path)
+        self.iso_config = _load_config(self.logger, iso_config_path)
+        self.pcs_unit_config = _load_config(self.logger, pcs_unit_config_path)
 
         # If using DATA_DRIVEN pattern, add data file to demand configuration
         if demand_pattern == DemandPattern.DATA_DRIVEN and demand_data_path:
@@ -215,14 +208,16 @@ class EnergyNetController:
         
         self.logger.info("EnergyNetController initialized successfully")
 
-    def _load_config(self, config_path: str) -> Dict[str, Any]:
-        """Load configuration from YAML file"""
-        try:
-            with open(config_path, 'r') as file:
-                return yaml.safe_load(file)
-        except Exception as e:
-            self.logger.error(f"Failed to load config from {config_path}: {e}")
-            raise
+    #def _load_config(self, config_path: str) -> Dict[str, Any]:
+    #    """Load configuration from YAML file"""
+    #    try:
+    #        with open(config_path, 'r') as file:
+    #            return yaml.safe_load(file)
+    #    except Exception as e:
+    #        self.logger.error(f"Failed to load config from {config_path}: {e}")
+    #        raise
+
+    from typing import Dict, Any
 
     def _init_iso_components(self, dispatch_config: Optional[Dict[str, Any]]):
         """Initialize ISO-specific components"""
