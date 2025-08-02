@@ -5,14 +5,14 @@ pricing:
   default_sell_price: 0.0  
   parameters:
     min_price: 0.0
-    max_price: 20.0
+    max_price: 200.0
 
 # Enable dispatch action
 dispatch:
   use_dispatch_action: true
   parameters:
     min: 0.0
-    max: 300.0
+    max: 200.0
 
 # Action space configurations for different pricing policies
 action_spaces:
@@ -21,24 +21,28 @@ action_spaces:
       min: 0.0
       max: 300.0
     polynomial:
-      min: 0.0
-      max: 0.1
+      min: 0.0009
+      max: 0.009
   online:
     buy_price:
-      min: 1.0
-      max: 10.0
+      min: 10.0
+      max: 50.0
     sell_price:
-      min: 1.0
-      max: 10.0
+      min: 10.0
+      max: 50.0
     dispatch:
       min: 0.0
-      max: 300.0
+      max: 200.0
+  intervals:
+    intervals: 3
+  quadratic_intervals:
+    intervals: 3
 
 # Observation space configuration
 observation_space:
   time:
     min: 0.0
-    max: 1.0
+    max: inf
   predicted_demand:
     min: 0.0
     max: inf  # represents np.inf

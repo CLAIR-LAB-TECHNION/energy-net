@@ -171,8 +171,13 @@ def calculate_demand(time: float, pattern: DemandPattern, config: dict) -> float
     interval = time * interval_multiplier
     
     if pattern == DemandPattern.SINUSOIDAL:
+        # For proper 24-hour sinusoidal cycle:
+        # time goes from 0.0 to 1.0 representing a full day
+        # We want a complete sine wave cycle over 24 hours
+        # phase_shift is in hours (0-24), convert to radians
+        phase_shift_radians = (phase_shift / 24.0) * 2 * np.pi
         return base_load + amplitude * np.cos(
-            (interval + phase_shift) * np.pi / period_divisor
+            2 * np.pi * time + phase_shift_radians
         )
     elif pattern == DemandPattern.CONSTANT:
         return base_load

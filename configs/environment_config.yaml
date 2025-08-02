@@ -3,7 +3,7 @@
 # Time Parameters
 time:
   time_steps_per_day_ratio: 1440
-  step_duration: 180     # Time step duration (minutes)
+  step_duration: 30     # Time step duration (minutes)
   max_steps_per_episode: 48 # Steps per episode (1 days)
   minutes_per_day: 1440    # 24 hours * 60 minutes
   hours_per_day: 24       # Used in demand calculations
@@ -33,6 +33,6 @@ predicted_demand:
 demand_uncertainty:
   sigma: 10.0
 
-reserve_price: 200.0
+reserve_price: 300.0
 dispatch_price: 100.0
 

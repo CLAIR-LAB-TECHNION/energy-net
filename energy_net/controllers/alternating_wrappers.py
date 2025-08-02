@@ -66,7 +66,7 @@ class ISOEnvWrapper(gym.Wrapper):
         self.logger = logger
         
         # Epsilon for epsilon-greedy exploration (only used during training)
-        self.epsilon = 0.05 if not eval_mode else 0.0
+        self.epsilon = 0.0 if not eval_mode else 0.0
         
     def reset(self, **kwargs):
         """
@@ -131,28 +131,37 @@ class ISOEnvWrapper(gym.Wrapper):
         # (Removed manual controller._process_iso_action to avoid double processing)
 
         # Get PCS action from policy or use default action
-        if self.pcs_policy is not None:
-            # Convert to batch format for policy prediction
-            pcs_obs_batch = np.array([self.last_pcs_obs])
-            
-            # Get policy output (normalized in [-1,1])
-            raw_action, _ = self.pcs_policy.predict(
-                pcs_obs_batch,
-                deterministic=self.eval_mode  # Deterministic in eval mode
-            )
-            norm_action = raw_action[0]
-            # Epsilon-greedy: with prob epsilon, take a random normalized action
-            if not self.eval_mode and np.random.rand() < self.epsilon:
-                self.logger.debug(f"Epsilon-greedy: randomizing PCS action (eps={self.epsilon})")
-                norm_action = np.random.uniform(-1.0, 1.0, size=norm_action.shape)
-            # Unnormalize to original space
-            pcs_action = self._unnormalize_pcs_action(norm_action)
-            
-            self.logger.debug(f"ISOEnvWrapper got PCS action from policy: {pcs_action}")
+        if self.pcs_policy is not None and self.last_pcs_obs is not None:
+            try:
+                # Convert to batch format for policy prediction
+                pcs_obs_batch = np.array([self.last_pcs_obs])
+                
+                # Get policy output (normalized in [-1,1])
+                raw_action, _ = self.pcs_policy.predict(
+                    pcs_obs_batch,
+                    deterministic=self.eval_mode  # Deterministic in eval mode
+                )
+                norm_action = raw_action[0]
+                
+                # Epsilon-greedy: with prob epsilon, take a random normalized action
+                if not self.eval_mode and np.random.rand() < self.epsilon:
+                    self.logger.debug(f"Epsilon-greedy: randomizing PCS action (eps={self.epsilon})")
+                    norm_action = np.random.uniform(-1.0, 1.0, size=norm_action.shape)
+                # Unnormalize to original space
+                pcs_action = self._unnormalize_pcs_action(norm_action)
+                
+                self.logger.debug(f"ISOEnvWrapper got PCS action from policy: {pcs_action}")
+            except Exception as e:
+                # Fallback to default action if policy prediction fails
+                self.logger.warning(f"PCS policy prediction failed: {e}, using default action")
+                pcs_action = np.zeros(self.unwrapped.action_space["pcs"].shape)
         else:
             # Default action (neutral battery action)
             pcs_action = np.zeros(self.unwrapped.action_space["pcs"].shape)
-            self.logger.debug(f"ISOEnvWrapper using default PCS action: {pcs_action}")
+            if self.pcs_policy is None:
+                self.logger.debug(f"ISOEnvWrapper using default PCS action (NO POLICY): {pcs_action}")
+            else:
+                self.logger.warning(f"ISOEnvWrapper using default PCS action (INVALID OBS): obs={self.last_pcs_obs}")
         
         # Create joint action dict - ISO must go first!
         action_dict = {
@@ -179,11 +188,13 @@ class ISOEnvWrapper(gym.Wrapper):
             pcs_reward = rewards.get('pcs', 0.0)
         else:
             pcs_reward = rewards[1] if len(rewards) > 1 else 0.0
-        # Inject rewards into info for Monitor
+        # Inject rewards and PCS action into info for Monitor and plotting
         if info is None:
             info = {}
         info['iso_reward'] = iso_reward
         info['pcs_reward'] = pcs_reward
+        info['pcs_action'] = pcs_action  # Add PCS action for evaluation plotting
+        info.setdefault('actions', {})['pcs'] = pcs_action
 
         self.logger.debug(f"ISOEnvWrapper returning env ISO reward: {iso_reward}")
         # Return ISO obs, native ISO reward, done/trunc flags, and info
@@ -341,12 +352,13 @@ class PreDefinedPCSWrapper(ISOEnvWrapper):
             pcs_reward = rewards.get('pcs', 0.0)
         else:
             pcs_reward = rewards[1] if len(rewards) > 1 else 0.0
-        # Add sequence idx and rewards to info
+        # Add sequence idx, rewards and PCS action to info
         if info is None:
             info = {}
         info['pcs_action_sequence_idx'] = self.current_sequence_idx - 1
         info['iso_reward'] = iso_reward
         info['pcs_reward'] = pcs_reward
+        info['pcs_action'] = pcs_action  # Add PCS action for evaluation plotting
         
         self.logger.debug(f"PreDefinedPCSWrapper returning ISO reward: {iso_reward}")
         
@@ -373,7 +385,7 @@ class PCSEnvWrapper(gym.Wrapper):
     correct sequential order (ISO first, then PCS).
     """
     
-    def __init__(self, env, iso_policy=None, eval_mode=False):
+    def __init__(self, env, iso_policy=None, eval_mode=False, iso_deterministic=False):
         """
         Initialize the PCS environment wrapper.
         
@@ -381,10 +393,12 @@ class PCSEnvWrapper(gym.Wrapper):
             env: The EnergyNetV0 environment to wrap
             iso_policy: Optional fixed policy for the ISO agent
             eval_mode: Whether the wrapper is in evaluation mode
+            iso_deterministic: Whether to use deterministic ISO actions (useful when ISO is opponent)
         """
         super().__init__(env)
         self.iso_policy = iso_policy
         self.eval_mode = eval_mode
+        self.iso_deterministic = iso_deterministic
         
         # Use only PCS observation and action spaces
         self.observation_space = env.observation_space["pcs"]
@@ -398,7 +412,7 @@ class PCSEnvWrapper(gym.Wrapper):
         self.logger = logger
         
         # Epsilon for epsilon-greedy exploration (only used during training)
-        self.epsilon = 0.05 if not eval_mode else 0.0
+        self.epsilon = 0.0 if not eval_mode else 0.0
         
     def reset(self, **kwargs):
         """
@@ -491,7 +505,7 @@ class PCSEnvWrapper(gym.Wrapper):
             # Get policy output (normalized) and apply epsilon-greedy
             raw_action, _ = self.iso_policy.predict(
                 iso_obs_batch,
-                deterministic=self.eval_mode  # Deterministic in eval mode
+                deterministic=self.eval_mode or self.iso_deterministic  # Deterministic in eval mode or when iso_deterministic is True
             )
             norm_action = raw_action[0]
             if not self.eval_mode and np.random.rand() < self.epsilon:
@@ -621,6 +635,7 @@ def make_iso_env(
     pcs_action_sequence=None,
     norm_path=None,
     use_dispatch_action=False,
+    use_dayahead_dispatch=False,
     dispatch_strategy="PROPORTIONAL",
     eval_mode=False,
     demand_data_path=None
@@ -675,8 +690,9 @@ def make_iso_env(
         cost_type = CostType[cost_type.upper()]
     
     dispatch_config = {
-            "use_dispatch_action": use_dispatch_action,
-        "dispatch_strategy": dispatch_strategy
+        "use_dispatch_action": use_dispatch_action,
+        "dispatch_strategy": dispatch_strategy,
+        "use_dayahead_dispatch": use_dayahead_dispatch
     }
     
     # Factory function to create the environment
@@ -713,6 +729,10 @@ def make_iso_env(
             f"{log_dir}/iso/monitor/{pricing_policy.value}_{cost_type.value}_{int(steps_per_iteration)}.csv",
             info_keywords=("iso_reward", "pcs_reward", "net_exchange", "battery_level", "predicted_demand", "realized_demand")
         )
+        
+        # Add action scaling wrapper - CRITICAL: normalize ISO actions to [-1, 1]
+        env = RescaleAction(env, min_action=-1.0, max_action=1.0)
+        
         return env
     
     # Create the vectorized environment
@@ -762,6 +782,7 @@ def make_pcs_env(
     use_dispatch_action=False,
     dispatch_strategy="PROPORTIONAL",
     eval_mode=False,
+    iso_deterministic=False,
     demand_data_path=None
 ):
     """
@@ -780,6 +801,8 @@ def make_pcs_env(
         norm_path: Path to normalization file for consistent normalization
         use_dispatch_action: Whether ISO should output a dispatch action
         dispatch_strategy: Strategy for dispatch when not controlled by agent
+        eval_mode: Whether this is evaluation mode
+        iso_deterministic: Whether to use deterministic ISO actions (useful when ISO is opponent)
         demand_data_path: Path to demand data for DATA_DRIVEN pattern
         
     Returns:
@@ -803,7 +826,7 @@ def make_pcs_env(
         env = PreDefinedISOWrapper(base_env, iso_action_sequence=iso_action_sequence)
         logger.info(f"Using predefined ISO action sequence with {len(iso_action_sequence)} steps")
     else:
-        env = PCSEnvWrapper(base_env, iso_policy, eval_mode=eval_mode)
+        env = PCSEnvWrapper(base_env, iso_policy, eval_mode=eval_mode, iso_deterministic=iso_deterministic)
     
     # Create monitor directory if it doesn't exist
     monitor_dir = os.path.join(log_dir, "pcs_monitor")
@@ -838,7 +861,7 @@ def make_pcs_env(
             clip_obs=1.,
             clip_reward=1.,
             gamma=0.99,
-            epsilon=1e-8
+            epsilon=0
         )
     
     return env

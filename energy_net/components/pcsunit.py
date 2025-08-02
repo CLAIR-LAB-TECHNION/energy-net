@@ -121,11 +121,17 @@ class PCSUnit(CompositeGridEntity):
         # Initialize background processes configuration for autonomous injection/withdrawal
         self.background_processes: list[dict] = []
         for bg in config.get('background_processes', []):
+            # Skip any background process configured with zero quantity
+            quantity = bg.get('quantity', 0.0)
+            try:
+                if float(quantity) == 0.0:
+                    continue
+            except (TypeError, ValueError):
+                pass
             name = bg.get('name')
             interval = bg.get('interval')
             start_time = bg.get('start_time', 0.0)
             end_time = bg.get('end_time', 1.0)
-            quantity = bg.get('quantity', 0.0)
             signed_quantity = quantity if bg.get('type') == 'production' else -quantity
             # Determine if this uses step-based window (start_time >= 1 interpreted as step index)
             use_step = isinstance(start_time, (int, float)) and start_time >= 1.0

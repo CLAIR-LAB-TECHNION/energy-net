@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument("--demand-data", type=str, default=None,
                         help="Path to demand data YAML file (required for DATA_DRIVEN pattern)")
     parser.add_argument("--pricing-policy", type=str, default="ONLINE",
-                        choices=["ONLINE", "CONSTANT", "QUADRATIC", "INTERVALS"],
+                        choices=["ONLINE", "CONSTANT", "QUADRATIC", "INTERVALS", "QUADRATIC_INTERVALS", "SMP"],
                         help="Pricing policy for environment creation")
     parser.add_argument("--cost-type", type=str, default="CONSTANT",
                         choices=["CONSTANT", "VARIABLE", "TIME_OF_USE"],

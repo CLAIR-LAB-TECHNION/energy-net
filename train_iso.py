@@ -41,6 +41,161 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("iso_trainer")
 
+def create_power_distribution_plot(episode_data, episode_num, save_path):
+    """
+    Create a stacked bar chart showing power supply distribution.
+    
+    Args:
+        episode_data: List of step data dictionaries
+        episode_num: Episode number for naming
+        save_path: Directory to save the plot
+    """
+    # Calculate power components
+    total_dispatch = sum(d.get('dispatch', 0.0) for d in episode_data)
+    total_pcs_sold = sum(max(0, d.get('net_exchange', 0.0)) for d in episode_data)  # Only positive net_exchange (PCS selling to grid)
+    total_reserve = sum(d.get('shortfall', 0.0) for d in episode_data)  # Reserve power activated
+    
+    # Total power is the sum of all components
+    total_power = total_dispatch + total_pcs_sold + total_reserve
+    
+    # Create figure
+    fig = plt.figure(figsize=(8, 10))
+    ax = fig.add_subplot(1, 1, 1)
+    
+    # Create stacked bar components
+    bar_width = 0.6
+    x_position = 0  # Single bar at x=0
+    
+    # Bottom layer: Dispatch Power (Light Blue)
+    dispatch_bar = ax.bar([x_position], [total_dispatch], 
+                         width=bar_width, color='lightblue', 
+                         label='Dispatch Power')
+    
+    # Middle layer: PCS Power Sold (Green) - stacked on top of dispatch
+    pcs_bar = ax.bar([x_position], [total_pcs_sold], 
+                    bottom=[total_dispatch], width=bar_width, 
+                    color='green', label='PCS Power Sold to Grid')
+    
+    # Top layer: Reserve Power (Red) - stacked on top of dispatch + PCS
+    reserve_bar = ax.bar([x_position], [total_reserve], 
+                        bottom=[total_dispatch + total_pcs_sold], 
+                        width=bar_width, color='red', 
+                        label='Reserve Power')
+    
+    # Add value labels on each section
+    def add_section_label(bottom_value, section_value, label_text):
+        """Add a label in the middle of each section"""
+        if section_value > 0:  # Only add label if section has value
+            y_position = bottom_value + section_value / 2
+            ax.text(x_position, y_position, 
+                   f'{label_text}\n{section_value:,.0f} MWh',
+                   ha='center', va='center',
+                   fontsize=11, fontweight='bold', color='white',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
+    
+    # Add labels for each section
+    add_section_label(0, total_dispatch, 'Dispatch')
+    add_section_label(total_dispatch, total_pcs_sold, 'PCS Sold')
+    add_section_label(total_dispatch + total_pcs_sold, total_reserve, 'Reserve')
+    
+    # Add total power label at the top
+    ax.text(x_position, total_power + total_power * 0.05, 
+           f'Total Power: {total_power:,.0f} MWh',
+           ha='center', va='bottom',
+           fontsize=14, fontweight='bold', color='black',
+           bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.8))
+    
+    # Formatting
+    ax.set_ylabel('Power (MWh)', fontsize=14)
+    ax.set_title('Episode Power Supply Distribution', fontsize=16, fontweight='bold')
+    
+    # Remove x-axis ticks and labels since we have only one bar
+    ax.set_xticks([])
+    ax.set_xlim(-0.5, 0.5)
+    
+    # Set y-axis limits with some margin
+    ax.set_ylim(0, total_power * 1.15)
+    
+    # Add legend
+    ax.legend(loc='upper right', bbox_to_anchor=(1, 1), fontsize=12)
+    
+    # Add grid for better readability
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Tight layout
+    fig.tight_layout()
+    
+    # Save the plot
+    power_dist_path = os.path.join(save_path, f'episode_{episode_num}_power_distribution.png')
+    plt.savefig(power_dist_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved power distribution plot to {power_dist_path}")
+    
+    return {
+        'total_dispatch': total_dispatch,
+        'total_pcs_sold': total_pcs_sold, 
+        'total_reserve': total_reserve,
+        'total_power': total_power
+    }
+
+def create_stepwise_power_distribution_plot(episode_data, episode_num, save_path):
+    """
+    Create a stacked bar chart showing power supply distribution per step.
+    """
+    steps = range(len(episode_data))
+    dispatch = [d.get('dispatch', 0.0) for d in episode_data]
+    pcs_sold = [max(0, d.get('net_exchange', 0.0)) for d in episode_data]
+    reserve = [d.get('shortfall', 0.0) for d in episode_data]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.bar(steps, dispatch, color='lightblue', label='Dispatch Power')
+    ax.bar(steps, pcs_sold, bottom=dispatch, color='green', label='PCS Power Sold to Grid')
+    bottom_vals = [d + p for d, p in zip(dispatch, pcs_sold)]
+    ax.bar(steps, reserve, bottom=bottom_vals, color='red', label='Reserve Power')
+
+    ax.set_xlabel('Step', fontsize=12)
+    ax.set_ylabel('Power (MWh)', fontsize=12)
+    ax.set_title(f'Episode {episode_num} - Stepwise Power Supply Distribution', fontsize=14)
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+
+    plot_path = os.path.join(save_path, f'episode_{episode_num}_stepwise_power_distribution.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved stepwise power distribution plot to {plot_path}")
+
+def create_aggregate_power_distribution_plot(all_episode_data, save_path):
+    """
+    Create bar chart of mean ± std for power distribution components over multiple episodes.
+    """
+    # Compute totals per episode
+    totals = [(sum(d.get('dispatch',0) for d in ep),
+               sum(max(0,d.get('net_exchange',0)) for d in ep),
+               sum(d.get('shortfall',0) for d in ep))
+              for ep in all_episode_data]
+    dispatch_vals, pcs_sold_vals, reserve_vals = zip(*totals)
+    # Mean and std
+    means = [np.mean(dispatch_vals), np.mean(pcs_sold_vals), np.mean(reserve_vals)]
+    stds = [np.std(dispatch_vals), np.std(pcs_sold_vals), np.std(reserve_vals)]
+    # Plot bars with error bars
+    labels = ['Dispatch', 'PCS Sold', 'Reserve']
+    x = np.arange(len(labels))
+    fig, ax = plt.subplots(figsize=(8,6))
+    bars = ax.bar(x, means, yerr=stds, capsize=5, color=['lightblue','green','red'])
+    # Set x-axis ticks and labels including mean ± std
+    xtick_labels = [f"{lab}\n{mean:,.0f}±{std:,.0f} MWh" for lab, mean, std in zip(labels, means, stds)]
+    ax.set_xticks(x)
+    ax.set_xticklabels(xtick_labels)
+    ax.set_ylabel('Power (MWh)')
+    ax.set_title('Aggregate Power Supply Distribution (mean ± std)')
+    ax.grid(True, axis='y', alpha=0.3)
+    plt.tight_layout()
+    out_path = os.path.join(save_path, 'aggregate_power_distribution.png')
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved aggregate power distribution plot to {out_path}")
+
 # Custom decaying action noise class
 class LinearDecayActionNoise(ActionNoise):
     """Action noise with linear decay over time"""
@@ -93,7 +248,7 @@ def parse_args():
                         help="Number of training iterations")
     parser.add_argument("--timesteps", type=int, default=480, 
                         help="Steps per iteration (480 = 10 days)")
-    parser.add_argument("--seed", type=int, default=34, 
+    parser.add_argument("--seed", type=int, default=1356, 
                         help="Random seed")
     
     # Environment parameters
@@ -103,7 +258,7 @@ def parse_args():
     parser.add_argument("--demand-data", type=str, default=None,
                         help="Path to demand data YAML file (required for DATA_DRIVEN pattern)")
     parser.add_argument("--pricing-policy", type=str, default="ONLINE", 
-                        choices=["ONLINE", "CONSTANT", "QUADRATIC", "INTERVALS", "QUADRATIC_INTERVALS"],
+                        choices=["ONLINE", "CONSTANT", "QUADRATIC", "INTERVALS", "QUADRATIC_INTERVALS", "SMP"],
                         help="Pricing policy type")
     parser.add_argument("--cost-type", type=str, default="CONSTANT", 
                         choices=["CONSTANT", "VARIABLE", "TIME_OF_USE"],
@@ -118,7 +273,7 @@ def parse_args():
     # Algorithm parameters
     parser.add_argument("--algorithm", type=str, choices=["ppo", "recurrent_ppo", "td3"], default="recurrent_ppo",
                         help="Algorithm to use: 'ppo' for standard PPO, 'recurrent_ppo' for RecurrentPPO with LSTM (default), or 'td3' for TD3")
-    parser.add_argument("--lstm-size", type=int, default=64, 
+    parser.add_argument("--lstm-size", type=int, default=256, 
                         help="LSTM hidden size (only for RecurrentPPO)")
     parser.add_argument("--batch-size", type=int, default=64, 
                         help="Batch size (reduced for LSTM)")
@@ -128,11 +283,11 @@ def parse_args():
                         help="Learning rate")
     parser.add_argument("--net-arch", nargs="+", type=int, default=[64, 64],
                         help="Network architecture for policy network")
-    parser.add_argument("--buffer-size", type=int, default=100000,
+    parser.add_argument("--buffer-size", type=int, default=1000,
                         help="Replay buffer size (only for TD3)")
     parser.add_argument("--train-freq", type=int, default=2,
                         help="Update model every x steps (only for TD3)")
-    parser.add_argument("--policy-noise", type=float, default=0.2,
+    parser.add_argument("--policy-noise", type=float, default=0.5,
                         help="Noise added to target policy (only for TD3)")
     parser.add_argument("--final-noise", type=float, default=0.05,
                         help="Final exploration noise after decay (only for TD3)")
@@ -148,6 +303,8 @@ def parse_args():
                         help="Directory for plots")
     parser.add_argument("--eval-episodes", type=int, default=5,
                         help="Number of episodes for evaluation")
+    parser.add_argument("--num-seeds", type=int, default=5,
+                        help="Number of seeds to evaluate the best model across")
     
     # Continue training from existing models
     parser.add_argument("--continue-from-best", action="store_true",
@@ -185,14 +342,14 @@ def create_recurrent_model(env, lstm_size, seed=None, **kwargs):
     model_kwargs = {
         "policy": "MlpLstmPolicy",
         "env": env,
-        "learning_rate": 1e-3,
-        "n_steps": 48,  # 5 days (240 steps) of experience before update
-        "batch_size": 16,  # Reduced for LSTM
-        "n_epochs": 4,
-        "gamma": 0.99,
+        "learning_rate": 3e-4,
+        "n_steps": 128,  # 5 days (240 steps) of experience before update
+        "batch_size": 32,  # Reduced for LSTM
+        "n_epochs": 20,
+        "gamma": 1,
         "gae_lambda": 1.0,
         "clip_range": 0.2,
-        "ent_coef": 0.1,
+        "ent_coef": 0.4,
         "vf_coef": 0.2,
         "max_grad_norm": 1.0,
         "verbose": 1,
@@ -213,7 +370,7 @@ def create_recurrent_model(env, lstm_size, seed=None, **kwargs):
     # Create and return the model
     return RecurrentPPO(**model_kwargs)
 
-def create_ppo_model(env, net_arch=[64, 64], seed=None, **kwargs):
+def create_ppo_model(env, net_arch=[256, 256], seed=None, **kwargs):
     """
     Create a standard PPO model with appropriate hyperparameters.
     
@@ -229,14 +386,14 @@ def create_ppo_model(env, net_arch=[64, 64], seed=None, **kwargs):
     model_kwargs = {
         "policy": "MlpPolicy",
         "env": env,
-        "learning_rate": 1e-3,
-        "n_steps": 64,  # 5 days (240 steps) of experience before update
-        "batch_size": 16,
-        "n_epochs": 10,
-        "gamma": 0.99,
-        "gae_lambda": 0.95,
+        "learning_rate": 3e-4,
+        "n_steps": 256,  # 5 days (240 steps) of experience before update
+        "batch_size": 32,
+        "n_epochs": 20,
+        "gamma": 1,
+        "gae_lambda": 0.99,
         "clip_range": 0.2,
-        "ent_coef": 0.1,
+        "ent_coef": 0.5,
         "vf_coef": 0.5,
         "max_grad_norm": 0.5,
         "verbose": 1,
@@ -365,7 +522,11 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
         # Reset environment and get ISO observation (already wrapped in VecEnv)
         # Use seed via env.seed() since VecNormalize.reset() does not accept seed
         if seed is not None:
-            eval_env.seed(seed + episode)
+            episode_seed = seed + episode * 1000  # Use larger offset to ensure different seeds
+            eval_env.seed(episode_seed)
+            # Also set numpy seed to affect any randomness in the environment
+            np.random.seed(episode_seed)
+            print(f"  Using seed: {episode_seed}")
         obs = eval_env.reset()[0]
         
         # Episode tracking
@@ -438,6 +599,16 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
                 'reserve_cost': step_info.get('reserve_cost', 0),
                 'shortfall': step_info.get('shortfall', 0),
                 'pcs_exchange_cost': step_info.get('pcs_exchange_cost', 0),
+                # System cost and curtailment metrics
+                'system_cost': step_info.get('dispatch_cost', 0) + step_info.get('reserve_cost', 0) + step_info.get('pcs_exchange_cost', 0),
+                # Curtailment = excess generation minus load
+                'curtailment': max(
+                    0,
+                    (step_info.get('dispatch', 0) + step_info.get('shortfall', 0) + max(0, step_info.get('net_exchange', 0)))
+                    - (step_info.get('realized_demand', 0) + abs(min(0, step_info.get('net_exchange', 0))))
+                ),
+                # Placeholder penalty per curtailment unit (for future use)
+                'curtailment_penalty': 0.0,
                 'iso_reward': iso_reward,
             }
             # Include background process info from step_info
@@ -445,6 +616,9 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
                 if isinstance(key, str) and key.startswith('background_'):
                     step_data[key] = value
             episode_data.append(step_data)
+            # DEBUG: verify that PCS actions are affecting the environment
+            if episode_steps <= 5:
+                print(f"DEBUG Step {episode_steps}: pcs_action={step_data['pcs_action']}, battery_level={step_data['battery_level']}, net_exchange={step_data['net_exchange']}")
         
         # Update total metrics
         total_iso_reward += episode_iso_reward
@@ -463,11 +637,29 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
         callback.save_path = eval_plots_dir
         callback.all_episodes_actions = [episode_data]  # Wrap in list as it expects list of episodes
         
-        # Use the callback's plotting function
+        # Use the callback's plotting function (always use index 0 since we only have current episode data)
         callback.plot_episode_results(0, eval_plots_dir)
+        # Also plot PCS actions and battery levels
+        from energy_net.controllers.callbacks import plot_pcs_actions
+        plot_pcs_actions(episode_data, 0, eval_plots_dir)
         
+        # Create the new power distribution plot
+        create_power_distribution_plot(episode_data, 0, eval_plots_dir)
+        # Also plot stepwise power distribution per step
+        create_stepwise_power_distribution_plot(episode_data, 0, eval_plots_dir)
+        
+        # Manually rename the generated files to include the actual episode number
+        import shutil
+        for plot_type in ['detail', 'cost_components', 'final_cost_distribution', 'power_distribution', 'pcs_actions', 'stepwise_power_distribution']:
+            old_file = os.path.join(eval_plots_dir, f'episode_0_{plot_type}.png')
+            new_file = os.path.join(eval_plots_dir, f'episode_{episode}_{plot_type}.png')
+            if os.path.exists(old_file):
+                shutil.move(old_file, new_file)
         print(f"Episode {episode+1} complete: ISO reward={episode_iso_reward:.2f}")
-    
+
+    # After all episodes, plot aggregate distribution across episodes
+    create_aggregate_power_distribution_plot([ep['data'] for ep in episode_metrics], eval_plots_dir)
+
     # Calculate average metrics
     avg_iso_reward = total_iso_reward / num_episodes
     
@@ -482,39 +674,102 @@ def evaluate_iso(iso_model, pcs_model, env_config, override_env=None, pcs_action
         print(f"  - {fname}")
 
     # Add statistical analysis of ISO evaluation
-    # Collect per-step data across all episodes for component analysis
-    dispatch_vals = []  # ISO dispatch power
-    reserve_vals = []   # Shortfall power
-    pcs_energy = []     # PCS energy exchange
-    dispatch_costs = []
-    reserve_costs = []
-    pcs_costs = []
+    # Collect per-episode totals for statistical analysis
+    episode_dispatch = []
+    episode_reserve = []
+    episode_pcs_energy = []
+    episode_dispatch_costs = []
+    episode_reserve_costs = []
+    episode_pcs_costs = []
+    episode_predicted = []
+    episode_realized = []
+    episode_total_demand = []
+    episode_avg_buy_price = []
+    episode_avg_sell_price = []
+    episode_power_bought = []
+    episode_power_sold = []
+    episode_total_power_sold = []
+    episode_system_costs = []
+    episode_curtailments = []
+    episode_curtailment_penalties = []
+    
     for ep in episode_metrics:
-        for d in ep['data']:
-            dispatch_vals.append(d.get('dispatch', 0))
-            reserve_vals.append(d.get('shortfall', 0))
-            pcs_energy.append(d.get('net_exchange', 0))
-            dispatch_costs.append(d.get('dispatch_cost', 0))
-            reserve_costs.append(d.get('reserve_cost', 0))
-            pcs_costs.append(d.get('pcs_exchange_cost', 0))
-    # Compute statistics
+        # Sum up totals per episode
+        ep_dispatch = sum(d.get('dispatch', 0) for d in ep['data'])
+        ep_reserve = sum(d.get('shortfall', 0) for d in ep['data'])
+        ep_dispatch_cost = sum(d.get('dispatch_cost', 0) for d in ep['data'])
+        ep_reserve_cost = sum(d.get('reserve_cost', 0) for d in ep['data'])
+        ep_pcs_cost = sum(d.get('pcs_exchange_cost', 0) for d in ep['data'])
+        ep_predicted = sum(d.get('predicted_demand', 0) for d in ep['data'])
+        ep_realized = sum(d.get('realized_demand', 0) for d in ep['data'])
+        
+        # PCS energy and power calculations
+        ep_pcs_total = sum(d.get('net_exchange', 0) for d in ep['data'])
+        ep_power_bought = sum(abs(min(0, d.get('net_exchange', 0))) for d in ep['data'])
+        ep_power_sold = sum(max(0, d.get('net_exchange', 0)) for d in ep['data'])
+        
+        # Average prices per episode
+        ep_avg_buy = np.mean([d.get('iso_buy_price', 0) for d in ep['data']])
+        ep_avg_sell = np.mean([d.get('iso_sell_price', 0) for d in ep['data']])
+        
+        # Total demand per episode
+        ep_total_demand = ep_realized + ep_pcs_total
+        
+        # Store episode totals
+        episode_dispatch.append(ep_dispatch)
+        episode_reserve.append(ep_reserve)
+        episode_pcs_energy.append(ep_pcs_total)
+        episode_dispatch_costs.append(ep_dispatch_cost)
+        episode_reserve_costs.append(ep_reserve_cost)
+        episode_pcs_costs.append(ep_pcs_cost)
+        episode_predicted.append(ep_predicted)
+        episode_realized.append(ep_realized)
+        episode_total_demand.append(ep_total_demand)
+        episode_avg_buy_price.append(ep_avg_buy)
+        episode_avg_sell_price.append(ep_avg_sell)
+        episode_power_bought.append(ep_power_bought)
+        episode_power_sold.append(ep_power_sold)
+        # Total power sold = non-strategic demand + power sold to PCS
+        episode_total_power_sold.append(ep_realized + ep_power_sold)
+        # System cost = dispatch + reserve + PCS exchange cost
+        episode_system_costs.append(ep_dispatch + ep_reserve + ep_pcs_cost)
+        # Aggregate curtailment and penalty
+        episode_curtailments.append(sum(d.get('curtailment', 0) for d in ep['data']))
+        episode_curtailment_penalties.append(sum(d.get('curtailment_penalty', 0) for d in ep['data']))
+    
+    # Compute statistics across episodes
     def compute_stats(arr):
         a = np.array(arr)
         return {
-            'total': float(a.sum()),
-            'mean': float(a.mean()),
-            'std': float(a.std(ddof=1)),
-            'min': float(a.min()),
-            'max': float(a.max()),
-            'median': float(np.median(a))
+            'total_across_all_episodes': float(a.sum()),
+            'mean_per_episode': float(a.mean()),
+            'std_across_episodes': float(a.std(ddof=1)) if len(a) > 1 else 0.0,
+            'min_episode': float(a.min()),
+            'max_episode': float(a.max()),
+            'median_episode': float(np.median(a))
         }
+    
     stats = {
-        'dispatch_power': compute_stats(dispatch_vals),
-        'reserve_power': compute_stats(reserve_vals),
-        'pcs_energy_MWh': compute_stats(pcs_energy),
-        'dispatch_cost': compute_stats(dispatch_costs),
-        'reserve_cost': compute_stats(reserve_costs),
-        'pcs_exchange_cost': compute_stats(pcs_costs)
+        # Energy metrics (totals per episode)
+        'Predicted_non_strategic_demand_MWh': compute_stats(episode_predicted),
+        'Realized_non_strategic_demand_MWh': compute_stats(episode_realized),
+        'Total_Realized_demand_MWh': compute_stats(episode_total_demand),
+        'Dispatch_MWh': compute_stats(episode_dispatch),
+        'Activated_Reserve_MWh': compute_stats(episode_reserve),
+        'Power_bought_from_PCS_MWh': compute_stats(episode_power_bought),
+        'Power_sold_to_PCS_MWh': compute_stats(episode_power_sold),
+        'Total_power_sold_MWh': compute_stats(episode_total_power_sold),
+        'PCS_total_exchange_MWh': compute_stats(episode_pcs_energy),
+        # Price metrics (averages per episode)
+        'ISO_buy_price_$_per_MWh': compute_stats(episode_avg_buy_price),
+        'ISO_sell_price_$_per_MWh': compute_stats(episode_avg_sell_price),
+        # Cost metrics (totals per episode)
+        'Dispatch_cost_$_total': compute_stats(episode_dispatch_costs),
+        'Reserve_cost_$_total': compute_stats(episode_reserve_costs),
+        'PCS_exchange_cost_$_total': compute_stats(episode_pcs_costs),
+        'System_cost_$_total': compute_stats(episode_system_costs),
+        'Curtailment_MWh': compute_stats(episode_curtailments),
+        'Curtailment_penalty_$_total': compute_stats(episode_curtailment_penalties)
     }
     # Write stats to file
     stats_file = os.path.join(eval_plots_dir, 'evaluation_statistics.txt')
@@ -679,25 +934,40 @@ def main():
             is_recurrent = False
             is_td3 = False
             
-        # Evaluate best model
-        results = evaluate_iso(
-            iso_model=iso_model,
-            pcs_model=pcs_policy,
-            env_config={
-                'cost_type': args.cost_type,
-                'pricing_policy': args.pricing_policy,
-                'demand_pattern': args.demand_pattern,
-                'use_dispatch_action': args.use_dispatch,
-                'demand_data_path': args.demand_data,  # Add demand data path
-            },
-            override_env=eval_env,
-            pcs_action_sequence=pcs_action_sequence,  # Add predefined sequence
-            num_episodes=args.eval_episodes,
-            seed=args.seed,
-            is_recurrent=is_recurrent
-        )
-        print(f"Evaluation complete. Avg ISO reward: {results['avg_iso_reward']:.2f}")
-        print("Plots saved to: eval_plots/iso/")
+        # Evaluate best model across multiple seeds
+        eval_plots_dir = args.plot_dir or os.path.join("eval_plots", "iso")
+        os.makedirs(eval_plots_dir, exist_ok=True)
+        all_episode_data = []
+        avg_rewards = []
+        for idx in range(args.num_seeds):
+            root_seed = args.seed + idx * args.eval_episodes * 1000
+            print(f"Evaluating seed {idx+1}/{args.num_seeds} with base seed {root_seed}")
+            seed_dir = os.path.join(eval_plots_dir, f"seed_{idx+1}")
+            os.makedirs(seed_dir, exist_ok=True)
+            res = evaluate_iso(
+                iso_model=iso_model,
+                pcs_model=pcs_policy,
+                env_config={
+                    'cost_type': args.cost_type,
+                    'pricing_policy': args.pricing_policy,
+                    'demand_pattern': args.demand_pattern,
+                    'use_dispatch_action': args.use_dispatch,
+                    'demand_data_path': args.demand_data,
+                },
+                override_env=eval_env,
+                pcs_action_sequence=pcs_action_sequence,
+                num_episodes=args.eval_episodes,
+                seed=root_seed,
+                is_recurrent=is_recurrent,
+                plot_dir=seed_dir
+            )
+            avg_rewards.append(res['avg_iso_reward'])
+            for ep in res['episodes']:
+                all_episode_data.append(ep['data'])
+        print(f"Average ISO rewards per seed: {avg_rewards}")
+        # Final aggregate across all seeds and episodes
+        create_aggregate_power_distribution_plot(all_episode_data, eval_plots_dir)
+        print(f"Aggregate power distribution saved to {eval_plots_dir}")
         return
     # End eval-only
     # Create log directories

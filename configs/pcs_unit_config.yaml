@@ -1,13 +1,13 @@
 action:
   consumption_action:
     enabled: false
-    max: 10.0
-    min: -10.0
+    max: 100.0
+    min: -100.0
   multi_action: false
   production_action:
     enabled: false
-    max: 10.0
-    min: -10.0
+    max: 100.0
+    min: -100.0
 
 # Observation space configuration
 observation_space:
@@ -18,11 +18,11 @@ observation_space:
     min: 0.0
     max: 1.0
   iso_buy_price:
-    min: 0.0
-    max: inf
+    min: 10.0
+    max: 50.0
   iso_sell_price:
-    min: 0.0
-    max: inf
+    min: 10.0
+    max: 50.0
 
 # Default ISO agent parameters
 default_iso_params:
@@ -48,9 +48,9 @@ battery:
     charge_rate_max: 10.0
     discharge_efficiency: 1.0
     discharge_rate_max: 10.0
-    init: 40.0
+    init: 30.0
     lifetime_constant: 100.0
-    max: 100.0
+    max: 1000.0
     min: 0.0
   model_type: deterministic_battery
 
@@ -60,8 +60,8 @@ consumption_unit:
     consumption_capacity: 0.0
     peak_consumption1: 0.0
     peak_consumption2: 0.0
-    peak_time1: 0.0
-    peak_time2: 0.0
+    peak_time1: 0.25
+    peak_time2: 0.75
     width1: 1.0
     width2: 1.0
   model_type: deterministic_consumption
@@ -74,3 +74,27 @@ production_unit:
     production_capacity: 0.0
     width: 1.0
   model_type: deterministic_production
+
+# Background autonomous processes within PCS (not affecting system demand)
+background_processes:
+  - name: solar
+    type: production
+    interval: 0      # once per day at midday
+    quantity: 0
+    start_time: 0
+    end_time: 0
+
+  - name: hvac morning
+    type: consumption
+    interval: 0     # once per day at noon
+    quantity: 0
+    start_time: 0   # 6 AM
+    end_time: 0    # instantaneous at noon
+
+  - name: hvac evening
+    type: consumption
+    interval: 0     # once per day at noon
+    quantity: 0
+    start_time: 0   # 6 PM
+    end_time: 0     # instantaneous at night
+

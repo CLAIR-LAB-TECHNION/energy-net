@@ -22,7 +22,7 @@ Generate a sequence of random PCS actions:
 python create_pcs_action_sequence.py \
   --output-file pcs_actions/random_actions.npy \
   --sequence-length 1000 \
-  --method random \
+  --method pattern \
   --seed 42
 ```
 
