@@ -239,8 +239,6 @@ class EnergyNetController:
                                        dispatch_config_from_file.get('use_dispatch_action', False))
         else:
             self.use_dispatch_action = dispatch_config_from_file.get('use_dispatch_action', False)
-        # Day-ahead dispatch flag
-        self.use_dayahead_dispatch = dispatch_config.get('use_dayahead_dispatch', False)
         
         # Initialize pricing strategy
         action_spaces_config = self.iso_config.get('action_spaces', {})
@@ -584,8 +582,8 @@ class EnergyNetController:
             actual_energy_change = self.battery_manager.update(battery_command)
             self.battery_level = self.battery_manager.get_level()
             
-            # Set energy needed to the actual energy change for grid exchange calculations
-            energy_needed = actual_energy_change
+            # Set energy needed to the energy change for grid exchange calculations
+            energy_needed = energy_change
             
             # Track charging/discharging rates
             if battery_command > 0:  # Charging
@@ -598,7 +596,13 @@ class EnergyNetController:
             # Track efficiency losses
             efficiency_loss = abs(energy_change - actual_energy_change)
             self.metrics.pcs_metrics['efficiency_losses'].append(efficiency_loss)
-
+        
+        # Incorporate background process residuals into grid exchange
+        bg_res = self.pcs_unit.get_background_residuals()
+        extra = sum(bg_res.values())
+        print(f"[Controller] Background residuals: {bg_res}, extra: {extra:.4f} MWh")
+        energy_needed += extra
+        print(f"[Controller] Total energy_needed after background: {energy_needed:.4f} MWh")
         # FIRST: Calculate the PCS demand for tracking and observation
         time_step = self.time_step_duration / self.env_config['time']['minutes_per_day']
         self.pcs_demand = energy_needed / time_step  # Convert energy to power
@@ -817,7 +821,12 @@ class EnergyNetController:
             'episode_iso_reward': self.metrics.total_iso_reward,
             'episode_pcs_reward': self.metrics.total_pcs_reward
         })
-
+        
+        # Include background process actions
+        if hasattr(self.pcs_unit, 'get_background_actions'):
+            for name, amount in self.pcs_unit.get_background_actions().items():
+                info[f'background_{name}'] = amount
+        
         return info
 
     def get_metrics(self):

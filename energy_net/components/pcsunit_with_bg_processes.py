@@ -121,17 +121,11 @@ class PCSUnit(CompositeGridEntity):
         # Initialize background processes configuration for autonomous injection/withdrawal
         self.background_processes: list[dict] = []
         for bg in config.get('background_processes', []):
-            # Skip any background process configured with zero quantity
-            quantity = bg.get('quantity', 0.0)
-            try:
-                if float(quantity) == 0.0:
-                    continue
-            except (TypeError, ValueError):
-                pass
             name = bg.get('name')
             interval = bg.get('interval')
             start_time = bg.get('start_time', 0.0)
             end_time = bg.get('end_time', 1.0)
+            quantity = bg.get('quantity', 0.0)
             signed_quantity = quantity if bg.get('type') == 'production' else -quantity
             # Determine if this uses step-based window (start_time >= 1 interpreted as step index)
             use_step = isinstance(start_time, (int, float)) and start_time >= 1.0
@@ -170,7 +164,59 @@ class PCSUnit(CompositeGridEntity):
         # Update Battery with the action
         self.battery.update(time=time, action=battery_action)
         self.logger.debug(f"Battery updated to energy level: {self.battery.get_state()} MWh")
-
+        
+        # Autonomous background processes
+        # First handle any step-based schedules
+        for bp in self.background_processes:
+            if not bp.get('use_step'):
+                continue
+            # Reset background tracking
+            self.last_background[bp['name']] = 0.0
+            self.background_residuals[bp['name']] = 0.0
+            if step is None:
+                continue
+            start = bp['start_step']
+            end = bp['end_step']
+            interval = bp.get('interval_step', 1)
+            # Fire at each step in [start, end] with specified interval
+            if start <= step <= end and ((step - start) % interval == 0):
+                requested = bp['signed_quantity']
+                self.battery.perform_action(requested)
+                actual = self.battery.energy_change
+                residual = requested - actual
+                self.last_background[bp['name']] = requested
+                self.background_residuals[bp['name']] = residual
+                print(f"[PCSUnit] Background '{bp['name']}': requested {requested} MWh, actual {actual:.4f}, residual {residual:.4f}")
+                self.logger.debug(f"Background process '{bp['name']}' applied {requested} MWh at time {time:.4f}")
+        # Then handle time-based schedules
+        time_mod = time % 1.0
+        for bp in self.background_processes:
+            if bp.get('use_step'):
+                continue
+            # Determine if current time_mod falls within the configured window (support wrap-around)
+            start = bp['start_time']
+            end = bp['end_time']
+            if start <= end:
+                in_time_window = (start <= time_mod <= end)
+            else:
+                # Wrap-around window spans midnight
+                in_time_window = (time_mod >= start or time_mod <= end)
+            time_to_fire = time_mod + 1e-8 >= bp['next_fire']
+            # For one-time events (like solar burst), only fire once within window
+            if time_to_fire and in_time_window:
+                requested = bp['signed_quantity']
+                self.battery.perform_action(requested)
+                actual = self.battery.energy_change
+                residual = requested - actual
+                self.last_background[bp['name']] = requested
+                self.background_residuals[bp['name']] = residual
+                print(f"[PCSUnit] Background '{bp['name']}': requested {requested} MWh, actual {actual:.4f}, residual {residual:.4f}")
+                # Schedule next firing
+                bp['next_fire'] = (bp['next_fire'] + bp['interval']) % 1.0
+                self.logger.debug(f"Background process '{bp['name']}' applied {requested} MWh at time {time_mod:.4f}")
+            else:
+                self.last_background[bp['name']] = 0.0
+                self.background_residuals[bp['name']] = 0.0
 
         # Update ProductionUnit 
         self.production_unit.update(time=time, action=consumption_action)
@@ -239,3 +285,23 @@ class PCSUnit(CompositeGridEntity):
                 entity.reset(initial_battery_level)  # Pass initial level to battery
             else:
                 entity.reset()  # Normal reset for other components
+        
+        # Reset background process schedule and clear last actions for new day
+        for bp in self.background_processes:
+            # Reset the next firing time to the configured start_time modulo one day
+            bp['next_fire'] = bp.get('start_time', 0.0) % 1.0
+        # Clear last background actions and residuals
+        self.last_background = {bp['name']: 0.0 for bp in self.background_processes}
+        self.background_residuals = {bp['name']: 0.0 for bp in self.background_processes}
+
+    def get_background_actions(self) -> dict[str, float]:
+        """
+        Retrieve the last background process actions applied during the most recent update.
+        """
+        return self.last_background
+
+    def get_background_residuals(self) -> dict[str, float]:
+        """
+        Retrieve the last background process residuals (spill/shortfall) applied during the most recent update.
+        """
+        return self.background_residuals
