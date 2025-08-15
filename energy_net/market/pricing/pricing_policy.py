@@ -16,9 +16,11 @@ class PricingPolicy(Enum):
         CONSTANT: Uses constant prices
         INTERVALS: Uses intervals for price determination
         QUADRATIC_INTERVALS: Uses quadratic intervals for price determination
+        SMP: System Marginal Price with two time intervals and discount pricing
     """
     QUADRATIC = "quadratic"
     ONLINE = "online"
     CONSTANT = "constant"
     INTERVALS = "intervals"
     QUADRATIC_INTERVALS = "quadratic_intervals"
+    SMP = "smp"

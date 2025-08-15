@@ -717,6 +717,220 @@ class QuadraticIntervalPricingStrategy(PricingStrategy):
         return iso_buy_price, iso_sell_price, dispatch, first_action_taken
 
 
+class SMPPricingStrategy(PricingStrategy):
+    """
+    Strategy for SMP (System Marginal Price) pricing policy.
+    
+    This strategy allows the ISO to set base buy/sell prices at the beginning 
+    of an episode (day-ahead), with two time intervals where one interval 
+    gets a discount applied to the base prices.
+    
+    The ISO sets the base prices once at the start, and the system automatically
+    applies discounts during the specified discount hours.
+    """
+    
+    def __init__(
+        self, 
+        min_price: float, 
+        max_price: float,
+        max_steps_per_episode: int,
+        config: Dict[str, Any],
+        logger: Optional[logging.Logger] = None
+    ):
+        """
+        Initialize the SMP pricing strategy.
+        
+        Args:
+            min_price: Minimum price boundary
+            max_price: Maximum price boundary
+            max_steps_per_episode: Maximum number of steps per episode
+            config: Configuration for the SMP pricing policy
+            logger: Logger instance for logging
+        """
+        super().__init__(min_price, max_price, max_steps_per_episode, logger)
+        
+        # Get SMP-specific configuration
+        smp_config = config.get('smp', {})
+        
+        # Time intervals configuration
+        intervals_config = smp_config.get('intervals', {})
+        self.discount_start_hour = intervals_config.get('discount_start_hour', 10)  # Default: 10 AM
+        self.discount_end_hour = intervals_config.get('discount_end_hour', 16)    # Default: 4 PM
+        
+        # Discount configuration
+        discount_config = smp_config.get('discount', {})
+        self.discount_percentage = discount_config.get('percentage', 0.2)  # Default: 20% discount
+        
+        # Price bounds
+        price_config = smp_config.get('prices', {})
+        self.buy_price_min = price_config.get('buy_min', min_price)
+        self.buy_price_max = price_config.get('buy_max', max_price)
+        self.sell_price_min = price_config.get('sell_min', min_price)
+        self.sell_price_max = price_config.get('sell_max', max_price)
+        
+        # Dispatch configuration
+        dispatch_config = smp_config.get('dispatch', {})
+        self.dispatch_min = dispatch_config.get('min', 0.0)
+        self.dispatch_max = dispatch_config.get('max', 500.0)
+        
+        # Base prices set by the ISO at the beginning
+        self.base_buy_price = 0.0
+        self.base_sell_price = 0.0
+        
+        # Calculate steps per hour (assuming 48 steps per day = 30 min per step)
+        self.steps_per_hour = max_steps_per_episode / 24.0
+        
+        if self.logger:
+            self.logger.info(
+                f"Initialized SMP Strategy - Discount hours: {self.discount_start_hour}-{self.discount_end_hour}, "
+                f"Discount: {self.discount_percentage*100:.1f}%, Steps per hour: {self.steps_per_hour:.2f}"
+            )
+    
+    def create_action_space(self, use_dispatch_action: bool = False) -> spaces.Space:
+        """
+        Create the action space for SMP pricing.
+        
+        Args:
+            use_dispatch_action: Whether to include dispatch in the action space
+            
+        Returns:
+            A Box space with dimensions for base buy/sell prices and optionally dispatch
+        """
+        if use_dispatch_action:
+            # Include dispatch in the action space
+            return spaces.Box(
+                low=np.array([self.buy_price_min, self.sell_price_min, self.dispatch_min], dtype=np.float32),
+                high=np.array([self.buy_price_max, self.sell_price_max, self.dispatch_max], dtype=np.float32),
+                dtype=np.float32
+            )
+        else:
+            # Only include base buy/sell prices
+            return spaces.Box(
+                low=np.array([self.buy_price_min, self.sell_price_min], dtype=np.float32),
+                high=np.array([self.buy_price_max, self.sell_price_max], dtype=np.float32),
+                dtype=np.float32
+            )
+    
+    def _get_current_hour(self, step_count: int) -> float:
+        """
+        Calculate the current hour of the day based on step count.
+        
+        Args:
+            step_count: Current step in the episode (1-based)
+            
+        Returns:
+            Current hour of the day (0-24)
+        """
+        # Convert 1-based step to 0-based, then to hour
+        return ((step_count - 1) / self.steps_per_hour) % 24.0
+    
+    def _is_discount_period(self, step_count: int) -> bool:
+        """
+        Check if the current step is within the discount time period.
+        
+        Args:
+            step_count: Current step in the episode
+            
+        Returns:
+            True if in discount period, False otherwise
+        """
+        current_hour = self._get_current_hour(step_count)
+        
+        # Handle case where discount period spans midnight
+        if self.discount_start_hour <= self.discount_end_hour:
+            # Normal case: e.g., 10 AM to 4 PM
+            return self.discount_start_hour <= current_hour < self.discount_end_hour
+        else:
+            # Spans midnight: e.g., 10 PM to 6 AM
+            return current_hour >= self.discount_start_hour or current_hour < self.discount_end_hour
+    
+    def process_action(
+        self, 
+        action: Union[float, np.ndarray, int], 
+        step_count: int,
+        first_action_taken: bool,
+        predicted_demand: float = 0.0,
+        use_dispatch_action: bool = False
+    ) -> Tuple[float, float, float, bool]:
+        """
+        Process the agent's action according to the SMP pricing strategy.
+        
+        Base prices are set on the first step (day-ahead), then discounts are 
+        applied automatically during specified time intervals.
+        
+        Action format when use_dispatch_action is False:
+            [base_buy_price, base_sell_price]
+            
+        Action format when use_dispatch_action is True:
+            [base_buy_price, base_sell_price, dispatch]
+            
+        Args:
+            action: The action taken by the agent
+            step_count: The current step count in the episode
+            first_action_taken: Whether the first action has been taken
+            predicted_demand: The predicted demand for the current step
+            use_dispatch_action: Whether dispatch is included in the action
+            
+        Returns:
+            Tuple containing:
+            - buy_price: Current buying price (with discount applied if in discount period)
+            - sell_price: Current selling price (with discount applied if in discount period)
+            - dispatch: Current dispatch value
+            - first_action_taken: Updated first_action_taken flag
+        """
+        dispatch = predicted_demand  # Default to predicted demand if dispatch not provided
+        
+        action = np.array(action).flatten()
+        
+        # Set base prices on first step (day-ahead)
+        if step_count == 1 and not first_action_taken:
+            if len(action) >= 2:
+                self.base_buy_price = float(np.clip(action[0], self.buy_price_min, self.buy_price_max))
+                self.base_sell_price = float(np.clip(action[1], self.sell_price_min, self.sell_price_max))
+                first_action_taken = True
+                
+                if self.logger:
+                    self.logger.info(
+                        f"SMP Day-ahead prices set - Base Buy: {self.base_buy_price:.2f}, "
+                        f"Base Sell: {self.base_sell_price:.2f}"
+                    )
+            else:
+                if self.logger:
+                    self.logger.error(f"Expected at least 2 values for SMP pricing, got {len(action)}")
+                raise ValueError(f"Expected at least 2 values for SMP pricing, got {len(action)}")
+        
+        # Calculate current prices (apply discount if in discount period)
+        is_discount_period = self._is_discount_period(step_count)
+        
+        if is_discount_period:
+            # Apply discount to both buy and sell prices
+            iso_buy_price = self.base_buy_price * (1 - self.discount_percentage)
+            iso_sell_price = self.base_sell_price * (1 - self.discount_percentage)
+            price_type = "DISCOUNT"
+        else:
+            # Use full base prices
+            iso_buy_price = self.base_buy_price
+            iso_sell_price = self.base_sell_price
+            price_type = "FULL"
+        
+        # Process dispatch if enabled
+        if use_dispatch_action and len(action) >= 3:
+            dispatch = float(np.clip(action[2], self.dispatch_min, self.dispatch_max))
+        
+        # Ensure prices are non-negative
+        iso_buy_price = max(iso_buy_price, 0.0)
+        iso_sell_price = max(iso_sell_price, 0.0)
+        
+        if self.logger:
+            current_hour = self._get_current_hour(step_count)
+            self.logger.info(
+                f"Step {step_count} (Hour {current_hour:.1f}) - SMP {price_type} Prices: "
+                f"Buy {iso_buy_price:.2f}, Sell {iso_sell_price:.2f}, Dispatch: {dispatch:.2f}"
+            )
+        
+        return iso_buy_price, iso_sell_price, dispatch, first_action_taken
+
+
 class PricingStrategyFactory:
     """
     Factory class for creating pricing strategy instances.
@@ -781,6 +995,8 @@ class PricingStrategyFactory:
             return IntervalPricingStrategy(min_price, max_price, max_steps_per_episode, action_spaces_config, logger)
         elif pricing_policy == PricingPolicy.QUADRATIC_INTERVALS:
             return QuadraticIntervalPricingStrategy(min_price, max_price, max_steps_per_episode, action_spaces_config, logger)
+        elif pricing_policy == PricingPolicy.SMP:
+            return SMPPricingStrategy(min_price, max_price, max_steps_per_episode, action_spaces_config, logger)
         else:
             if logger:
                 logger.error(f"Unsupported pricing policy: {pricing_policy}")

@@ -153,3 +153,11 @@ checklink/cookies.txt
 #test logs
 *.out.*
 logs/*
+# Runtime and temporary files
+runtime_info_training.pkl
+iso_charge_discharge_cycle.npy
+
+# Generated action files
+pcs_actions/
+
+# Duplicate configs

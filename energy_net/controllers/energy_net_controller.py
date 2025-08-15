@@ -239,6 +239,8 @@ class EnergyNetController:
                                        dispatch_config_from_file.get('use_dispatch_action', False))
         else:
             self.use_dispatch_action = dispatch_config_from_file.get('use_dispatch_action', False)
+        # Day-ahead dispatch flag
+        self.use_dayahead_dispatch = dispatch_config.get('use_dayahead_dispatch', False)
         
         # Initialize pricing strategy
         action_spaces_config = self.iso_config.get('action_spaces', {})
@@ -582,8 +584,8 @@ class EnergyNetController:
             actual_energy_change = self.battery_manager.update(battery_command)
             self.battery_level = self.battery_manager.get_level()
             
-            # Set energy needed to the energy change for grid exchange calculations
-            energy_needed = energy_change
+            # Set energy needed to the actual energy change for grid exchange calculations
+            energy_needed = actual_energy_change
             
             # Track charging/discharging rates
             if battery_command > 0:  # Charging

@@ -108,6 +108,8 @@ class ActionTrackingCallback(BaseCallback):
             'iso_reward': info.get('iso_reward', info.get('episode_iso_reward', 0.0)),
             'pcs_reward': info.get('pcs_reward', info.get('episode_pcs_reward', 0.0))
         }
+        # Include nested actions dict for plotting
+        step_data['actions'] = info.get('actions', {})
         
         # Include background process actions if present
         for key, value in info.items():
@@ -205,9 +207,14 @@ class ActionTrackingCallback(BaseCallback):
         bg_keys = [k for k in episode_data[0].keys() if isinstance(k, str) and k.startswith('background_')]
         for key in bg_keys:
             values = [d.get(key, 0.0) for d in episode_data]
-            # Strip 'background_' prefix for cleaner legend labels
             label = key.replace('background_', '')
             ax3.plot(steps, values, '--', linewidth=1.5, label=label)
+        # Add PCS buy/sell energy flows on Panel 3
+        pos_pcs_energy = [max(0.0, d.get('net_exchange', 0.0)) for d in episode_data]
+        neg_pcs_energy = [abs(min(0.0, d.get('net_exchange', 0.0))) for d in episode_data]
+        
+        ax3.plot(steps, pos_pcs_energy, '--', color='green', linewidth=1.5, label='PCS Sell (MWh)')
+        ax3.plot(steps, neg_pcs_energy, '--', color='magenta', linewidth=1.5, label='PCS Buy (MWh)')
         ax3.set_xlabel('Step', fontsize=12)
         ax3.set_ylabel('MWh', fontsize=12)
         ax3.set_title('Battery & Background Processes', fontsize=14)

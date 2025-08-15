@@ -118,6 +118,45 @@ class PCSUnit(CompositeGridEntity):
         # Initialize the CompositeGridEntity with sub-entities
         super().__init__(sub_entities=sub_entities, log_file=log_file)
         
+        # Initialize background processes configuration for autonomous injection/withdrawal
+        self.background_processes: list[dict] = []
+        for bg in config.get('background_processes', []):
+            # Skip any background process configured with zero quantity
+            quantity = bg.get('quantity', 0.0)
+            try:
+                if float(quantity) == 0.0:
+                    continue
+            except (TypeError, ValueError):
+                pass
+            name = bg.get('name')
+            interval = bg.get('interval')
+            start_time = bg.get('start_time', 0.0)
+            end_time = bg.get('end_time', 1.0)
+            signed_quantity = quantity if bg.get('type') == 'production' else -quantity
+            # Determine if this uses step-based window (start_time >= 1 interpreted as step index)
+            use_step = isinstance(start_time, (int, float)) and start_time >= 1.0
+            bp = {
+                'name': name,
+                'signed_quantity': signed_quantity,
+                'use_step': use_step
+            }
+            if use_step:
+                # For step-based events: define start, end, and interval in steps
+                bp['start_step'] = int(start_time)
+                bp['end_step'] = int(end_time)
+                bp['interval_step'] = int(interval)
+            else:
+                # For time-based events: track fractional-day times
+                bp['interval'] = interval
+                bp['start_time'] = start_time
+                bp['end_time'] = end_time
+                bp['next_fire'] = start_time % 1.0
+            self.background_processes.append(bp)
+        # Initialize last background action tracking
+        self.last_background: dict[str, float] = {bp['name']: 0.0 for bp in self.background_processes}
+        # Initialize background residuals tracking
+        self.background_residuals: dict[str, float] = {bp['name']: 0.0 for bp in self.background_processes}
+        
     def update(self, time: float, battery_action: float, consumption_action: float = None, production_action: float = None, step: int = None) -> None:
         """
         Updates the state of all components based on the current time and battery action.
