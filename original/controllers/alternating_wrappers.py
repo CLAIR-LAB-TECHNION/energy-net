@@ -148,7 +148,7 @@ class ISOEnvWrapper(gym.Wrapper):
             
             self.logger.debug(f"ISOEnvWrapper got PCS action from policy: {pcs_action}")
         else:
-            # Default action (neutral battery action)
+            # Default action (neutral storage action)
             pcs_action = np.zeros(self.unwrapped.action_space["pcs"].shape)
             self.logger.debug(f"ISOEnvWrapper using default PCS action: {pcs_action}")
         
@@ -820,7 +820,7 @@ def make_pcs_env(
     # Create vectorized environment
     env = DummyVecEnv([lambda: env])
     
-    # Add normalization - if norm_path is provided, load from it
+    # Add normalization - if norm_path is provided, consumption from it
     if norm_path and os.path.exists(norm_path):
         print(f"Loading PCS normalization from: {norm_path}")
         env = VecNormalize.load(norm_path, env)

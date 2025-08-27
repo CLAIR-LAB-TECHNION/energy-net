@@ -2,9 +2,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-
-from original.utils.logger import setup_logger  # Import the logger setup utility
-
+from original.utils.logger import setup_logger
 
 class GridEntity(ABC):
     """
@@ -24,6 +22,19 @@ class GridEntity(ABC):
         """
         self.logger = setup_logger(self.__class__.__name__, log_file)
 
+    @abstractmethod
+    def perform_action(self, action: float) -> None:
+        """
+        Performs an action (e.g., charging or discharging) on the grid entity.
+
+        This method must be implemented by all subclasses, defining how the entity responds to a given action.
+
+        Args:
+            action id (float): The action to perform. The meaning of the action depends on the entity.
+                            For example, positive values might indicate charging, while negative
+                            values indicate discharging for a Battery.
+        """
+        pass
     def reset(self) -> None:
         """
         Resets the grid entity to its initial state.
@@ -33,7 +44,6 @@ class GridEntity(ABC):
         self.logger.info(f"Resetting {self.__class__.__name__} to initial state.")
         # Default implementation does nothing. Subclasses should override as needed.
         pass
-
 
 class ElementaryGridEntity(GridEntity):
     """
@@ -56,21 +66,6 @@ class ElementaryGridEntity(GridEntity):
         self.logger.info(f"Initialized {self.__class__.__name__} with dynamics: {self.dynamics}")
 
     @abstractmethod
-    def perform_action(self, action: float) -> None:
-        """
-        Performs an action (e.g., charging or discharging) on the grid entity.
-
-        This method must be implemented by all subclasses, defining how the entity responds
-        to a given action.
-
-        Args:
-            action (float): The action to perform. The meaning of the action depends on the entity.
-                            For example, positive values might indicate charging, while negative
-                            values indicate discharging for a Battery.
-        """
-        pass
-
-    @abstractmethod
     def get_state(self) -> float:
         """
         Retrieves the current state of the grid entity.
@@ -83,26 +78,9 @@ class ElementaryGridEntity(GridEntity):
         """
         pass
 
-    @abstractmethod
-    def update(self, time: float, action: float = 0.0) -> None:
-        """
-        Updates the state of the grid entity based on the current time and action.
-
-        This method must be implemented by all subclasses, defining how the entity's state
-        evolves over time and in response to actions.
-
-        Args:
-            time (float): The current time as a fraction of the day (0 to 1).
-            action (float, optional): The action to perform (default is 0.0).
-                                      The meaning of the action depends on the entity.
-        """
-        pass
-
-
 class CompositeGridEntity(GridEntity):
     """
     Represents a composite grid entity composed of multiple sub-entities.
-
     Manages actions and updates across all sub-entities and aggregates their states.
     """
 
@@ -160,21 +138,6 @@ class CompositeGridEntity(GridEntity):
             states[identifier] = state
             self.logger.debug(f"State of '{identifier}': {state}")
         return states
-
-    def update(self, time: float, actions: Dict[str, float] = {}) -> None:
-        """
-        Updates all sub-entities based on the current time and their respective actions.
-
-        Args:
-            time (float): The current time as a fraction of the day (0 to 1).
-            actions (Dict[str, float], optional): A dictionary of actions for each sub-entity.
-        """
-        self.logger.debug(f"Updating CompositeGridEntity with time: {time} and actions: {actions}")
-        for identifier, entity in self.sub_entities.items():
-            action = actions.get(identifier, 0.0)
-            self.logger.info(f"Updating '{identifier}' with action: {action}")
-            entity.update(time, action)
-        self.logger.info("All sub-entities have been updated.")
 
     def reset(self) -> None:
         """

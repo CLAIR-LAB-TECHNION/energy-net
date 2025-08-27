@@ -1,7 +1,7 @@
 # dynamics/consumption_dynamics_det.py
 
 from typing import Any, Dict
-from original.dynamics.energy_dynamcis import ModelBasedDynamics
+from energy_net.dynamcis import ModelBasedDynamics
 import math
 
 

@@ -270,7 +270,7 @@ class TestPCSUnit(unittest.TestCase):
     def setUp(self):
         # Define configuration for PCSUnit
         self.pcs_config: Dict[str, Any] = {
-            'battery': {
+            'storage': {
                 'dynamic_type': 'model_based',
                 'model_type': 'deterministic_battery',
                 'model_parameters': {
@@ -321,7 +321,7 @@ class TestPCSUnit(unittest.TestCase):
     def test_initialization_missing_parameters(self):
         # Test that PCSUnit raises AssertionError if configuration parameters are missing
         incomplete_config: Dict[str, Any] = {
-            'battery': {
+            'storage': {
                 'dynamic_type': 'model_based',
                 'model_type': 'deterministic_battery',
                 'model_parameters': {
@@ -403,7 +403,7 @@ class TestPCSUnit(unittest.TestCase):
 
 #         # Define configuration for PCSUnit
 #         self.pcs_config: Dict[str, Any] = {
-#             'battery': {
+#             'storage': {
 #                 'min': 0.0,
 #                 'max': 60.0,
 #                 'charge_rate_max': 4.0,
@@ -429,15 +429,15 @@ class TestPCSUnit(unittest.TestCase):
 #         )
 
 #     def test_integration_charge_and_discharge(self):
-#         # Charge the battery
+#         # Charge the storage
 #         self.pcs_unit.update(time=0.5, battery_action=3.0)  # Charge 3.0 MW
 #         expected_energy_after_charge = 30.0 + 3.0 * 0.4  # 30 + 1.2 = 31.2
-#         self.assertAlmostEqual(self.pcs_unit.battery.get_state(), expected_energy_after_charge, places=5)
+#         self.assertAlmostEqual(self.pcs_unit.storage.get_state(), expected_energy_after_charge, places=5)
 
-#         # Discharge the battery
+#         # Discharge the storage
 #         self.pcs_unit.update(time=0.5, battery_action=-1.5)  # Discharge 1.5 MW
 #         expected_energy_after_discharge = 31.2 - 1.5 * 0.6  # 31.2 - 0.9 = 30.3
-#         self.assertAlmostEqual(self.pcs_unit.battery.get_state(), expected_energy_after_discharge, places=5)
+#         self.assertAlmostEqual(self.pcs_unit.storage.get_state(), expected_energy_after_discharge, places=5)
 
 #     def test_integration_reset(self):
 #         # Perform some actions
@@ -446,7 +446,7 @@ class TestPCSUnit(unittest.TestCase):
 
 #         # Reset PCSUnit
 #         self.pcs_unit.reset()
-#         self.assertEqual(self.pcs_unit.battery.get_state(), 30.0)
+#         self.assertEqual(self.pcs_unit.storage.get_state(), 30.0)
 #         self.assertEqual(self.pcs_unit.production_unit.get_state(), 0.0)
 #         self.assertEqual(self.pcs_unit.consumption_unit.get_state(), 0.0)
 

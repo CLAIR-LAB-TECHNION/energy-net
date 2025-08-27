@@ -24,7 +24,7 @@ class Battery(ElementaryGridEntity):
             AssertionError: If required configuration parameters are missing.
         """
         super().__init__(dynamics, log_file)
-        
+
         # Set up logger
         self.logger = setup_logger('Battery', log_file)
         self.logger.info("Initializing Battery component.")
@@ -70,7 +70,7 @@ class Battery(ElementaryGridEntity):
         )
         self.logger.info(f"Battery energy level changed from {previous_energy} MWh to {self.energy_level} MWh")
         self.energy_change = self.energy_level - previous_energy
-        
+
     def get_state(self) -> float:
         """
         Retrieves the current energy level of the storage.
@@ -97,7 +97,7 @@ class Battery(ElementaryGridEntity):
     def reset(self, initial_level: Optional[float] = None) -> None:
         """
         Resets the storage to specified or default initial level.
-        
+
         Args:
             initial_level: Optional override for initial energy level
         """

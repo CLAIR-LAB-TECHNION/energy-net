@@ -5,12 +5,12 @@ from typing import Any, Dict, Optional, List
 from original.components.storage_devices.battery import Battery
 from original.components.production_devices.production_unit import ProductionUnit
 from original.components.consumption_devices.consumption_unit import ConsumptionUnit
-from original.dynamics.energy_dynamcis import EnergyDynamics
-from original.grid_entity import CompositeGridEntity
-from original.dynamics.storage_dynamics.battery_dynamics_det import DeterministicBattery
+from energy_net.dynamcis import EnergyDynamics
+from energy_net.grid_entity import CompositeGridEntity
+from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from original.dynamics.production_dynamics.production_dynmaics_det import DeterministicProduction
 from original.dynamics.consumption_dynamics.consumption_dynamics_det import DeterministicConsumption
-from original.dynamics.energy_dynamcis import DataDrivenDynamics
+from energy_net.dynamcis import DataDrivenDynamics
 
 
 
@@ -19,7 +19,7 @@ class PCSUnit(CompositeGridEntity):
     """
     Power Conversion System Unit (PCSUnit) managing Battery, ProductionUnit, and ConsumptionUnit.
 
-    This class integrates the battery, production, and consumption components, allowing for
+    This class integrates the storage, production, and consumption components, allowing for
     coordinated updates and state management within the smart grid simulation.
     Inherits from CompositeGridEntity to manage its sub-entities.
     """
@@ -36,7 +36,7 @@ class PCSUnit(CompositeGridEntity):
         sub_entities: List[Battery | ProductionUnit | ConsumptionUnit] = []
 
         # Initialize Battery
-        battery_config = config.get('battery', {})
+        battery_config = config.get('storage', {})
         battery_dynamics_type = battery_config.get('dynamic_type', 'model_based')
         if battery_dynamics_type == 'model_based':
             battery_model_type = battery_config.get('model_type', 'deterministic_battery')
@@ -46,7 +46,7 @@ class PCSUnit(CompositeGridEntity):
                     model_parameters=battery_config.get('model_parameters', {})
                 )
             else:
-                raise ValueError(f"Unsupported battery model type: {battery_model_type}")
+                raise ValueError(f"Unsupported storage model type: {battery_model_type}")
         elif battery_dynamics_type == 'data_driven':
 
             battery_dynamics: EnergyDynamics = DataDrivenDynamics(
@@ -54,7 +54,7 @@ class PCSUnit(CompositeGridEntity):
                 value_column=battery_config.get('value_column', 'battery_value')
             )
         else:
-            raise ValueError(f"Unsupported battery dynamic type: {battery_dynamics_type}")
+            raise ValueError(f"Unsupported storage dynamic type: {battery_dynamics_type}")
 
         battery = Battery(dynamics=battery_dynamics, config=battery_config.get('model_parameters', {}), log_file=log_file)
         sub_entities.append(battery)
@@ -116,7 +116,7 @@ class PCSUnit(CompositeGridEntity):
         
     def update(self, time: float, battery_action: float, consumption_action: float = None, production_action: float = None, step: int = None) -> None:
         """
-        Updates the state of all components based on the current time and battery action.
+        Updates the state of all components based on the current time and storage action.
 
         Args:
             time (float): Current time as a fraction of the day (0 to 1).
@@ -190,9 +190,9 @@ class PCSUnit(CompositeGridEntity):
             return 0.0
 
     def reset(self, initial_battery_level: Optional[float] = None) -> None:
-        """Resets all components with optional initial battery level"""
+        """Resets all components with optional initial storage level"""
         for entity in self.sub_entities.values():
             if isinstance(entity, Battery) and initial_battery_level is not None:
-                entity.reset(initial_battery_level)  # Pass initial level to battery
+                entity.reset(initial_battery_level)  # Pass initial level to storage
             else:
                 entity.reset()  # Normal reset for other components

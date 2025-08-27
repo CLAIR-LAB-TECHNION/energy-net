@@ -1,8 +1,8 @@
 # components/consumption_unit.py
 
 from typing import Any, Dict, Optional
-from original.grid_entity import ElementaryGridEntity
-from original.dynamics.energy_dynamcis import EnergyDynamics
+from energy_net.grid_entity import ElementaryGridEntity
+from energy_net.dynamcis import EnergyDynamics
 from original.utils.logger import setup_logger  # Import the logger setup
 
 

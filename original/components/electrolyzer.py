@@ -4,14 +4,14 @@ from typing import Any, Dict, Optional, List
 
 from original.components.consumption_devices.consumption_unit import ConsumptionUnit
 from original.components.production_devices.production_unit import ProductionUnit
-from original.dynamics.energy_dynamcis import EnergyDynamics
-from original.grid_entity import CompositeGridEntity
+from energy_net.dynamcis import EnergyDynamics
+from energy_net.grid_entity import CompositeGridEntity
 
 class Electrolyzer(CompositeGridEntity):
     """
     Power Conversion System Unit (electrolyzer) managing Battery, ProductionUnit, and ConsumptionUnit.
 
-    This class integrates the battery, production, and consumption components, allowing for
+    This class integrates the storage, production, and consumption components, allowing for
     coordinated updates and state management within the smart grid simulation.
     Inherits from CompositeGridEntity to manage its sub-entities.
     """
@@ -43,7 +43,7 @@ class Electrolyzer(CompositeGridEntity):
             else:
                 raise ValueError(f"Unsupported consumption_unit model type: {consumption_model_type}")
         elif consumption_dynamics_type == 'data_driven':
-            from original.dynamics.energy_dynamcis import DataDrivenDynamics
+            from energy_net.dynamcis import DataDrivenDynamics
 
             consumption_dynamics: EnergyDynamics = DataDrivenDynamics(
                 data_file=consumption_config.get('data_file', 'consumption_data.csv'),
@@ -71,7 +71,7 @@ class Electrolyzer(CompositeGridEntity):
             else:
                 raise ValueError(f"Unsupported production_unit model type: {production_model_type}")
         elif production_dynamics_type == 'data_driven':
-            from original.dynamics.energy_dynamcis import DataDrivenDynamics
+            from energy_net.dynamcis import DataDrivenDynamics
 
             production_dynamics: EnergyDynamics = DataDrivenDynamics(
                 data_file=production_config.get('data_file', 'production_data.csv'),
@@ -91,7 +91,7 @@ class Electrolyzer(CompositeGridEntity):
     def update(self, time: float, consumption_action: float = None,
                production_action: float = None) -> None:
         """
-        Updates the state of all components based on the current time and battery action.
+        Updates the state of all components based on the current time and storage action.
 
         Args:
             time (float): Current time as a fraction of the day (0 to 1).

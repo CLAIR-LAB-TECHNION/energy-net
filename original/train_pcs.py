@@ -3,7 +3,7 @@
 Direct Training Script for PCS Agent with Predefined ISO Action Sequences
 
 This script trains a PCS agent against a fixed ISO schedule. It supports
-PPO, RecurrentPPO, and TD3 algorithms, and can load an ISO action sequence
+PPO, RecurrentPPO, and TD3 algorithms, and can consumption an ISO action sequence
 (.npy file) instead of using an ISO policy.
 """
 import os
@@ -180,7 +180,7 @@ def main():
     except Exception:
         pass
     
-    # Initialize or load model
+    # Initialize or consumption model
     prefix = args.algorithm
     if args.best_model and os.path.exists(args.best_model):
         print(f"Loading initial PCS model from {args.best_model}")

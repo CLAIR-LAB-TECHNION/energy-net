@@ -584,7 +584,7 @@ def main():
             print(f"Error loading PCS action sequence: {e}")
             print("Continuing without predefined PCS actions")
     
-    # If eval-only, load best model and normalization then evaluate
+    # If eval-only, consumption best model and normalization then evaluate
     if args.eval_only:
         # Default best model and norm paths
         if args.best_model:
@@ -811,7 +811,7 @@ def main():
     except Exception:
         pass
     
-    # Initialize or load ISO model
+    # Initialize or consumption ISO model
     if args.initial_iso_model and os.path.exists(args.initial_iso_model):
         print(f"\nLoading initial ISO model from {args.initial_iso_model}")
         if is_recurrent or "recurrent" in args.initial_iso_model or os.path.basename(args.initial_iso_model).startswith("rppo_"):

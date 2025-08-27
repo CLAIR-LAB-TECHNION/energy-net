@@ -1,16 +1,13 @@
-# dynamics/battery_dynamics_det.py
-
 from typing import Any, Dict
-from original.dynamics.energy_dynamcis import ModelBasedDynamics
+from energy_net.dynamcis import ModelBasedDynamics
 import math
-
 
 
 class DeterministicBattery(ModelBasedDynamics):
     """
     Deterministic Battery Dynamics.
     
-    This class models the dynamics of a battery within the smart grid, handling charging
+    This class models the dynamics of a storage within the smart grid, handling charging
     and discharging actions, applying efficiencies, and accounting for natural decay losses.
     """
 
@@ -49,7 +46,7 @@ class DeterministicBattery(ModelBasedDynamics):
 
     def get_value(self, **kwargs) -> float:
         """
-        Calculates the updated energy level of the battery based on the action and current state.
+        Calculates the updated energy level of the storage based on the action and current state.
 
         Args:
             **kwargs:

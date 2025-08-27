@@ -62,7 +62,7 @@ def _load_demand_data(data_file: str) -> Dict[float, float]:
         with open(data_file, 'r') as f:
             data = yaml.safe_load(f)
     except Exception as e:
-        logging.error(f"Failed to load demand data from {data_file}: {e}")
+        logging.error(f"Failed to consumption demand data from {data_file}: {e}")
         # Return empty data as fallback
         return {}
     

@@ -114,7 +114,7 @@ class ActionTrackingCallback(BaseCallback):
             if isinstance(key, str) and key.startswith('background_'):
                 step_data[key] = value
         
-        # Debug battery level
+        # Debug storage level
         if self.verbose > 0 and self.steps_in_episode % 10 == 0:
             print(f"\nStep {self.steps_in_episode} Battery Level: {step_data['battery_level']}")
             if 'pcs' in info:
@@ -528,7 +528,7 @@ def plot_iso_prices(episode_data, episode_num, output_dir):
 
 def plot_pcs_actions(episode_data, episode_num, output_dir):
     """
-    Plot PCS actions and battery levels.
+    Plot PCS actions and storage levels.
     """
     # Extract data
     steps = range(len(episode_data))

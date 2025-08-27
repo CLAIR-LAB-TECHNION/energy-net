@@ -15,7 +15,7 @@ Key responsibilities:
 
 The controller follows a sequential flow where:
 1. ISO agent sets energy prices
-2. PCS agent responds with battery control actions
+2. PCS agent responds with storage control actions
 3. Energy exchanges occur
 4. State updates and rewards are calculated
 
@@ -51,7 +51,7 @@ class EnergyNetController:
     ISO (Independent System Operator) and PCS (Power Consumption & Storage) components.
     
     This controller manages the sequential simulation of energy market dynamics,
-    where the ISO sets prices and the PCS responds with battery actions.
+    where the ISO sets prices and the PCS responds with storage actions.
     
     The controller maintains a single timeline and shared state variables,
     eliminating the need for manual transfers between separate environments.
@@ -192,7 +192,7 @@ class EnergyNetController:
             logger=self.logger
         )
         
-        # If using data-driven demand pattern, load raw data for visualization
+        # If using data-driven demand pattern, consumption raw data for visualization
         if self.demand_pattern == DemandPattern.DATA_DRIVEN and self.demand_data_path:
             try:
                 from original.dynamics.consumption_dynamics.demand_patterns import get_raw_demand_data
@@ -203,7 +203,7 @@ class EnergyNetController:
             except Exception as e:
                 self.logger.warning(f"Error loading raw demand data for visualization: {e}")
         
-        # Initialize battery state
+        # Initialize storage state
         self.battery_level = self.battery_manager.get_level()
         
         self.logger.info("EnergyNetController initialized successfully")
@@ -214,7 +214,7 @@ class EnergyNetController:
             with open(config_path, 'r') as file:
                 return yaml.safe_load(file)
         except Exception as e:
-            self.logger.error(f"Failed to load config from {config_path}: {e}")
+            self.logger.error(f"Failed to consumption config from {config_path}: {e}")
             raise
 
     def _init_iso_components(self, dispatch_config: Optional[Dict[str, Any]]):
@@ -260,8 +260,8 @@ class EnergyNetController:
         )
         self.logger.info("Initialized PCSUnit with all components")
         
-        # Initialize battery manager with reference to PCSUnit
-        energy_config = self.pcs_unit_config['battery']['model_parameters']
+        # Initialize storage manager with reference to PCSUnit
+        energy_config = self.pcs_unit_config['storage']['model_parameters']
         self.battery_manager = BatteryManager(
             battery_config=energy_config,
             pcsunit=self.pcs_unit,  # Pass PCSUnit reference for full functionality
@@ -288,7 +288,7 @@ class EnergyNetController:
             logger=self.logger
         )
         
-        # If using data-driven demand pattern, load raw data for visualization
+        # If using data-driven demand pattern, consumption raw data for visualization
         if self.demand_pattern == DemandPattern.DATA_DRIVEN and self.demand_data_path:
             try:
                 from original.dynamics.consumption_dynamics.demand_patterns import get_raw_demand_data
@@ -299,7 +299,7 @@ class EnergyNetController:
             except Exception as e:
                 self.logger.warning(f"Error loading raw demand data for visualization: {e}")
         
-        # Initialize battery state
+        # Initialize storage state
         self.battery_level = self.battery_manager.get_level()
         
         self.logger.info("PCS components initialized")
@@ -344,9 +344,9 @@ class EnergyNetController:
         
         # PCS observation space
         pcs_obs_config = self.pcs_unit_config.get('observation_space', {})
-        energy_config = self.pcs_unit_config['battery']['model_parameters']
+        energy_config = self.pcs_unit_config['storage']['model_parameters']
         
-        # Get battery level bounds from battery config if specified
+        # Get storage level bounds from storage config if specified
         battery_level_config = pcs_obs_config.get('battery_level', {})
         battery_min = energy_config['min'] if battery_level_config.get('min') == "from_battery_config" else battery_level_config.get('min', energy_config['min'])
         battery_max = energy_config['max'] if battery_level_config.get('max') == "from_battery_config" else battery_level_config.get('max', energy_config['max'])
@@ -382,7 +382,7 @@ class EnergyNetController:
         )
         
         # PCS action space
-        energy_config = self.pcs_unit_config['battery']['model_parameters']
+        energy_config = self.pcs_unit_config['storage']['model_parameters']
         self.pcs_action_space = spaces.Box(
             low=np.array([
                 -energy_config['discharge_rate_max']
@@ -498,7 +498,7 @@ class EnergyNetController:
             self.logger.info(
                 f"Step {self.count}: time={self.current_time:.2f}, "
                 f"ISO reward={iso_reward:.4f}, PCS reward={pcs_reward:.4f}, "
-                f"battery={self.battery_level:.2f}, prices: buy=${self.iso_buy_price:.2f}, sell=${self.iso_sell_price:.2f}"
+                f"storage={self.battery_level:.2f}, prices: buy=${self.iso_buy_price:.2f}, sell=${self.iso_sell_price:.2f}"
             )
         
         # Return observation for both trained_models, rewards, termination flags, and info
@@ -544,7 +544,7 @@ class EnergyNetController:
         return self.iso_buy_price, self.iso_sell_price, dispatch
 
     def _process_pcs_action(self, pcs_action):
-        """Process PCS action for battery control"""
+        """Process PCS action for storage control"""
         # Check if using multi-action mode
         if self.multi_action:
             # Use PCSUnit to process the multi-action
@@ -554,24 +554,24 @@ class EnergyNetController:
             # Get energy needed from the PCSUnit result
             energy_needed = result.get('grid_exchange', 0.0)
             
-            # Update battery level from PCSUnit
+            # Update storage level from PCSUnit
             self.battery_level = self.pcs_unit.get_battery_level()
         else:
             # Legacy single-action mode
-            # Extract battery command (charging/discharging rate)
+            # Extract storage command (charging/discharging rate)
             if isinstance(pcs_action, np.ndarray) and pcs_action.shape == (1,):
                 battery_command = pcs_action[0]
             else:
                 battery_command = pcs_action
             
-            # CRITICAL FIX: Directly update the PCSUnit with the battery action
+            # CRITICAL FIX: Directly update the PCSUnit with the storage action
             time_fraction = self.count * self.time_step_duration / self.env_config['time']['minutes_per_day']
             self.pcs_unit.update(time=time_fraction, battery_action=battery_command, step=self.count)
             
             # Calculate energy change using the correct method
             energy_change, new_battery_level = self.battery_manager.calculate_energy_change(battery_command)
             
-            # Update battery state
+            # Update storage state
             actual_energy_change = self.battery_manager.update(battery_command)
             self.battery_level = self.battery_manager.get_level()
             
@@ -638,14 +638,14 @@ class EnergyNetController:
                 self.energy_sold += abs(energy_needed)
                 cost = self.iso_sell_price * energy_needed  # Note: energy_needed is negative
         
-        # Update metrics with energy exchange and battery level
+        # Update metrics with energy exchange and storage level
         self.metrics.update_energy_exchange(energy_needed, cost)
         self.metrics.update_battery_level(self.battery_level)
         
         # Track the action in metrics
         self.metrics.pcs_metrics['actions'].append(pcs_action)
         
-        self.logger.debug(f"PCS energy exchange: {energy_needed}, cost: {cost}, battery level: {self.battery_level:.4f}")
+        self.logger.debug(f"PCS energy exchange: {energy_needed}, cost: {cost}, storage level: {self.battery_level:.4f}")
 
     def _update_time_and_demand(self):
         """Update time and predict demand for this step"""
@@ -711,7 +711,7 @@ class EnergyNetController:
         pcs_cost = self.metrics.calculate_total_pcs_cost()
         self.metrics.pcs_metrics['costs'].append(pcs_cost)
         
-        # Calculate and track battery utilization
+        # Calculate and track storage utilization
         battery_utilization = self.metrics.calculate_battery_utilization()
         self.metrics.pcs_metrics['battery_utilization'].append(battery_utilization)
         

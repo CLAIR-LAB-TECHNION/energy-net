@@ -4,7 +4,7 @@ from original.components import pcsunit
 from original.model.state import State
 from energy_net import EnergyAction
 from original.model.rewards.base_reward import BaseReward
-from original.grid_entity import GridEntity
+from energy_net.grid_entity import GridEntity
 from original.stratigic_entity import StrategicEntity
 
 

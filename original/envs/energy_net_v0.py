@@ -14,7 +14,7 @@ Key features:
 
 This environment serves as the main interface between RL algorithms and the
 underlying energy net simulation, enabling the training of trained_models that can
-efficiently manage electricity markets and battery storage.
+efficiently manage electricity markets and storage storage.
 """
 
 import gymnasium as gym
@@ -40,7 +40,7 @@ class EnergyNetV0(gym.Env):
     The environment uses a unified EnergyNetController to manage the sequential
     simulation, where:
     1. ISO agent sets energy prices
-    2. PCS agent responds with battery control actions
+    2. PCS agent responds with storage control actions
     3. Energy exchanges occur
     4. State updates and rewards are calculated
     

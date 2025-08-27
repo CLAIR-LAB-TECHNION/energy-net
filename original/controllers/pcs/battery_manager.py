@@ -1,8 +1,8 @@
 """
 Battery Manager Module
 
-This module handles all battery-related operations for the PCS controller.
-It encapsulates the logic for battery state updates, charging/discharging operations,
+This module handles all storage-related operations for the PCS controller.
+It encapsulates the logic for storage state updates, charging/discharging operations,
 and physical constraints enforcement.
 
 Key features:
@@ -12,7 +12,7 @@ Key features:
 4. Battery capacity constraints
 5. Compatibility with the PCSUnit component
 
-This module enables realistic simulation of battery storage systems in 
+This module enables realistic simulation of storage storage systems in
 the PCS environment, with physically accurate constraints and behaviors.
 """
 
@@ -23,17 +23,17 @@ from original.components.pcsunit import PCSUnit
 
 class BatteryManager:
     """
-    Manages battery operations for the PCS controller.
+    Manages storage operations for the PCS controller.
     
     This class is responsible for:
-    1. Maintaining battery state of charge
+    1. Maintaining storage state of charge
     2. Processing charge/discharge actions
     3. Enforcing physical constraints and limitations
     4. Calculating actual energy exchanges
     5. Supporting both standalone operation and integration with PCSUnit
     
     By extracting this logic from the PCS controller, we make the controller cleaner
-    and more focused on its core responsibilities, while making battery operations
+    and more focused on its core responsibilities, while making storage operations
     more maintainable and testable.
     """
     
@@ -44,26 +44,26 @@ class BatteryManager:
         logger: Optional[logging.Logger] = None
     ):
         """
-        Initialize the battery manager.
+        Initialize the storage manager.
         
         Args:
-            battery_config: Configuration for the battery including capacity and efficiency
+            battery_config: Configuration for the storage including capacity and efficiency
                 Expected keys include:
-                - min: Minimum battery level (default: 0.0)
-                - max: Maximum battery capacity (default: 100.0)
+                - min: Minimum storage level (default: 0.0)
+                - max: Maximum storage capacity (default: 100.0)
                 - charge_rate_max: Maximum charge rate in MWh/step (default: 10.0)
                 - discharge_rate_max: Maximum discharge rate in MWh/step (default: 10.0)
                 - charge_efficiency: Efficiency factor for charging (0-1, default: 1.0)
                 - discharge_efficiency: Efficiency factor for discharging (0-1, default: 1.0)
-                - init: Initial battery level (default: 0.0)
+                - init: Initial storage level (default: 0.0)
                 - lifetime_constant: Battery degradation parameter (default: 100.0)
-            pcsunit: Reference to the PCSUnit instance to use for battery operations
+            pcsunit: Reference to the PCSUnit instance to use for storage operations
             logger: Optional logger for tracking operations
         """
         self.logger = logger
         self.pcsunit = pcsunit
         
-        # Extract battery parameters - use PCSUnit.battery if available, otherwise use config
+        # Extract storage parameters - use PCSUnit.storage if available, otherwise use config
         if self.pcsunit:
             self.battery_min = self.pcsunit.battery.energy_min
             self.battery_max = self.pcsunit.battery.energy_max
@@ -95,10 +95,10 @@ class BatteryManager:
     
     def calculate_energy_change(self, action: float) -> Tuple[float, float]:
         """
-        Calculate energy change from a battery action.
+        Calculate energy change from a storage action.
         
         This function determines how much energy will actually be added to or removed
-        from the battery based on the requested action, taking into account:
+        from the storage based on the requested action, taking into account:
         - Physical rate limits (charge_rate_max, discharge_rate_max)
         - Efficiency losses during charging/discharging
         - Available capacity and current state of charge
@@ -110,13 +110,13 @@ class BatteryManager:
         Returns:
             Tuple containing:
             - energy_change: Actual energy change (positive for charging, negative for discharging)
-            - new_battery_level: Predicted new battery level after applying the action
+            - new_battery_level: Predicted new storage level after applying the action
         """
         if self.pcsunit:
             # Get current state from PCSUnit
             current_level = self.pcsunit.battery.energy_level
             
-            # Get constraints from PCSUnit battery
+            # Get constraints from PCSUnit storage
             if action > 0:  # Charging
                 # Limit to maximum charge rate
                 action = min(action, self.pcsunit.battery.charge_rate_max)
@@ -124,7 +124,7 @@ class BatteryManager:
                 # Apply charging efficiency
                 energy_added = action * self.pcsunit.battery.charge_efficiency
                 
-                # Ensure we don't exceed battery capacity
+                # Ensure we don't exceed storage capacity
                 space_available = self.pcsunit.battery.energy_max - current_level
                 energy_change = min(energy_added, space_available)
                 
@@ -140,10 +140,10 @@ class BatteryManager:
             else:  # No action
                 energy_change = 0.0
             
-            # Calculate predicted new battery level
+            # Calculate predicted new storage level
             new_battery_level = current_level + energy_change
             
-            # Ensure battery level stays within bounds
+            # Ensure storage level stays within bounds
             new_battery_level = max(self.pcsunit.battery.energy_min, min(new_battery_level, self.pcsunit.battery.energy_max))
             
             if self.logger:
@@ -161,7 +161,7 @@ class BatteryManager:
                 # Apply charging efficiency
                 energy_added = action * self.charge_efficiency
                 
-                # Ensure we don't exceed battery capacity
+                # Ensure we don't exceed storage capacity
                 space_available = self.battery_max - self.battery_level
                 energy_change = min(energy_added, space_available)
                 
@@ -177,10 +177,10 @@ class BatteryManager:
             else:  # No action
                 energy_change = 0.0
             
-            # Calculate new battery level
+            # Calculate new storage level
             new_battery_level = self.battery_level + energy_change
             
-            # Ensure battery level stays within bounds
+            # Ensure storage level stays within bounds
             new_battery_level = max(self.battery_min, min(new_battery_level, self.battery_max))
             
             if self.logger:
@@ -191,10 +191,10 @@ class BatteryManager:
     
     def update(self, action: float) -> float:
         """
-        Update battery state based on action.
+        Update storage state based on action.
         
-        This method applies the action to the battery, updating its state of charge
-        and tracking energy changes. It handles both direct battery management and
+        This method applies the action to the storage, updating its state of charge
+        and tracking energy changes. It handles both direct storage management and
         operation via the PCSUnit component.
         
         Args:
@@ -210,7 +210,7 @@ class BatteryManager:
             # Store previous level for tracking (use the exact value, not rounded)
             self.previous_level = self.pcsunit.battery.energy_level
             
-            # IMPORTANT: Get the energy change directly from the PCSUnit battery
+            # IMPORTANT: Get the energy change directly from the PCSUnit storage
             # This ensures we get the correct value even if there's precision issues
             energy_change = self.pcsunit.battery.energy_change
             current_level = self.pcsunit.battery.energy_level
@@ -243,16 +243,16 @@ class BatteryManager:
     
     def validate_action(self, action: float) -> float:
         """
-        Validate and constrain a proposed battery action based on current state.
+        Validate and constrain a proposed storage action based on current state.
         
-        This method ensures that battery actions respect physical constraints:
-        - Prevents discharging when battery is at minimum level
-        - Scales down discharge actions when battery is nearly empty
-        - Limits charging when battery is at maximum capacity
+        This method ensures that storage actions respect physical constraints:
+        - Prevents discharging when storage is at minimum level
+        - Scales down discharge actions when storage is nearly empty
+        - Limits charging when storage is at maximum capacity
         - Enforces charge/discharge rate limits
         
         Args:
-            action: Proposed battery action (positive for charging, negative for discharging)
+            action: Proposed storage action (positive for charging, negative for discharging)
             
         Returns:
             float: Validated action within allowable bounds
@@ -263,17 +263,17 @@ class BatteryManager:
         if self.pcsunit:
             current_level = self.pcsunit.battery.energy_level
             
-            # Check if battery is effectively at min level with epsilon tolerance
+            # Check if storage is effectively at min level with epsilon tolerance
             if current_level <= self.pcsunit.battery.energy_min + EPSILON and action < 0:
                 if self.logger:
                     self.logger.warning(
-                        f"STRICTLY PREVENTED discharge action {action:.4f} at min battery level "
+                        f"STRICTLY PREVENTED discharge action {action:.4f} at min storage level "
                         f"({current_level:.6f}/{self.pcsunit.battery.energy_min:.6f})"
                     )
                 # CRITICAL FIX: Return exactly 0.0 instead of calculating any discharge amount
                 return 0.0
             
-            # Additional check for near-empty battery (within 1% of minimum)
+            # Additional check for near-empty storage (within 1% of minimum)
             small_amount_threshold = (self.pcsunit.battery.energy_max - self.pcsunit.battery.energy_min) * 0.01
             if current_level <= self.pcsunit.battery.energy_min + small_amount_threshold and action < 0:
                 # Scale down discharge action based on how close we are to the minimum
@@ -282,15 +282,15 @@ class BatteryManager:
                 if self.logger:
                     self.logger.warning(
                         f"Near minimum: Scaled discharge from {action:.4f} to {scaled_action:.4f} "
-                        f"(battery level: {current_level:.6f}, min: {self.pcsunit.battery.energy_min:.6f})"
+                        f"(storage level: {current_level:.6f}, min: {self.pcsunit.battery.energy_min:.6f})"
                     )
                 action = scaled_action
             
-            # Check if battery is effectively at max level with epsilon tolerance
+            # Check if storage is effectively at max level with epsilon tolerance
             if current_level >= self.pcsunit.battery.energy_max - EPSILON and action > 0:
                 if self.logger:
                     self.logger.warning(
-                        f"Prevented charge action {action:.2f} at max battery level "
+                        f"Prevented charge action {action:.2f} at max storage level "
                         f"({current_level:.2f}/{self.pcsunit.battery.energy_max:.2f})"
                     )
                 # Calculate maximum possible charge (instead of returning 0)
@@ -335,7 +335,7 @@ class BatteryManager:
             if self.battery_level <= self.battery_min + EPSILON and action < 0:
                 if self.logger:
                     self.logger.warning(
-                        f"STRICTLY PREVENTED discharge action {action:.4f} at min battery level "
+                        f"STRICTLY PREVENTED discharge action {action:.4f} at min storage level "
                         f"({self.battery_level:.6f}/{self.battery_min:.6f})"
                     )
                 # CRITICAL FIX: Return exactly 0.0 instead of calculating any discharge amount
@@ -348,7 +348,7 @@ class BatteryManager:
                 
                 if self.logger:
                     self.logger.warning(
-                        f"Limited charge action {action:.2f} at max battery level "
+                        f"Limited charge action {action:.2f} at max storage level "
                         f"({self.battery_level:.2f}/{self.battery_max:.2f}) to {validated_action:.2f}"
                     )
                 return validated_action
@@ -358,7 +358,7 @@ class BatteryManager:
                 # Ensure we don't exceed maximum charge rate
                 validated_action = min(action, self.charge_rate_max)
                 
-                # Ensure we don't exceed battery capacity
+                # Ensure we don't exceed storage capacity
                 max_charge = (self.battery_max - self.battery_level) / self.charge_efficiency
                 validated_action = min(validated_action, max_charge)
                 
@@ -374,7 +374,7 @@ class BatteryManager:
                 if validated_action != action and self.logger:
                     self.logger.warning(
                         f"Discharge action {action:.2f} exceeds available capacity "
-                        f"(battery level: {self.battery_level:.2f}), limiting to {validated_action:.2f}"
+                        f"(storage level: {self.battery_level:.2f}), limiting to {validated_action:.2f}"
                     )
             else:
                 validated_action = 0.0
@@ -383,18 +383,18 @@ class BatteryManager:
     
     def get_state(self) -> Dict[str, float]:
         """
-        Get current battery state.
+        Get current storage state.
         
-        Returns a comprehensive dictionary with all relevant battery state information,
+        Returns a comprehensive dictionary with all relevant storage state information,
         including current level, energy change, available capacity, and usage ratios.
         
         Returns:
             Dictionary containing:
-            - battery_level: Current battery state of charge (MWh)
+            - battery_level: Current storage state of charge (MWh)
             - energy_change: Most recent energy change (MWh)
             - available_capacity: Remaining capacity available (MWh)
             - used_capacity_ratio: Fraction of total capacity currently used (0-1)
-            - previous_level: Previous battery level before last update (MWh)
+            - previous_level: Previous storage level before last update (MWh)
         """
         if self.pcsunit:
             current_level = self.pcsunit.battery.energy_level
@@ -424,13 +424,13 @@ class BatteryManager:
     
     def get_level(self) -> float:
         """
-        Get current battery level.
+        Get current storage level.
         
-        Provides the current battery state of charge, either from the internal
+        Provides the current storage state of charge, either from the internal
         tracking or from the PCSUnit component if being used.
         
         Returns:
-            float: Current battery level in MWh
+            float: Current storage level in MWh
         """
         # Always use the most up-to-date value
         if self.pcsunit:
@@ -440,9 +440,9 @@ class BatteryManager:
     
     def reset(self, initial_level: Optional[float] = None) -> None:
         """
-        Reset battery to initial or specified level.
+        Reset storage to initial or specified level.
         
-        This method resets the battery to either a specified level or the default
+        This method resets the storage to either a specified level or the default
         initial level from configuration. All tracking variables are also reset.
         
         Args:
@@ -480,9 +480,9 @@ class BatteryManager:
                 
     def get_last_action(self) -> float:
         """
-        Get the most recent battery action.
+        Get the most recent storage action.
         
         Returns:
-            float: The most recent battery action (positive for charging, negative for discharging)
+            float: The most recent storage action (positive for charging, negative for discharging)
         """
         return self.last_action

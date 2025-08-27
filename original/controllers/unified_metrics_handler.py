@@ -245,10 +245,10 @@ class UnifiedMetricsHandler:
     
     def update_battery_level(self, battery_level: float) -> None:
         """
-        Update battery level in the metrics tracker.
+        Update storage level in the metrics tracker.
         
         Args:
-            battery_level: Current battery level
+            battery_level: Current storage level
         """
         self.battery_level = battery_level
         self.pcs_metrics['battery_levels'].append(battery_level)
@@ -290,7 +290,7 @@ class UnifiedMetricsHandler:
             latest_cost = self.iso_metrics['total_costs'][-1]
             self.shared_metrics['episode_costs'].append(latest_cost)
         
-        # Track episode battery utilization from current step
+        # Track episode storage utilization from current step
         if self.pcs_metrics['battery_utilization']:
             latest_utilization = self.pcs_metrics['battery_utilization'][-1]
             self.shared_metrics['episode_utilization'].append(latest_utilization)
@@ -388,10 +388,10 @@ class UnifiedMetricsHandler:
     
     def calculate_battery_utilization(self) -> float:
         """
-        Calculate battery utilization metric for PCS reward.
+        Calculate storage utilization metric for PCS reward.
         
         Returns:
-            A value representing battery utilization (higher is better)
+            A value representing storage utilization (higher is better)
         """
         # If we have an external reward function, use it for consistency
         if self.reward_function and hasattr(self.reward_function, 'calculate_battery_utilization'):
@@ -400,8 +400,8 @@ class UnifiedMetricsHandler:
             return distance
             
         # Otherwise, calculate internally
-        # Get battery parameters
-        battery_config = self.pcs_config.get('battery', {}).get('model_parameters', {})
+        # Get storage parameters
+        battery_config = self.pcs_config.get('storage', {}).get('model_parameters', {})
         min_level = battery_config.get('min', 0.0)
         max_level = battery_config.get('max', 1.0)
         optimal_level = (min_level + max_level) / 2

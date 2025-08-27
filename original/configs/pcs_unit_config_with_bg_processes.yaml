@@ -12,8 +12,8 @@ action:
 # Observation space configuration
 observation_space:
   battery_level:
-    min: "from_battery_config"  # Will use battery min from battery config
-    max: "from_battery_config"  # Will use battery max from battery config
+    min: "from_battery_config"  # Will use storage min from storage config
+    max: "from_battery_config"  # Will use storage max from storage config
   time:
     min: 0.0
     max: 1.0

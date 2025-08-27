@@ -1,4 +1,4 @@
-from original.grid_entity import GridEntity
+from energy_net.grid_entity import GridEntity
 from energy_net.agents.agent import Agent
 from original.model.rewards.base_reward import BaseReward
 

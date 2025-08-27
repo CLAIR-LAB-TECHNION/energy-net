@@ -92,7 +92,7 @@ class ProduceAction(EnergyAction):
 @dataclass(frozen=True)
 class ConsumeAction(EnergyAction):
     """
-    Action representing the consumption behavior of a load.
+    Action representing the consumption behavior of a consumption.
     
     Attributes
     ----------
