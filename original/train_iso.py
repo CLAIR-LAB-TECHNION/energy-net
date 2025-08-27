@@ -939,7 +939,7 @@ def main():
         # We'll do a quick evaluation on a few episodes
         print("\nEvaluating current ISO model...")
         
-        # Create test environment
+        # Create tests environment
         eval_env = make_iso_env(
             steps_per_iteration=args.timesteps,
             cost_type=args.cost_type,

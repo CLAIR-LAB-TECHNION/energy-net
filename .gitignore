@@ -50,7 +50,7 @@ wheels/
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# Unit tests / coverage reports
 htmlcov/
 .tox/
 .coverage
@@ -150,6 +150,6 @@ checklink/cookies.txt
 .quarto
 
 
-#test logs
+#tests logs
 *.out.*
 logs/*

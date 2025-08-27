@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 from energy_net.grid_entity import ElementaryGridEntity
-from energy_net.dynamcis import EnergyDynamics
+from energy_net.dynamics import EnergyDynamics
 from original.utils.logger import setup_logger  # Import the logger setup
 
 

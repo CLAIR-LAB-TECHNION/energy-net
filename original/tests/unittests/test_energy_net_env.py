@@ -383,7 +383,7 @@ def _check_for_nested_spaces(obs_space: spaces.Space) -> None:
 
 class TestEnergyNetEnv(unittest.TestCase):
     def setUp(self):
-        """Set up the test environment"""
+        """Set up the tests environment"""
         self.env = EnergyNetV0(
             cost_type=CostType.CONSTANT,
             pricing_policy=PricingPolicy.QUADRATIC,

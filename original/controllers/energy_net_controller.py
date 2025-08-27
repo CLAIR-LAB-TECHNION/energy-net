@@ -764,7 +764,7 @@ class EnergyNetController:
         # Get comprehensive metrics from unified handler
         metrics = self.metrics.get_metrics()
         
-        # Add iso_total_reward at the top level for compatibility with test script
+        # Add iso_total_reward at the top level for compatibility with tests script
         metrics['iso_total_reward'] = self.metrics.total_iso_reward
         
         return metrics

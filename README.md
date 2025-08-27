@@ -21,8 +21,8 @@ Steps:
 git clone https://github.com/CLAIR-LAB-TECHNION/energy-net.git
 cd energy-net
 
-# Install core and test dependencies
-pip install -e .[test]
+# Install core and tests dependencies
+pip install -e .[tests]
 ```
 
 ---

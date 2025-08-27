@@ -1,7 +1,7 @@
 # dynamics/production_dynmaics_det.py
 
 from typing import Any, Dict
-from energy_net.dynamcis import ModelBasedDynamics
+from energy_net.dynamics import ModelBasedDynamics
 import math
 
 

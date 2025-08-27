@@ -8,7 +8,7 @@ def run_all_tests():
     # Get the directory containing this script
     test_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Discover all test files in the tests directory
+    # Discover all tests files in the tests directory
     loader = unittest.TestLoader()
     start_dir = os.path.join(test_dir, 'tests')
     suite = loader.discover(start_dir, pattern='test_*.py')
