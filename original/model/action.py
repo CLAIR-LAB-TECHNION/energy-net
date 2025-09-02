@@ -54,7 +54,7 @@ class StorageAction(EnergyAction):
 @dataclass(frozen=True)
 class ProduceAction(EnergyAction):
     """
-    Action representing the production behavior of a generation unit.
+    Action representing the production behavior of a production unit.
     
     Attributes
     ----------

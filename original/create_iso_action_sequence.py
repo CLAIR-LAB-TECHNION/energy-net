@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument("--pattern-type", type=str, choices=["charge_discharge_cycle", "price_responsive", "yaml_config"],
                         default="charge_discharge_cycle", help="Type of pattern to generate")
     parser.add_argument("--cycle-length", type=int, default=48,
-                        help="Length of a single cycle for pattern generation (default 48 = 1 day)")
+                        help="Length of a single cycle for pattern production (default 48 = 1 day)")
     parser.add_argument("--pattern-config", type=str, default=None,
                         help="Path to YAML file defining time-of-day action mapping (required for yaml_config)")
     return parser.parse_args()

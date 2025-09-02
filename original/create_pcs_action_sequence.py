@@ -40,13 +40,13 @@ def parse_args():
     parser.add_argument("--method", type=str, choices=["random", "from_policy", "pattern"],
                         default="random", help="Method to generate actions")
     
-    # For policy-based generation
+    # For policy-based production
     parser.add_argument("--policy-path", type=str, 
                         help="Path to the pre-trained policy model (required for from_policy method)")
     parser.add_argument("--policy-type", type=str, choices=["ppo", "recurrent_ppo", "td3"],
                         default="ppo", help="Type of the pre-trained policy")
     
-    # Environment parameters (for policy-based generation)
+    # Environment parameters (for policy-based production)
     parser.add_argument("--demand-pattern", type=str, default="CONSTANT", 
                         choices=["CONSTANT", "SINUSOIDAL", "DOUBLE_PEAK", "TWO_PEAK", "DATA_DRIVEN"],
                         help="Demand pattern for environment creation")
@@ -60,11 +60,11 @@ def parse_args():
                         help="Cost type for environment creation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
-    # For pattern-based generation
+    # For pattern-based production
     parser.add_argument("--pattern-type", type=str, choices=["charge_discharge_cycle", "price_responsive", "yaml_config"],
                         default="charge_discharge_cycle", help="Type of pattern to generate")
     parser.add_argument("--cycle-length", type=int, default=48,
-                        help="Length of a single cycle for pattern generation (default 48 = 1 day)")
+                        help="Length of a single cycle for pattern production (default 48 = 1 day)")
     parser.add_argument("--pattern-config", type=str, default=None,
                         help="Path to YAML file defining time-of-day action mapping (required for yaml_config pattern)")
     
@@ -219,7 +219,7 @@ def main():
         print("Please set --policy-path to the location of your pre-trained agent.")
         return
     
-    # Prepare environment configuration for policy-based generation
+    # Prepare environment configuration for policy-based production
     if args.method == "from_policy":
         # Convert string pattern to enum
         if args.demand_pattern == "DATA_DRIVEN":

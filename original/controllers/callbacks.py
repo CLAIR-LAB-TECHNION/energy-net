@@ -406,7 +406,7 @@ def plot_episode_detail(episode_data, episode_num, output_dir):
     # Create figure with subplots
     fig, axs = plt.subplots(3, 1, figsize=(14, 18))
     
-    # Plot 1: Demand and generation (top subplot)
+    # Plot 1: Demand and production (top subplot)
     ax1 = axs[0]
     
     # Dispatch as bars

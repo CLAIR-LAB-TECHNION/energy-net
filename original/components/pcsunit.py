@@ -7,7 +7,7 @@ from original.components.production_devices.production_unit import ProductionUni
 from original.components.consumption_devices.consumption_unit import ConsumptionUnit
 from energy_net.dynamics import EnergyDynamics
 from energy_net.grid_entity import CompositeGridEntity
-from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
+from energy_net.grid_entities.storage.battery_dynamics import Deterministicbattery
 from original.dynamics.production_dynamics.production_dynmaics_det import DeterministicProduction
 from original.dynamics.consumption_dynamics.consumption_dynamics_det import DeterministicConsumption
 from energy_net.dynamics import DataDrivenDynamics
@@ -42,7 +42,7 @@ class PCSUnit(CompositeGridEntity):
             battery_model_type = battery_config.get('model_type', 'deterministic_battery')
             if battery_model_type == 'deterministic_battery':
 
-                battery_dynamics: EnergyDynamics = DeterministicBattery(
+                battery_dynamics: EnergyDynamics = Deterministicbattery(
                     model_parameters=battery_config.get('model_parameters', {})
                 )
             else:

@@ -31,7 +31,7 @@ class EnergyDynamics(ABC):
         """
         pass
     
-    
+
     
 class ModelBasedDynamics(EnergyDynamics):
     """
