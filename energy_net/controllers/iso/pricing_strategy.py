@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from energy_net.market.pricing.pricing_policy import PricingPolicy
 from energy_net.defs import Bounds
 from energy_net.market.iso.quadratic_pricing_iso import QuadraticPricingISO, SublinearPricingISO
+from gymnasium import spaces
 
 class PricingStrategy(ABC):
     """

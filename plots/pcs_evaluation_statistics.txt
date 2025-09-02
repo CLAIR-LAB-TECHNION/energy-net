@@ -1,0 +1,51 @@
+Statistical Analysis of PCS Evaluation:
+
+Predicted_non_strategic_demand_MWh:
+  total: 36000.0
+  mean: 7200.0
+  std: 0.0
+
+Realized_non_strategic_demand_MWh:
+  total: 34152.63165088074
+  mean: 6830.526330176149
+  std: 345.2994580935409
+
+Dispatch_MWh:
+  total: 36000.0
+  mean: 7200.0
+  std: 0.0
+
+Activated_Reserve_$_total:
+  total: 2343183.6602699882
+  mean: 468636.73205399764
+  std: 98075.84134338425
+
+Power_bought_from_PCS_MWh:
+  total: 141.36959838867188
+  mean: 28.2739200592041
+  std: 0.015927106142044067
+
+Power_sold_to_PCS_MWh:
+  total: 0.0
+  mean: 0.0
+  std: 0.0
+
+Total_power_sold_MWh:
+  total: 34152.63165088074
+  mean: 6830.526330176149
+  std: 345.2994580935409
+
+System_cost_$_total:
+  total: -1.8725267136577536e+17
+  mean: -3.745053427315507e+16
+  std: 12423349141504.0
+
+Curtailment_MWh:
+  total: 9579.5693359375
+  mean: 1915.913818359375
+  std: 273.6550598144531
+
+Curtailment_penalty_$_total:
+  total: 0.0
+  mean: 0.0
+  std: 0.0
