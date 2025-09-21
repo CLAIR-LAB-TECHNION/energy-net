@@ -30,7 +30,7 @@ class EnergyDynamics(ABC):
             Any: The current value based on the dynamics.
         """
         pass
-    
+
 
     
 class ModelBasedDynamics(EnergyDynamics):
@@ -68,7 +68,7 @@ class ModelBasedDynamics(EnergyDynamics):
             Any: The current value based on the model.
         """
         pass
-    
+
     
     
 class DataDrivenDynamics(EnergyDynamics):
