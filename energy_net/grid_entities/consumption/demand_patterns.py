@@ -5,6 +5,8 @@ from typing import Dict, Any, Optional, Tuple
 import logging
 import re
 
+from energy_net.defs import DEMAND_DATA
+
 
 class DemandPattern(Enum):
     SINUSOIDAL = "sinusoidal"
@@ -71,8 +73,8 @@ def _load_demand_data(data_file: str) -> Dict[float, float]:
 
     # Extract demand values
     demand_data = {}
-    if "demand_data" in data and "values" in data["demand_data"]:
-        values = data["demand_data"]["values"]
+    if DEMAND_DATA in data and "values" in data[DEMAND_DATA]:
+        values = data[DEMAND_DATA]["values"]
         for time_str, demand in values.items():
             try:
                 time_fraction = _parse_time_to_fraction(time_str)
