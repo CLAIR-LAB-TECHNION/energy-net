@@ -3,6 +3,13 @@ from gymnasium import spaces
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
+from energy_net.grid_entities.consumption.consumption_dynamics import GMMConsumptionDynamics
+
+
+#To run from energy-net, run in terminal python -m tests.gym.test_energy_grid_env
+#To run from energy-net, run in terminal python -m tests.gym.test_energy_grid_env
+#To run from energy-net, run in terminal python -m tests.gym.test_energy_grid_env
+#To run from energy-net, run in terminal python -m tests.gym.test_energy_grid_env
 
 
 class MockBattery:
@@ -172,7 +179,17 @@ if __name__ == "__main__":
     # Initialize the environment with realistic dynamics
     battery = MockBattery(energy_min=0, energy_max=100, charge_rate_max=10, discharge_rate_max=10)
     production_dynamics = RealisticDynamics(base_value=50, amplitude=20, frequency=1, noise_std=5)
-    consumption_dynamics = RealisticDynamics(base_value=40, amplitude=15, frequency=1, noise_std=5)
+    # Define the configuration for the GMMConsumptionDynamics
+    config = {
+        "peak_consumption1": 120.0,  # Peak consumption for the first Gaussian
+        "peak_time1": 0.3,  # Time of the first peak (fraction of the day)
+        "width1": 0.05,  # Width of the first peak
+        "peak_consumption2": 150.0,  # Peak consumption for the second Gaussian
+        "peak_time2": 0.8,  # Time of the second peak (fraction of the day)
+        "width2": 0.1  # Width of the second peak
+    }
+    consumption_dynamics = GMMConsumptionDynamics(config=config)
+
     env = EnergyGridEnv(battery=battery, production_dynamics=production_dynamics, consumption_dynamics=consumption_dynamics)
 
     # Train and evaluate
