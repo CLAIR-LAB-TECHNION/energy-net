@@ -68,7 +68,7 @@ class ConsumptionUnit(ElementaryGridEntity):
         self.logger.debug(f"Updating ConsumptionUnit at time: {time} with action: {action} MW")
         # Delegate the consumption calculation to the dynamics
         previous_consumption = self.current_consumption
-        self.current_consumption = self.dynamics.get_value(time=time, action=action)
+        self.current_consumption = self.dynamics.calculate(time=time, action=action)
         self.logger.info(
             f"ConsumptionUnit consumption changed from {previous_consumption} MWh to {self.current_consumption} MWh")
 

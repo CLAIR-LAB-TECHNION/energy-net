@@ -80,12 +80,12 @@ class Battery(ElementaryGridEntity):
     def _get_value(self, **kwargs: Any) -> float:
         """Helper method to get value from dynamics with proper error handling."""
         try:
-            return self.dynamics.get_value(**kwargs)
+            return self.dynamics.calculate(**kwargs)
         except TypeError:
             # Remove efficiency parameters if not supported by dynamics
             kwargs.pop("charge_efficiency", None)
             kwargs.pop("discharge_efficiency", None)
-            return self.dynamics.get_value(**kwargs)
+            return self.dynamics.calculate(**kwargs)
 
     def perform_action(self, action: Action) -> None:
         """

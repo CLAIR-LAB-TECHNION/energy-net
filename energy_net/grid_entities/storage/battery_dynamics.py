@@ -1,14 +1,27 @@
 from typing import Any, Dict
-from energy_net.dynamics import ModelBasedDynamics
+from energy_net.dynamics import EnergyDynamics
 import math
 from energy_net.model.action import Action
 
-class BatteryDynamics(ModelBasedDynamics):
-    """Base class for battery dynamics implementations."""
+class BatteryDynamics(EnergyDynamics):
+    """Battery dynamics implementation for energy storage systems.
     
+    This class models the dynamics of a battery within the smart grid, handling charging
+    and discharging actions, applying efficiencies, and accounting for rate limits.
+    """
+
     def __init__(self, model_parameters: Dict[str, Any]):
-        super().__init__(model_parameters)
+        """
+        Initialize the BatteryDynamics with model parameters.
+
+        Args:
+            model_parameters (Dict[str, Any]):
+                - charge_efficiency (float): Efficiency factor for charging (0 < charge_efficiency <= 1).
+                - discharge_efficiency (float): Efficiency factor for discharging (0 < discharge_efficiency <= 1).
+        """
         self.model_parameters = self._validate_and_prepare_config(model_parameters)
+        self.charge_efficiency = self.model_parameters['charge_efficiency']
+        self.discharge_efficiency = self.model_parameters['discharge_efficiency']
 
     def _validate_and_prepare_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate battery configuration parameters."""
@@ -25,40 +38,10 @@ class BatteryDynamics(ModelBasedDynamics):
 
         return config
 
-    def get_value(self, **kwargs) -> float:
-        """Get new energy value based on action and current state."""
-        required_kwargs = [
-            'time', 'action', 'current_energy', 'min_energy',
-            'max_energy', 'charge_rate_max', 'discharge_rate_max'
-        ]
-        for kw in required_kwargs:
-            assert kw in kwargs, f"Missing required argument '{kw}'"
-
-        return self.calculate(**kwargs)
-
-    def calculate(self, **kwargs) -> float:
-        """Calculate the new energy value. Must be implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement calculate method")
-
-class DeterministicBatteryDynamics(BatteryDynamics):
-    """Deterministic implementation of battery dynamics.
-    
-    This class models the dynamics of a storage within the smart grid, handling charging
-    and discharging actions, applying efficiencies, and accounting for natural decay losses.
-    """
-
-    def __init__(self, model_parameters: Dict[str, Any]):
-        """
-        Initialize the DeterministicBatteryDynamics with model parameters.
-
-        Args:
-            model_parameters (Dict[str, Any]):
-                - charge_efficiency (float): Efficiency factor for charging (0 < charge_efficiency <= 1).
-                - discharge_efficiency (float): Efficiency factor for discharging (0 < discharge_efficiency <= 1).
-        """
-        super().__init__(model_parameters)
-        self.charge_efficiency = self.model_parameters['charge_efficiency']
-        self.discharge_efficiency = self.model_parameters['discharge_efficiency']
+    def reset(self) -> None:
+        """Reset the internal state of the battery dynamics."""
+        # No internal state to reset for basic battery dynamics
+        pass
 
     def calculate(self, **kwargs) -> float:
         """
@@ -80,6 +63,14 @@ class DeterministicBatteryDynamics(BatteryDynamics):
         Raises:
             ValueError: If the action is not an Action instance or amount is invalid.
         """
+        # Validate required arguments
+        required_kwargs = [
+            'time', 'action', 'current_energy', 'min_energy',
+            'max_energy', 'charge_rate_max', 'discharge_rate_max'
+        ]
+        for kw in required_kwargs:
+            assert kw in kwargs, f"Missing required argument '{kw}'"
+
         action = kwargs['action']
         current_energy = kwargs['current_energy']
         charge_rate_max = kwargs['charge_rate_max']
@@ -138,3 +129,7 @@ class DeterministicBatteryDynamics(BatteryDynamics):
         exponent = current_time_step / float(lifetime_constant)
         exponent = max(-100, min(100, exponent))  # Clamp to prevent overflow
         return x * math.exp(-exponent)
+
+
+# For backward compatibility
+DeterministicBatteryDynamics = BatteryDynamics
