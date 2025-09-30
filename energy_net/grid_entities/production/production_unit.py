@@ -69,7 +69,7 @@ class ProductionUnit(ElementaryGridEntity):
         self.logger.debug(f"Updating ProductionUnit at time: {time} with action: {action} MW")
         # Delegate the production calculation to the dynamics
         previous_production = self.current_production
-        self.current_production = self.dynamics.get_value(time=time, action=action)
+        self.current_production = self.dynamics.calculate(time=time, action=action)
         self.logger.info(
             f"ProductionUnit production changed from {previous_production} MWh to {self.current_production} MWh")
 

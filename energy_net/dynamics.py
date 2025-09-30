@@ -19,15 +19,15 @@ class EnergyDynamics(ABC):
         pass
 
     @abstractmethod
-    def get_value(self, **kwargs) -> Any:
+    def calculate(self, **kwargs) -> Any:
         """
-        Retrieves the current value based on provided arguments.
+        Calculates the current value based on provided arguments.
 
         Args:
             **kwargs: Arbitrary keyword arguments specific to the dynamic.
 
         Returns:
-            Any: The current value based on the dynamics.
+            Any: The calculated value based on the dynamics.
         """
         pass
 
@@ -37,7 +37,7 @@ class ModelBasedDynamics(EnergyDynamics):
     """
     Abstract Model-Based Dynamics class.
     Defines behavior through predefined mathematical models.
-    Specific dynamics should inherit from this class and implement the get_value method.
+    Specific dynamics should inherit from this class and implement the calculate method.
     """
 
     def __init__(self, model_parameters: Dict[str, Any]):
@@ -57,15 +57,15 @@ class ModelBasedDynamics(EnergyDynamics):
         pass
 
     @abstractmethod
-    def get_value(self, **kwargs) -> Any:
+    def calculate(self, **kwargs) -> Any:
         """
-        Retrieves the current value based on a predefined mathematical model.
+        Calculates the current value based on a predefined mathematical model.
 
         Args:
             **kwargs: Arbitrary keyword arguments specific to the dynamic.
 
         Returns:
-            Any: The current value based on the model.
+            Any: The calculated value based on the model.
         """
         pass
 
@@ -95,15 +95,15 @@ class DataDrivenDynamics(EnergyDynamics):
         """
         self.current_index = 0
 
-    def get_value(self, **kwargs) -> Any:
+    def calculate(self, **kwargs) -> Any:
         """
-        Retrieves the value from the data corresponding to the current time.
+        Calculates the value from the data corresponding to the current time.
 
         Args:
             **kwargs: Should contain 'time' as a fraction of the day (0 to 1).
 
         Returns:
-            Any: The value from the data corresponding to the current time.
+            Any: The calculated value from the data corresponding to the current time.
         """
         time = kwargs.get('time', 0.0)
         total_steps = len(self.data)

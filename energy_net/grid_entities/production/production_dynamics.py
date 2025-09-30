@@ -50,7 +50,7 @@ class ProductionDynamics(EnergyDynamics):
         """
         pass
 
-    def get_value(self, **kwargs) -> float:
+    def calculate(self, **kwargs) -> float:
         """
         Retrieves the current production value.
 
