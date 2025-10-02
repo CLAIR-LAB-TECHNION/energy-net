@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
+from abc import ABC, abstractmethod
 from energy_net import defs
 from energy_net.dynamics import EnergyDynamics
 from energy_net.utils import load_data_from_yaml, interpolate_value
@@ -9,40 +10,26 @@ class ProductionDynamics(EnergyDynamics):
     Unified class for defining and handling energy production patterns and dynamics.
     """
 
-    def __init__(self, config: Dict[str, float]):
+    def __init__(self, params: Dict[str, float]):
         """
         Initializes the dynamics with a specific configuration.
 
         Args:
-            config (Dict[str, float]): Configuration dictionary for the pattern.
+            params (Dict[str, float]): Configuration dictionary for the pattern.
         """
-        self.config = self._validate_and_prepare_config(config)
-
-    def _validate_and_prepare_config(self, config: Dict[str, float]) -> Dict[str, float]:
+        self.params = self._validate_and_prepare_params(params)
+    def _validate_and_prepare_params(self, params: Dict[str, float]) -> Dict[str, float]:
         """
-        Validates and preprocesses the configuration dictionary.
+        Default implementation for validating and preparing parameters.
+        Subclasses can override this if specific validation is needed.
 
         Args:
-            config (Dict[str, float]): The raw configuration dictionary.
+            params (Dict[str, float]): Input parameters for the dynamics.
 
         Returns:
-            Dict[str, float]: The validated and preprocessed configuration.
+            Dict[str, float]: The same parameters without modification.
         """
-        config.setdefault('base_load', 100.0)
-        config.setdefault('amplitude', 50.0)
-        return config
-
-    def calculate(self, time: float) -> float:
-        """
-        Calculate the production value based on time.
-
-        Args:
-            time (float): Current time as a fraction of the day (0.0 to 1.0).
-
-        Returns:
-            float: Calculated production value.
-        """
-        raise NotImplementedError("Subclasses must implement the `calculate` method.")
+        return params        
 
     def reset(self) -> None:
         """
@@ -50,6 +37,7 @@ class ProductionDynamics(EnergyDynamics):
         """
         pass
 
+    @abstractmethod
     def get_value(self, **kwargs) -> float:
         """
         Retrieves the current production value.
@@ -61,60 +49,47 @@ class ProductionDynamics(EnergyDynamics):
         Returns:
             float: The calculated production value.
         """
-        time = kwargs.get('time', 0.0)
-        return self.calculate(time)
-class SinusoidalProductionDynamics(ProductionDynamics):
-    """
-    Production pattern modeled as a sinusoidal function over time.
-    Represents daily fluctuations in production with configurable amplitude,
-    phase, and period to mimic cyclical energy generation patterns.
-    """
-    def calculate(self, time: float) -> float:
-        base_load = self.config.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
-        amplitude = self.config.get('amplitude', defs.DEFAULT_PROD_AMPLITUDE)
-        interval_multiplier = self.config.get('interval_multiplier', defs.DEFAULT_PROD_INTERVAL_MULTIPLIER)
-        period_divisor = self.config.get('period_divisor', defs.DEFAULT_PROD_PERIOD_DIVISOR)
-        phase_shift = self.config.get('phase_shift', defs.DEFAULT_PROD_PHASE_SHIFT)
-        interval = time * interval_multiplier
-        return base_load + amplitude * np.cos((interval + phase_shift) * np.pi / period_divisor)
+        pass
+
 
 
 class ConstantProductionDynamics(ProductionDynamics):
     """
-    Production pattern with a constant output throughout the day.
-    Useful for modeling generators or sources with stable production rates.
+    Production pattern with a constant value throughout the day.
+    Useful for scenarios where energy usage does not fluctuate with time.
     """
-    def calculate(self, time: float) -> float:
-        return self.config.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
 
+    def get_value(self, **kwargs) -> float:
+        time = kwargs.get('time', 0.0)
+        return self.params.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
 
 class DoublePeakProductionDynamics(ProductionDynamics):
     """
     Production pattern with two distinct peaks during the day:
-    one in the morning and one in the evening. Peak timing, amplitude,
-    and sharpness can be configured to model real-world variations.
+    one in the morning and one in the evening. The sharpness of peaks
+    and their amplitude can be adjusted.
     """
-    def calculate(self, time: float) -> float:
-        base_load = self.config.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
-        amplitude = self.config.get('amplitude', defs.DEFAULT_PROD_AMPLITUDE)
-        morning_peak = self.config.get('morning_peak', defs.DEFAULT_PROD_MORNING_PEAK)
-        evening_peak = self.config.get('evening_peak', defs.DEFAULT_PROD_EVENING_PEAK)
-        peak_sharpness = self.config.get('peak_sharpness', defs.DEFAULT_PROD_PEAK_SHARPNESS)
+    def get_value(self, **kwargs) -> float:
+        time = kwargs.get('time', 0.0)
+        base_load = self.params.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
+        amplitude = self.params.get('amplitude', defs.DEFAULT_PROD_AMPLITUDE)
+        morning_peak = self.params.get('morning_peak', defs.DEFAULT_PROD_MORNING_PEAK)
+        evening_peak = self.params.get('evening_peak', defs.DEFAULT_PROD_EVENING_PEAK)
+        peak_sharpness = self.params.get('peak_sharpness', defs.DEFAULT_PROD_PEAK_SHARPNESS)
 
         morning_factor = np.exp(-peak_sharpness * ((time - morning_peak) ** 2))
         evening_factor = np.exp(-peak_sharpness * ((time - evening_peak) ** 2))
         return base_load + amplitude * (morning_factor + evening_factor)
 
-
 class LinearGrowthProductionDynamics(ProductionDynamics):
     """
-    Production pattern that increases linearly over time.
-    Useful for modeling ramp-up of generators or production sources
-    where output grows steadily during the day.
+    Production pattern that grows linearly over time.
+    Models scenarios where energy demand steadily increases during the day.
     """
-    def calculate(self, time: float) -> float:
-        base_load = self.config.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
-        growth_factor = self.config.get('growth_factor', defs.DEFAULT_PROD_GROWTH_FACTOR)
+    def get_value(self, **kwargs) -> float:
+        time = kwargs.get('time', 0.0)
+        base_load = self.params.get('base_load', defs.DEFAULT_PROD_BASE_LOAD)
+        growth_factor = self.params.get('growth_factor', defs.DEFAULT_PROD_GROWTH_FACTOR)
         return base_load + base_load * time * growth_factor
 
 
@@ -122,32 +97,36 @@ class GMMProductionDynamics(ProductionDynamics):
     """
     Production pattern modeled as a sum of two Gaussian peaks.
     Each peak has a configurable center (peak time), width, and height,
-    allowing flexible modeling of complex production profiles.
+    allowing for flexible modeling of complex daily production profiles.
     """
-    def calculate(self, time: float) -> float:
-        peak_production1 = self.config.get('peak_production1', defs.DEFAULT_PROD_PEAK1)
-        peak_time1 = self.config.get('peak_time1', defs.DEFAULT_PROD_PEAK_TIME1)
-        width1 = self.config.get('width1', defs.DEFAULT_PROD_WIDTH1)
-        peak_production2 = self.config.get('peak_production2', defs.DEFAULT_PROD_PEAK2)
-        peak_time2 = self.config.get('peak_time2', defs.DEFAULT_PROD_PEAK_TIME2)
-        width2 = self.config.get('width2', defs.DEFAULT_PROD_WIDTH2)
+    def get_value(self, **kwargs) -> float:
+        time = kwargs.get('time', 0.0)
 
-        prod1 = peak_production1 * np.exp(-((time - peak_time1) ** 2) / (2 * (width1 ** 2)))
-        prod2 = peak_production2 * np.exp(-((time - peak_time2) ** 2) / (2 * (width2 ** 2)))
-        return prod1 + prod2
+        peak_production1 = self.params.get('peak_production1', defs.DEFAULT_PROD_PEAK1)
+        peak_time1 = self.params.get('peak_time1', defs.DEFAULT_PROD_PEAK_TIME1)
+        width1 = self.params.get('width1', defs.DEFAULT_PROD_WIDTH1)
+        peak_production2 = self.params.get('peak_production2', defs.DEFAULT_PROD_PEAK2)
+        peak_time2 = self.params.get('peak_time2', defs.DEFAULT_PROD_PEAK_TIME2)
+        width2 = self.params.get('width2', defs.DEFAULT_PROD_WIDTH2)
+
+        production1 = peak_production1 * np.exp(-((time - peak_time1) ** 2) / (2 * (width1 ** 2)))
+        production2 = peak_production2 * np.exp(-((time - peak_time2) ** 2) / (2 * (width2 ** 2)))
+        return production1 + production2
 
 
 class DataDrivenProductionDynamics(ProductionDynamics):
     """
     Production pattern based on external data loaded from a file.
-    Interpolates production values between data points and applies an optional
-    scaling factor. Useful for replicating measured or historical production profiles.
+    Interpolates values between data points and applies an optional scaling factor.
+    Useful for replicating measured or historical production profiles.
     """
-    def calculate(self, time: float) -> float:
-        data_file = self.config.get('data_file')
+    def get_value(self, **kwargs) -> float:
+        time = kwargs.get('time', 0.0)
+
+        data_file = self.params.get('data_file')
         if not data_file:
             raise ValueError("No data file specified for DATA_DRIVEN pattern")
-        scale_factor = self.config.get('scale_factor', defs.DEFAULT_PROD_SCALE_FACTOR)
+        scale_factor = self.params.get('scale_factor', defs.DEFAULT_PROD_SCALE_FACTOR)
         production_data = _load_production_data(data_file)
         return _interpolate_production(time, production_data) * scale_factor
 
