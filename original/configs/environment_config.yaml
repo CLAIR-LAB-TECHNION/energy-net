@@ -1,0 +1,38 @@
+# configs/environment_config.yaml
+
+# Time Parameters
+time:
+  time_steps_per_day_ratio: 1440
+  step_duration: 180     # Time step duration (minutes)
+  max_steps_per_episode: 48 # Steps per episode (1 days)
+  minutes_per_day: 1440    # 24 hours * 60 minutes
+  hours_per_day: 24       # Used in demand calculations
+  period_divisor: 24       # Hours in a day, used for time calculations
+
+# Pricing Parameters
+pricing:
+  eta: 0.5            # Smoothing factor for running average price
+
+# ISO Configuration Reference
+iso_config_path: "configs/iso_config.yaml"
+
+# PCSUnit Configuration Reference
+pcs_unit_config_path: "configs/pcs_unit_config.yaml"
+
+reward:
+  type: 'cost'
+
+# predicted_demand Parameters
+predicted_demand:
+  base_load: 150.0          # Base demand level (MWh)
+  amplitude: 50.0           # Amplitude of demand fluctuation (MWh)
+  interval_multiplier: 8   # Time to interval conversion factor
+  phase_shift: 5           # Phase shift in the cosine function
+  period_divisor: 24       # Period divisor for the cosine function
+
+demand_uncertainty:
+  sigma: 10.0
+
+reserve_price: 200.0
+dispatch_price: 100.0
+

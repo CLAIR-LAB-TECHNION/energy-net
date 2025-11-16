@@ -1,0 +1,98 @@
+# pcs_schedule.yml
+actions:
+  - time: "00:00"
+    action: 0.0
+  - time: "00:30"
+    action: 0.0
+  - time: "01:00"
+    action: 10.0
+  - time: "01:30"
+    action: 20.0
+  - time: "02:00"
+    action: 20.0
+  - time: "02:30"
+    action: 50.0
+  - time: "03:00"
+    action: 50.0
+  - time: "03:30"
+    action: 50.0
+  - time: "04:00"
+    action: 50.0
+  - time: "04:30"
+    action: 50.0
+  - time: "05:00"
+    action: -40.0
+  - time: "05:30"
+    action: -40.0
+  - time: "06:00"
+    action: -40.0
+  - time: "06:30"
+    action: -40.0
+  - time: "07:00"
+    action: 50.0
+  - time: "07:30"
+    action: 50.0
+  - time: "08:00"
+    action: 50.0
+  - time: "08:30"
+    action: 50.0
+  - time: "09:00"
+    action: 50.0
+  - time: "09:30"
+    action: 50.0
+  - time: "10:00"
+    action: 50.0
+  - time: "10:30"
+    action: 50.0
+  - time: "11:00"
+    action: 50.0
+  - time: "11:30"
+    action: 50.0
+  - time: "12:00"
+    action: 0.0
+  - time: "12:30"
+    action: 0.0
+  - time: "13:00"
+    action: 0.0
+  - time: "13:30"
+    action: 0.0
+  - time: "14:00"
+    action: -50.0
+  - time: "14:30"
+    action: -50.0
+  - time: "15:00"
+    action: -50.0
+  - time: "15:30"
+    action: -50.0
+  - time: "16:00"
+    action: -50.0
+  - time: "16:30"
+    action: -30.0
+  - time: "17:00"
+    action: -30.0
+  - time: "17:30"
+    action: -20.0
+  - time: "18:00"
+    action: -20.0
+  - time: "18:30"
+    action: -50.0
+  - time: "19:00"
+    action: -50.0
+  - time: "19:30"
+    action: -10.0
+  - time: "20:00"
+    action: -10.0
+  - time: "20:30"
+    action: -20.0
+  - time: "21:00"
+    action: -40.0
+  - time: "21:30"
+    action: -50.0
+  - time: "22:00"
+    action: 0.0
+  - time: "22:30"
+    action: 0.0
+  - time: "23:00"
+    action: 0.0
+  - time: "23:30"
+    action: 0.0
