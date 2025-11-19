@@ -1,9 +1,8 @@
 from typing import Any, Dict, Optional, List
 
-from original.components.storage_devices.battery import Battery
-from original.components.production_devices.production_unit import ProductionUnit
-from original.components.consumption_devices.consumption_unit import ConsumptionUnit
-from energy_net.dynamics import EnergyDynamics
+from energy_net.grid_entities.storage.battery import Battery
+from energy_net.grid_entities.production.production_unit import ProductionUnit
+from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
 from energy_net.grid_entity import CompositeGridEntity
 
 class PCSUnit(CompositeGridEntity):
@@ -21,7 +20,6 @@ class PCSUnit(CompositeGridEntity):
                  batteries: List[Battery],
                  production_units: List[ProductionUnit],
                  consumption_units: List[ConsumptionUnit],
-                 pcs_units: List['PCSUnit'],
                  log_file: Optional[str] = 'logs/pcs_unit.log') -> None:
         """
         Initializes the PCSUnit with the provided components.
@@ -34,7 +32,7 @@ class PCSUnit(CompositeGridEntity):
             log_file (Optional[str]): Path to the log file.
         """
         # Combine all sub-entities into a single list
-        sub_entities = batteries + production_units + consumption_units + pcs_units
+        sub_entities = batteries + production_units + consumption_units
 
         # Check for duplicate objects in sub_entities
         seen = set()
@@ -46,9 +44,9 @@ class PCSUnit(CompositeGridEntity):
         super().__init__(sub_entities=sub_entities, log_file=log_file)
 
         # Store references to the components
-        self.batteries = batteries + [battery for pcs in pcs_units for battery in pcs.batteries]
-        self.production_units = production_units + [unit for pcs in pcs_units for unit in pcs.production_units]
-        self.consumption_units = consumption_units + [unit for pcs in pcs_units for unit in pcs.consumption_units]
+        self.batteries = batteries
+        self.production_units = production_units
+        self.consumption_units = consumption_units
 
     def perform_collective_actions(self, time: float, battery_action: float, consumption_action: float = None,
                           production_action: float = None) -> None:
