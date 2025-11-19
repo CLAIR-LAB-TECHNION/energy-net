@@ -1,0 +1,12 @@
+name: dummy-check
+
+on:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Dummy check
+        run: echo "Branch is up to date!"
