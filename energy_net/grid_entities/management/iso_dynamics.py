@@ -1,55 +1,26 @@
 import numpy as np
-
-def iso_day_to_day_transition(state, action, realized, forecast):
-    """
-    Updates the ISO's day-to-day state after a day ends.
-
-    This transition records the realized demand of the previous day
-    and previous day's dispatch, and stores the newly chosen day-ahead
-    dispatch and forecast for the next day.
-    It also returns diagnostic information such as the previous day's mismatch.
-
-    Args:
-        state (dict): The current ISO state containing at least 
-        "day_ahead_dispatch" from the previous day.
-        action (array-like): The dispatch plan chosen for the upcoming day.
-        realized (array-like): The realized demand for the day that just ended.
-        forecast (array-like): The forecasted demand for the next day.
-
-    Returns:
-        tuple:
-            next_state (dict): Updated state with fields:
-                - "prev_realized": realized demand from the ended day.
-                - "prev_dispatch": dispatch used on the ended day.
-                - "day_ahead_dispatch": dispatch plan for the next day.
-                - "day_ahead_forecast": forecast for the next day.
-            info (dict): Diagnostic values, including:
-                - "prev_mismatch": realized minus dispatch for the ended day.
-    """
-
-    assert "day_ahead_dispatch" in state, "State missing 'day_ahead_dispatch'."
-    action = np.asarray(action)
-    realized = np.asarray(realized)
-    forecast = np.asarray(forecast)
-    prev_dispatch = np.asarray(state["day_ahead_dispatch"])
-
-    assert realized.shape == prev_dispatch.shape, "Realized and prev_dispatch mismatch."
-    assert action.shape == forecast.shape, "Action and forecast size mismatch."
-
-    assert not np.isnan(realized).any(), "Realized contains NaN."
-    assert not np.isnan(action).any(), "Action contains NaN."
-    assert not np.isnan(forecast).any(), "Forecast contains NaN."
+from iso_dataclasses import ISOState, ISOAction
 
 
-    next_state = {
-        "prev_realized": realized,
-        "prev_dispatch": prev_dispatch,
-        "day_ahead_dispatch": action,
-        "day_ahead_forecast": forecast,
-    }
+def iso_day_to_day_transition(
+        state: ISOState,
+        action: ISOAction,
+        day_ahead_forecast: np.ndarray,
+        prev_day_realized: np.ndarray
+):
+
+    new_state = ISOState(
+        prev_day_realized=prev_day_realized,
+        prev_day_dispatch=state.day_ahead_dispatch,
+        prev_day_pricing_plan=state.day_ahead_pricing_plan,
+        day_ahead_forecast=day_ahead_forecast,
+        day_ahead_dispatch=action.day_ahead_dispatch,
+        day_ahead_pricing_plan=action.day_ahead_pricing_plan,
+    )
 
     info = {
-        "prev_mismatch": realized - prev_dispatch
+        "forecast_error": day_ahead_forecast - prev_day_realized,
+        "dispatch_error": state.day_ahead_dispatch - prev_day_realized,
     }
 
-    return next_state, info
+    return new_state, info
