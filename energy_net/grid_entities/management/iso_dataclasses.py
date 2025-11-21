@@ -1,133 +1,85 @@
-from dataclasses import dataclass, fields, is_dataclass
-from typing import Iterable, Any, Tuple, TypeAlias
 import numpy as np
-from numpy.typing import NDArray, DTypeLike
+from dataclasses import dataclass, field, fields, is_dataclass
+from typing import Any
 
 
-# ---------------------------------------------------------------------
-# Type Aliases
-# ---------------------------------------------------------------------
-Array: TypeAlias = NDArray[np.float64]
+def _ensure_same_shape(arr1: np.ndarray, arr2: np.ndarray) -> None:
+    if not isinstance(arr1, np.ndarray) or not isinstance(arr2, np.ndarray):
+        raise TypeError("both arrays must be numpy arrays!")
+    if arr1.shape != arr2.shape:
+        raise ValueError(f"shape mismatch: {arr1.shape} vs {arr2.shape}")
 
 
-# ---------------------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------------------
-def convert_fields_to_arrays(instance: Any, dtype: DTypeLike = float) -> None:
-    """
-    Convert all dataclass fields into numpy arrays with the given dtype.
-    Mutates the instance in place.
-
-    This function assumes *all* fields in the instance are intended to be arrays.
-    """
-    if not is_dataclass(instance):
-        raise TypeError(
-            f"convert_fields_to_arrays expects a dataclass instance, "
-            f"got {type(instance).__name__!r}."
-        )
-
-    for f in fields(instance):
-        value = getattr(instance, f.name)
-        try:
-            arr = np.asarray(value, dtype=dtype)
-        except Exception as e:
-            raise TypeError(
-                f"Field '{f.name}' could not be converted to an ndarray: {e}"
-            ) from e
-
-        setattr(instance, f.name, arr)
+def _ensure_no_nans(arr: np.ndarray) -> None:
+    if not isinstance(arr, np.ndarray):
+        raise TypeError("array must be a numpy array!")
+    if not np.isfinite(arr).all():  
+        raise ValueError("array contains NaN or inf")
 
 
-def iter_array_fields(instance: Any) -> Iterable[Tuple[str, Array]]:
-    """
-    Yield (field_name, array) for each field in a dataclass instance.
+def _validate_array_fields_same_shape_no_nans(
+    obj: Any,
+    meta_key: str = "validate_array",
+) -> None:    
+    if not is_dataclass(obj):
+        raise TypeError(f"_validate_array_fields_same_shape_no_nans expects a dataclass instance, "
+                        f"got {type(obj)!r}")
+    
+    array_fields: list[tuple[str, np.ndarray]] = []
+    for f in fields(obj):
+        if not f.metadata.get(meta_key, False):
+            continue
 
-    Raises informative errors when fields are not arrays.
-    """
-    if not is_dataclass(instance):
-        raise TypeError(
-            f"iter_array_fields expects a dataclass instance, "
-            f"got {type(instance).__name__!r}."
-        )
-
-    for f in fields(instance):
-        value = getattr(instance, f.name)
+        value = getattr(obj, f.name)
         if not isinstance(value, np.ndarray):
             raise TypeError(
-                f"Field '{f.name}' on {instance.__class__.__name__} "
-                f"is not an ndarray. Ensure convert_fields_to_arrays(...) "
-                f"is called first."
+                f"Field '{f.name}' is marked {meta_key}=True but is not a numpy array, "
+                f"got {type(value)!r}."
             )
-        yield f.name, value
+        array_fields.append((f.name, value))
 
-
-def validate_no_nans(instance: Any) -> None:
-    """
-    Ensure that no field arrays contain NaN values.
-    """
-    for name, arr in iter_array_fields(instance):
-        if np.isnan(arr).any():
-            raise ValueError(
-                f"Field '{name}' on {instance.__class__.__name__} contains NaN values."
-            )
-
-
-def validate_same_shape(instance: Any) -> None:
-    """
-    Ensure that all field arrays have identical shapes.
-    """
-    arrays = list(iter_array_fields(instance))
-    if not arrays:  # No fields -> nothing to validate
+    if not array_fields:
         return
+        
+    reference_name, reference_arr = array_fields[0]
+    for name, arr in array_fields[1:]:
+        try:
+            _ensure_same_shape(reference_arr, arr)
+        except Exception as exc:
+            raise type(exc)(
+                f"Shape validation failed between '{reference_name}' and '{name}': {exc}") from exc 
 
-    ref_name, ref_arr = arrays[0]
-    ref_shape = ref_arr.shape
-
-    for name, arr in arrays[1:]:
-        if arr.shape != ref_shape:
-            raise ValueError(
-                f"All arrays in {instance.__class__.__name__} must share the same shape.\n"
-                f"  '{ref_name}': {ref_shape}\n"
-                f"  '{name}':    {arr.shape}"
-            )
+    for name, arr in array_fields:
+        try:
+            _ensure_no_nans(arr)
+        except Exception as exc:
+            raise type(exc)(f"NaN/inf validation failed for field '{name}': {exc}") from exc           
 
 
-# ---------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------
+
 @dataclass
 class ISOState:
-    """
-    Full ISO-level daily state:
-    - previous day's realized data
-    - new day-ahead forecasts and plan
-    """
+    prev_day_realized_demand:   np.ndarray = field(metadata={"validate_array": True})
+    
+    prev_day_forecast:          np.ndarray = field(metadata={"validate_array": True})
+    prev_day_dispatch:          np.ndarray = field(metadata={"validate_array": True})
+    prev_day_buy_price:         np.ndarray = field(metadata={"validate_array": True})
+    prev_day_sell_price:        np.ndarray = field(metadata={"validate_array": True})
 
-    prev_day_realized:      Array
-    prev_day_dispatch:      Array
-    prev_day_pricing_plan:  Array
-    day_ahead_forecast:     Array
-    day_ahead_dispatch:     Array
-    day_ahead_pricing_plan: Array
+    day_ahead_forecast:         np.ndarray = field(metadata={"validate_array": True})
+    day_ahead_dispatch:         np.ndarray = field(metadata={"validate_array": True})
+    day_ahead_buy_price:        np.ndarray = field(metadata={"validate_array": True})
+    day_ahead_sell_price:       np.ndarray = field(metadata={"validate_array": True})    
 
     def __post_init__(self) -> None:
-        convert_fields_to_arrays(self, dtype=float)
-        validate_no_nans(self)
-        validate_same_shape(self)
+        _validate_array_fields_same_shape_no_nans(self) 
 
 
 @dataclass
 class ISOAction:
-    """
-    ISO action for a single day-ahead market:
-    - dispatch vector
-    - pricing plan vector
-    """
-
-    day_ahead_dispatch:     Array
-    day_ahead_pricing_plan: Array
+    day_ahead_dispatch:    np.ndarray = field(metadata={"validate_array": True})      
+    day_ahead_buy_price:   np.ndarray = field(metadata={"validate_array": True})
+    day_ahead_sell_price:  np.ndarray = field(metadata={"validate_array": True})
 
     def __post_init__(self) -> None:
-        convert_fields_to_arrays(self, dtype=float)
-        validate_no_nans(self)
-        validate_same_shape(self)
+        _validate_array_fields_same_shape_no_nans(self)
