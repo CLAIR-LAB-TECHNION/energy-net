@@ -20,7 +20,15 @@ def _ensure_no_nans(arr: np.ndarray) -> None:
 def _validate_array_fields_same_shape_no_nans(
     obj: Any,
     meta_key: str = "validate_array",
-) -> None:    
+) -> None:
+    """
+    Validate that all dataclass fields marked with metadata[meta_key]=True:
+        - are numpy arrays
+        - all share the same shape
+        - contain no NaNs or infinities
+    Raises TypeError or ValueError if validation fails.
+    """  
+      
     if not is_dataclass(obj):
         raise TypeError(f"_validate_array_fields_same_shape_no_nans expects a dataclass instance, "
                         f"got {type(obj)!r}")

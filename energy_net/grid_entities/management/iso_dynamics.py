@@ -1,5 +1,5 @@
 import numpy as np
-from iso_dataclasses import ISOState, ISOAction
+from .iso_dataclasses import ISOState, ISOAction
 
 
 def iso_day_to_day_transition(
@@ -9,7 +9,38 @@ def iso_day_to_day_transition(
     prev_day_realized_demand: np.ndarray,
 ) -> tuple[ISOState, dict[str, np.ndarray]]:
     """
+    Advance the ISO state forward by one day using the previous state's
+    day-ahead values and the new day-ahead action.
 
+    The function constructs a new `ISOState` where:
+        - The previous state's day-ahead forecast/dispatch/prices become the
+        new state's prev-day values.
+        - The provided `day_ahead_forecast` and the fields from `action`
+        become the new state's day-ahead values.
+        - Validation is performed by the ISOState constructor to ensure all
+        arrays have matching shapes and no NaN/inf values.
+
+    It also returns diagnostic information capturing differences between
+    the previous day's forecasts/dispatch and the realized demand.
+
+    Args:
+        state (ISOState): The current day's state.
+        action (ISOAction): The ISO day-ahead action for the next day.
+        day_ahead_forecast (np.ndarray): Forecasted demand for the upcoming day.
+        prev_day_realized_demand (np.ndarray): Actual realized demand for the previous day.
+
+    Returns:
+        tuple[ISOState, dict[str, np.ndarray]]:
+            A pair `(new_state, info)` where:
+
+            - `new_state` (ISOState): The advanced state representing the next day.
+            - `info` (dict[str, np.ndarray]): Diagnostics containing:
+                - `"forecast_mismatch"`: previous day forecast - realized demand
+                - `"dispatch_mismatch"`: previous day dispatch - realized demand
+
+    Raises:
+        ValueError: If array shapes do not match or contain NaN/inf values
+            (via ISOState validation).
     """
 
     prev_day_forecast = state.day_ahead_forecast
