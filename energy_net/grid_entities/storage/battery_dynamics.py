@@ -1,5 +1,5 @@
 from typing import Any, Dict
-from energy_net.dynamics import EnergyDynamics
+from energy_net.core.dynamics import EnergyDynamics
 import math
 
 

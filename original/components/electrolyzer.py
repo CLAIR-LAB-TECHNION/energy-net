@@ -4,8 +4,8 @@ from typing import Any, Dict, Optional, List
 
 from original.components.consumption_devices.consumption_unit import ConsumptionUnit
 from original.components.production_devices.production_unit import ProductionUnit
-from energy_net.dynamics import EnergyDynamics
-from energy_net.grid_entity import CompositeGridEntity
+from energy_net.core.dynamics import EnergyDynamics
+from energy_net.core.grid_entity import CompositeGridEntity
 
 class Electrolyzer(CompositeGridEntity):
     """
@@ -43,7 +43,7 @@ class Electrolyzer(CompositeGridEntity):
             else:
                 raise ValueError(f"Unsupported consumption_unit model type: {consumption_model_type}")
         elif consumption_dynamics_type == 'data_driven':
-            from energy_net.dynamics import DataDrivenDynamics
+            from energy_net.core.dynamics import DataDrivenDynamics
 
             consumption_dynamics: EnergyDynamics = DataDrivenDynamics(
                 data_file=consumption_config.get('data_file', 'consumption_data.csv'),
@@ -71,7 +71,7 @@ class Electrolyzer(CompositeGridEntity):
             else:
                 raise ValueError(f"Unsupported production_unit model type: {production_model_type}")
         elif production_dynamics_type == 'data_driven':
-            from energy_net.dynamics import DataDrivenDynamics
+            from energy_net.core.dynamics import DataDrivenDynamics
 
             production_dynamics: EnergyDynamics = DataDrivenDynamics(
                 data_file=production_config.get('data_file', 'production_data.csv'),
