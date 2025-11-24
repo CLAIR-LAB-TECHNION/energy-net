@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional
-from energy_net.grid_entity import ElementaryGridEntity
-from energy_net.dynamics import EnergyDynamics
-from energy_net.utils import setup_logger
+from energy_net.core.grid_entity import ElementaryGridEntity
+from energy_net.core.dynamics import EnergyDynamics
+from energy_net.core.utils import setup_logger
 
 class ProductionUnit(ElementaryGridEntity):
     """
