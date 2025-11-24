@@ -1,5 +1,5 @@
 
-from energy_net.grid_entity import GridEntity
+from energy_net.core.grid_entity import GridEntity
 from typing import Union
 import numpy as np
 

@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional
-from energy_net.grid_entity import ElementaryGridEntity
-from energy_net.dynamics import EnergyDynamics
-from energy_net.utils import setup_logger  # Import the logger setup
+from energy_net.core.grid_entity import ElementaryGridEntity
+from energy_net.core.dynamics import EnergyDynamics
+from energy_net.core.utils import setup_logger  # Import the logger setup
 class ConsumptionUnit(ElementaryGridEntity):
     """
     Consumption Unit component managing energy consumption.
