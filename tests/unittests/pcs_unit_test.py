@@ -9,6 +9,8 @@ from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUni
 # Tests from first file
 # ------------------------------
 class TestPCSUnitEnergyStorage(unittest.TestCase):
+   # Do not change this to set_up or another naming convention - it is implementing an abstract
+   # method from unittest.TestCase and thus cannot be changed.
    def setUp(self):
        # Mock Battery
        self.battery = MagicMock(spec=Battery)
@@ -28,33 +30,47 @@ class TestPCSUnitEnergyStorage(unittest.TestCase):
 
        # Create PCSUnit
        self.pcs_unit = PCSUnit(
-           batteries=[self.battery],
+           storage_units=[self.battery],
            production_units=[self.production_unit],
            consumption_units=[self.consumption_unit]
        )
 
-
+   # Fix for test_battery_energy_storage
    def test_battery_energy_storage(self):
        # Simulate multiple cycles
        for cycle in range(5):
-           self.pcs_unit.perform_collective_actions(
+           self.pcs_unit.update(
                time=0.5,
-               battery_action=10.0,
-               consumption_action=80.0,
-               production_action=100.0
+               actions={
+                   "Battery_0": 0.5,
+                   "ConsumptionUnit_0": 80.0,
+                   "ProductionUnit_0": 100.0
+               }
            )
-           self.battery.update.assert_called_with(time=0.5, action=10.0)
-
-
+           # Update the assertion to match the actual cal
+           self.pcs_unit.get_total_storage()
+           self.battery.update.assert_called_with(0.5, 0.5)  # Adjusted to match actual call
        self.assertEqual(self.battery.get_state.call_count, 5)
 
-
+   def test_perform_actions(self):
+       actions = {
+           "Battery_0": 10.0,
+           "ConsumptionUnit_0": 80.0,
+           "ProductionUnit_0": 100.0
+       }
+       self.pcs_unit.update(time = 0.5, actions=actions)
+       print(self.consumption_unit.mock_calls)
+       self.battery.update.assert_called_with(0.5, 10.0)
+       self.consumption_unit.update.assert_called_with(0.5, 80.0)
+       self.production_unit.update.assert_called_with(0.5, 100.0)
 
 
 # ------------------------------
 # Tests from second file
 # ------------------------------
 class TestPCSUnit(unittest.TestCase):
+   # Do not change this to set_up or another naming convention - it is implementing an abstract
+   # method from unittest.TestCase and thus cannot be changed.
    def setUp(self):
        # Mock Batteries
        self.battery1 = MagicMock(spec=Battery)
@@ -81,14 +97,14 @@ class TestPCSUnit(unittest.TestCase):
 
        # Create PCSUnit
        self.pcs_unit = PCSUnit(
-           batteries=[self.battery1, self.battery2],
+           storage_units=[self.battery1, self.battery2],
            production_units=[self.production_unit1, self.production_unit2],
            consumption_units=[self.consumption_unit1, self.consumption_unit2],
        )
 
 
-   def test_get_total_battery_capacity(self):
-       total_capacity = self.pcs_unit.get_total_battery_capacity()
+   def test_get_total_storage(self):
+       total_capacity = self.pcs_unit.get_total_storage()
        self.assertEqual(total_capacity, 80.0)
 
 
@@ -108,22 +124,26 @@ class TestPCSUnit(unittest.TestCase):
 
 
    def test_perform_collective_actions(self):
-       self.pcs_unit.perform_collective_actions(
-           time=0.5,
-           battery_action=10.0,
-           consumption_action=50.0,
-           production_action=100.0
-       )
-       self.battery1.update.assert_called_with(time=0.5, action=10.0)
-       self.battery2.update.assert_called_with(time=0.5, action=10.0)
-       self.production_unit1.update.assert_called_with(time=0.5, action=100.0)
-       self.production_unit2.update.assert_called_with(time=0.5, action=100.0)
-       self.consumption_unit1.update.assert_called_with(time=0.5, action=50.0)
-       self.consumption_unit2.update.assert_called_with(time=0.5, action=50.0)
+       actions = {
+           "Battery_0": 10.0,
+           "ConsumptionUnit_0": 80.0,
+           "ProductionUnit_0": 100.0,
+           "Battery_1": 10.0,
+           "ConsumptionUnit_1": 80.0,
+           "ProductionUnit_1": 100.0
+
+       }
+       self.pcs_unit.update(time=0.5, actions=actions)
+       self.battery1.update.assert_called_with(0.5, 10.0)
+       self.battery2.update.assert_called_with(0.5, 10.0)
+       self.production_unit1.update.assert_called_with(0.5, 100.0)
+       self.production_unit2.update.assert_called_with(0.5, 100.0)
+       self.consumption_unit1.update.assert_called_with(0.5, 80.0)
+       self.consumption_unit2.update.assert_called_with(0.5, 80.0)
 
 
    def test_reset(self):
-       self.pcs_unit.reset(initial_battery_level=40.0)
+       self.pcs_unit.reset(initial_storage_unit_level=40.0)
        self.battery1.reset.assert_called_with(40.0)
        self.battery2.reset.assert_called_with(40.0)
        self.production_unit1.reset.assert_called()
@@ -133,4 +153,4 @@ class TestPCSUnit(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(buffer=False)

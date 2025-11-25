@@ -90,9 +90,10 @@ class Battery(ElementaryGridEntity):
             action (float, optional): Action to perform (default is 0.0).
                                        Positive for charging, negative for discharging.
         """
-        self.logger.debug(f"Updating Battery at time: {time} with action: {action} MW")
         self.current_time = time
-        self.perform_action(action)
+        if action!=0:
+            self.logger.debug(f"Updating Battery at time: {time} with action: {action} MW")
+            self.perform_action(action)
 
     def reset(self, initial_level: Optional[float] = None) -> None:
         """

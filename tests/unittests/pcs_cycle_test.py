@@ -1,6 +1,6 @@
 import unittest
 from energy_net.grid_entities.PCSUnit.pcs_unit import PCSUnit
-from energy_net.grid_entities.storage.battery_dynamics import Deterministicbattery
+from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.production.production_unit import ProductionUnit
 from energy_net.grid_entities.production.production_dynamics import GMMProductionDynamics
@@ -9,6 +9,8 @@ from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUni
 
 
 class TestPCSUnitSimulation(unittest.TestCase):
+    # Do not change this to set_up or another naming convention - it is implementing an abstract
+    # method from unittest.TestCase and thus cannot be changed.
     def setUp(self):
         # --- Initialize battery ---
         model_parameters = {
@@ -16,7 +18,7 @@ class TestPCSUnitSimulation(unittest.TestCase):
             "discharge_efficiency": 1.0,
             "lifetime_constant": 1e6
         }
-        battery_dynamics = Deterministicbattery(model_parameters=model_parameters)
+        battery_dynamics = DeterministicBattery(model_parameters=model_parameters)
         battery_config = {
             "min": 0.0,
             "max": 1e6,
@@ -56,7 +58,7 @@ class TestPCSUnitSimulation(unittest.TestCase):
 
         # --- Create PCSUnit ---
         self.pcs_unit = PCSUnit(
-            batteries=[self.battery],
+            storage_units=[self.battery],
             production_units=[self.production_unit],
             consumption_units=[self.consumption_unit]
         )
@@ -65,25 +67,24 @@ class TestPCSUnitSimulation(unittest.TestCase):
         """Run the PCSUnit simulation for 24 hours and ensure no exceptions occur."""
         time_step = 1.0 / 24  # 1 hour as fraction of a day
         for hour in range(24):
+            current_time = hour * time_step
             with self.subTest(hour=hour + 1):
-                current_time = hour * time_step
-
                 battery_action = 20.0  # Example charging action
                 consumption_action = self.consumption_unit.get_state()
                 production_action = self.production_unit.get_state()
 
                 try:
-                    self.pcs_unit.perform_collective_actions(
-                        time=current_time,
-                        battery_action=battery_action,
-                        consumption_action=consumption_action,
-                        production_action=production_action
-                    )
+                    actions = {
+                        "Battery_0": battery_action,
+                        "ConsumptionUnit_0": consumption_action,
+                        "ProductionUnit_0": production_action
+                    }
+                    self.pcs_unit.update(current_time, actions)
                 except Exception as e:
                     self.fail(f"PCS unit simulation crashed at hour {hour + 1}: {e}")
 
                 # Log the state for inspection
-                total_battery = self.pcs_unit.get_total_battery_capacity()
+                total_battery = self.pcs_unit.get_total_storage()
                 total_production = self.pcs_unit.get_production()
                 total_consumption = self.pcs_unit.get_consumption()
                 energy_change = self.pcs_unit.get_energy_change()
@@ -104,4 +105,4 @@ class TestPCSUnitSimulation(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(buffer=False)

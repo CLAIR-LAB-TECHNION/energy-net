@@ -3,7 +3,7 @@ from energy_net.core.dynamics import EnergyDynamics
 import math
 
 
-class Deterministicbattery(EnergyDynamics):
+class DeterministicBattery(EnergyDynamics):
     """
     Deterministic Battery Dynamics.
     

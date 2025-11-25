@@ -3,13 +3,11 @@ from typing import Any, Dict, Optional, List
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.production.production_unit import ProductionUnit
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
-from energy_net.grid_entity import CompositeGridEntity
+from energy_net.core.grid_entity import CompositeGridEntity
 
 class PCSUnit(CompositeGridEntity):
     """
-    Power Conversion System Unit (PCSUnit) managing Batteries, ProductionUnits, ConsumptionUnits, and other PCSUnits.
-    If you add a PCSUnit to another PCSUnit, the batteries, production units, and consumption units of the added PCSUnit
-    will be added to the current PCSUnit.
+    Power Conversion System Unit (PCSUnit) managing StorageUnits, ProductionUnits, and ConsumptionUnits.
 
     This class integrates the storage, production, and consumption components, allowing for
     coordinated updates and state management within the smart grid simulation.
@@ -17,7 +15,7 @@ class PCSUnit(CompositeGridEntity):
     """
 
     def __init__(self,
-                 batteries: List[Battery],
+                 storage_units: List[Battery],
                  production_units: List[ProductionUnit],
                  consumption_units: List[ConsumptionUnit],
                  log_file: Optional[str] = 'logs/pcs_unit.log') -> None:
@@ -25,14 +23,13 @@ class PCSUnit(CompositeGridEntity):
         Initializes the PCSUnit with the provided components.
 
         Args:
-            batteries (List[Battery]): List of Battery instances.
+            storage_units (List[Battery]): List of Battery instances.
             production_units (List[ProductionUnit]): List of ProductionUnit instances.
             consumption_units (List[ConsumptionUnit]): List of ConsumptionUnit instances.
-            pcs_units (List[PCSUnit]): List of other PCSUnit instances.
             log_file (Optional[str]): Path to the log file.
         """
         # Combine all sub-entities into a single list
-        sub_entities = batteries + production_units + consumption_units
+        sub_entities = storage_units + production_units + consumption_units
 
         # Check for duplicate objects in sub_entities
         seen = set()
@@ -44,39 +41,9 @@ class PCSUnit(CompositeGridEntity):
         super().__init__(sub_entities=sub_entities, log_file=log_file)
 
         # Store references to the components
-        self.batteries = batteries
+        self.storage_units = storage_units
         self.production_units = production_units
         self.consumption_units = consumption_units
-
-    def perform_collective_actions(self, time: float, battery_action: float, consumption_action: float = None,
-                          production_action: float = None) -> None:
-        """
-        Updates the state of all components (batteries, consumption units, production units), based on a shared action for
-        each. Also based on the current time. Alternative implementation for perform_action than in the parent class, but
-        differently named because of the lack of method overloading in Python.
-
-        Args:
-            time (float): Current time as a fraction of the day (0 to 1).
-            battery_action (float): Charging (+) or discharging (-) power (MW).
-            consumption_action (float, optional): Power consumed by consumption units (MW).
-            production_action (float, optional): Power produced by production units (MW).
-        """
-        self.logger.info(f"Updating PCSUnit at time: {time}, with battery_action: {battery_action} MW")
-
-        # Update Battery with the action
-        for battery in self.batteries:
-            battery.update(time=time, action=battery_action)
-        self.logger.debug(f"PCS battery updated to energy level: {self.get_total_battery_capacity()} MWh")
-
-        # Update ProductionUnit
-        for production_unit in self.production_units:
-            production_unit.update(time=time, action=production_action)
-        self.logger.debug(f"PCS production updated to: {self.get_production()} MWh")
-
-        # Update ConsumptionUnit
-        for consumption_unit in self.consumption_units:
-            consumption_unit.update(time=time, action=consumption_action)
-        self.logger.debug(f"PCS consumption updated to : {self.get_consumption()} MWh")
     def get_production(self) -> float:
         """
         Calculates the total current production of all production units.
@@ -108,52 +75,52 @@ class PCSUnit(CompositeGridEntity):
         self.logger.debug(f"Total consumption calculated: {total_consumption} MWh")
         return total_consumption
 
-    def get_total_battery_capacity(self) -> float:
+    def get_total_storage(self) -> float:
         """
-        Calculates the total current capacity of all batteries.
+        Calculates the total current storage of all storage_units.
 
         Returns:
-            float: Total battery capacity in MWh.
+            float: Total storage in MWh.
         """
-        if not self.batteries:
-            self.logger.error("No batteries available in PCSUnit.")
+        if not self.storage_units:
+            self.logger.error("No storage units available in PCSUnit.")
             return 0.0
 
-        total_capacity = sum(battery.get_state() for battery in self.batteries)
-        self.logger.debug(f"Total battery capacity calculated: {total_capacity} MWh")
-        return total_capacity
+        total_storage = sum(battery.get_state() for battery in self.storage_units)
+        self.logger.debug(f"Total storage calculated: {total_storage} MWh")
+        return total_storage
 
     def get_energy_change(self) -> float:
         """
-        Retrieves the total energy change from all batteries.
+        Retrieves the total energy change from all storage units.
 
         Returns:
             float: Total energy change in MWh.
         """
-        if not self.batteries:
-            self.logger.error("No batteries available in PCSUnit.")
+        if not self.storage_units:
+            self.logger.error("No storage units available in PCSUnit.")
             return 0.0
 
-        total_energy_change = sum(battery.energy_change for battery in self.batteries)
+        total_energy_change = sum(battery.energy_change for battery in self.storage_units)
         self.logger.debug(f"Total energy change calculated: {total_energy_change} MWh")
         return total_energy_change
 
-    def reset(self, initial_battery_level: Optional[float] = None) -> None:
+    def reset(self, initial_storage_unit_level: Optional[float] = None) -> None:
         """
-        Resets all components of the PCSUnit, including batteries, production units, and consumption units.
+        Resets all components of the PCSUnit, including storage units, production units, and consumption units.
 
         Args:
-            initial_battery_level (Optional[float]): Optional initial level for batteries.
+            initial_storage_unit_level (Optional[float]): Optional initial level for storage units.
         """
         self.logger.info("Resetting PCSUnit components.")
 
-        # Reset batteries
-        for battery in self.batteries:
-            if initial_battery_level is not None:
-                battery.reset(initial_battery_level)
+        # Reset storage
+        for storage_unit in self.storage_units:
+            if initial_storage_unit_level is not None:
+                storage_unit.reset(initial_storage_unit_level)
             else:
-                battery.reset()
-        self.logger.debug("All batteries have been reset.")
+                storage_unit.reset()
+        self.logger.debug("All storage units have been reset.")
 
         # Reset production units
         for production_unit in self.production_units:
