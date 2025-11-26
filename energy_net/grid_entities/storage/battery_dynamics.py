@@ -1,6 +1,7 @@
 from typing import Any, Dict
-from energy_net.core.dynamics import EnergyDynamics
+from energy_net.foundation.dynamics import EnergyDynamics
 import math
+from energy_net.common import defs
 
 
 class DeterministicBattery(EnergyDynamics):
@@ -141,7 +142,7 @@ class DeterministicBattery(EnergyDynamics):
 
         # Calculate the exponent and clamp it to prevent overflow
         exponent = current_time_step / float(lifetime_constant)
-        exponent = max(-100, min(100, exponent))  # Clamp to prevent overflow
+        exponent = max(-defs.MAX_EXPONENT, min(defs.MAX_EXPONENT, exponent))  # Clamp to prevent overflow
         return x * math.exp(-exponent)
 
     def reset(self) -> None:

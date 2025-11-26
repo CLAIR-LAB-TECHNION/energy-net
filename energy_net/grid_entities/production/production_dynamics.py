@@ -1,9 +1,9 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Dict
-from energy_net.core import defs
-from energy_net.core.dynamics import EnergyDynamics
-from energy_net.core.utils import load_data_from_yaml, interpolate_value
+from energy_net.common import defs
+from energy_net.foundation.dynamics import EnergyDynamics
+from energy_net.common.utils import load_data_from_yaml, interpolate_value
 
 class ProductionDynamics(EnergyDynamics):
     """

@@ -33,7 +33,7 @@ class BatteryManager:
     5. Supporting both standalone operation and integration with PCSUnit
     
     By extracting this logic from the PCS controller, we make the controller cleaner
-    and more focused on its core responsibilities, while making storage operations
+    and more focused on its foundation responsibilities, while making storage operations
     more maintainable and testable.
     """
     

@@ -1,9 +1,9 @@
 # components/storage.py
 
 from typing import Any, Dict, Optional
-from energy_net.core.grid_entity import ElementaryGridEntity
-from energy_net.core.dynamics import EnergyDynamics
-from original.utils.logger import setup_logger  # Import the logger setup
+from energy_net.foundation.grid_entity import ElementaryGridEntity
+from energy_net.foundation.dynamics import EnergyDynamics
+from energy_net.common.utils import setup_logger  # Import the logger setup
 
 
 class Battery(ElementaryGridEntity):

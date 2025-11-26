@@ -1,6 +1,9 @@
 CONSUMPTION_DATA = "consumption_data"
 PRODUCTION_DATA = "production_data"
 
+#Default values for battery dynamics
+MAX_EXPONENT = 100
+
 # Default values for Consumption Dynamics
 # Base load and amplitude
 DEFAULT_CONS_BASE_LOAD = 100.0
