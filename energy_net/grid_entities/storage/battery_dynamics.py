@@ -1,9 +1,9 @@
 from typing import Any, Dict
-from energy_net.core.dynamics import ModelBasedDynamics
+from energy_net.core.dynamics import EnergyDynamics
 import math
 
 
-class Deterministicbattery(ModelBasedDynamics):
+class DeterministicBattery(EnergyDynamics):
     """
     Deterministic Battery Dynamics.
     
@@ -24,7 +24,7 @@ class Deterministicbattery(ModelBasedDynamics):
         Raises:
             AssertionError: If any required parameter is missing or invalid.
         """
-        super().__init__(model_parameters)
+        self.model_parameters = model_parameters
         
         # Ensure all required parameters are provided
         required_params = ['charge_efficiency', 'discharge_efficiency', 'lifetime_constant']
@@ -143,3 +143,12 @@ class Deterministicbattery(ModelBasedDynamics):
         exponent = current_time_step / float(lifetime_constant)
         exponent = max(-100, min(100, exponent))  # Clamp to prevent overflow
         return x * math.exp(-exponent)
+
+    def reset(self) -> None:
+        """
+        Resets the internal state of the DeterministicBattery dynamics
+        to the initial parameters provided during initialization.
+        """
+        self.charge_efficiency = self.initial_parameters['charge_efficiency']
+        self.discharge_efficiency = self.initial_parameters['discharge_efficiency']
+        self.lifetime_constant = self.initial_parameters['lifetime_constant']

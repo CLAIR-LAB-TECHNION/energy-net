@@ -104,26 +104,42 @@ class CompositeGridEntity(GridEntity):
         Args:
             sub_entities (List[GridEntity]): The list of sub-entities to be managed.
         """
-        for idx, entity in enumerate(sub_entities):
-            identifier = f"{entity.__class__.__name__}_{idx}"
+        class_counters = {}
+        for entity in sub_entities:
+            class_name = entity.__class__.__name__
+            if class_name not in class_counters:
+                class_counters[class_name] = 0
+            identifier = f"{class_name}_{class_counters[class_name]}"
+            class_counters[class_name] += 1
             self.sub_entities[identifier] = entity
             self.logger.debug(f"Sub-entity added with ID '{identifier}': {entity}")
 
     def perform_action(self, actions: Dict[str, float]) -> None:
         """
-        Performs actions on all sub-entities.
-
+        Not relevant for composite entities as actions are handled per sub-entity through their update function.
         Args:
             actions (Dict[str, float]): A dictionary mapping sub-entity identifiers to actions.
         """
-        self.logger.debug(f"Performing actions: {actions}")
-        for identifier, action in actions.items():
-            entity = self.sub_entities.get(identifier)
-            if entity:
-                self.logger.info(f"Performing action on '{identifier}': {action}")
-                entity.perform_action(action)
+        pass
+    def update(self, time: float, actions: Optional[Dict[str, float]] = None) -> None:
+        """
+        Updates all sub-entities based on the provided actions and time.
+
+        Args:
+            time (float): Current time as a fraction of the day (0 to 1).
+            actions (Optional[Dict[str, float]]): A dictionary mapping sub-entity identifiers to actions.
+                                                  If None, no actions are performed.
+                                                  IDENTIFIERS MUST MATCH THOSE CREATED DURING _initialize_sub_entities.
+        """
+        self.logger.debug(f"Updating CompositeGridEntity at time: {time} with actions: {actions}")
+        for identifier, entity in self.sub_entities.items():
+            #EXAMPLE IDENTIFIER: "Battery_0", "ProductionUnit_1", etc.
+            action = actions.get(identifier) if actions and identifier in actions else None
+            if action is not None:
+                self.logger.info(f"Updating sub-entity '{identifier}' with action: {action}")
+                entity.update(time, action)
             else:
-                self.logger.warning(f"No sub-entity found with ID '{identifier}'.")
+                entity.update(time);
 
     def get_state(self) -> Dict[str, float]:
         """
