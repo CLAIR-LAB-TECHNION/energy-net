@@ -136,7 +136,7 @@ class GMMConsumptionDynamics(ConsumptionDynamics):
         return consumption1 + consumption2
 
 
-class DataDrivenConsumptionDynamics(ConsumptionDynamics):
+class YAML_DataConsumptionDynamics(ConsumptionDynamics):
     """
     Consumption pattern based on external data loaded from a file.
     Interpolates values between data points and applies an optional scaling factor.
@@ -162,6 +162,76 @@ def _load_consumption_data(data_file: str) -> Dict[float, float]:
     """
     return load_data_from_yaml(data_file, defs.CONSUMPTION_DATA)
 
+class CSV_DataConsumptionDynamics(ConsumptionDynamics):
+    """
+    Consumption pattern based on external data loaded from a CSV file with Datetime and Consumption columns.
+    Allows querying consumption at specific date/time values.
+    """
+    def __init__(self, params: Dict[str, Any]):
+        """
+        Initializes the dynamics with a specific configuration.
+
+        Args:
+            params (Dict[str, Any]): Configuration dictionary for the pattern.
+        """
+        super().__init__(params)
+        self.data_file = self.params.get('data_file')
+        if not self.data_file:
+            raise ValueError("No data file specified for DateTimeDrivenConsumptionDynamics")
+        self.consumption_data = self._load_consumption_data(self.data_file)
+        self.total_days = int(self.consumption_data.index[-1])+1
+
+
+
+    def _load_consumption_data(self, data_file: str) -> pd.DataFrame:
+        """
+        Load consumption data from a CSV file.
+
+        Args:
+            data_file: Path to the CSV file.
+
+        Returns:
+            pd.DataFrame: DataFrame containing Datetime, Consumption, and TimeFraction columns.
+        """
+        try:
+            df = pd.read_csv(data_file, parse_dates=['Datetime'])
+            if 'Datetime' not in df.columns or 'Consumption' not in df.columns:
+                raise ValueError("CSV file must contain 'Datetime' and 'Consumption' columns")
+            df.set_index('Datetime', inplace=True)
+
+            # Calculate the day number and time fraction
+            df['DayNumber'] = (df.index - df.index[0]).days
+            df['TimeFraction'] = df.index.hour / 24 + df.index.minute / 1440
+            df['DayTimeFraction'] = df['DayNumber'] + df['TimeFraction']
+            df.set_index('DayTimeFraction', inplace=True)
+            return df
+        except Exception as e:
+            raise ValueError(f"Failed to load consumption data: {e}")
+
+    def get_value(self, **kwargs) -> float:
+        """
+        Retrieves the consumption value for a specific date/time.
+
+        Args:
+            **kwargs:
+                - datetime (datetime): The specific date/time to query.
+
+        Returns:
+            float: The consumption value at the specified date/time.
+        """
+        query_time = kwargs.get('time')
+
+        # Ensure the query time wraps around within the total days to handle dates that go past the data range
+        query_time = query_time%self.total_days
+
+        print(query_time)
+        if query_time not in self.consumption_data.index:
+            # Interpolate the missing value
+            extended_index = self.consumption_data.index.union([query_time]).sort_values()
+            interpolated_data = self.consumption_data.reindex(extended_index).interpolate(method='index')
+            return interpolated_data.loc[query_time, 'Consumption']
+            # Return the interpolated value
+        return self.consumption_data.loc[query_time, 'Consumption']
 
 def _interpolate_consumption(time_fraction: float, consumption_data: Dict[float, float]) -> float:
     """
