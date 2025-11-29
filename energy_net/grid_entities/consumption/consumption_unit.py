@@ -1,10 +1,15 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
-from energy_net.common.utils import setup_logger  # Import the logger setup
+from energy_net.common.utils import setup_logger
+from energy_net.foundation.model import State, Action
+
+
 class ConsumptionUnit(ElementaryGridEntity):
     """
     Consumption Unit component managing energy consumption.
+
+    Supports both legacy (float) and new (State/Action) interfaces.
     """
 
     def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any],
@@ -31,44 +36,94 @@ class ConsumptionUnit(ElementaryGridEntity):
 
         self.consumption_capacity: float = config['consumption_capacity']
         self.current_consumption: float = 0.0
-        self.initial_consumption: float = self.current_consumption  # Assuming initial consumption is 0.0
+        self.initial_consumption: float = self.current_consumption
+
+        # Initialize internal state using new State class
+        self._state = State({
+            'consumption': self.current_consumption,
+            'time': 0.0
+        })
 
         self.logger.info(
             f"ConsumptionUnit initialized with capacity: {self.consumption_capacity} MWh and initial consumption: {self.current_consumption} MWh")
 
-    def perform_action(self, action: float) -> None:
+    def perform_action(self, action: Union[float, Action]) -> None:
         """
-        Consumption units typically do not require actions, but the method is defined for interface consistency.
+        Perform an action on the consumption unit.
 
         Args:
-            action (float): Not used in this implementation.
+            action: Either a float (legacy) or Action object (new interface).
         """
-        self.logger.debug(f"Performing action: {action} MW (no effect on ConsumptionUnit)")
-        pass  # Consumption is typically autonomous and does not respond to actions
-
-    def get_state(self) -> float:
+        # Extract action value from either format
+        pass
+    def get_state(self) -> Union[float, State]:
         """
         Retrieves the current consumption level.
 
         Returns:
-            float: Current consumption in MWh.
+            float or State: Current consumption in MWh (legacy mode) or
+                           State object with full state information.
         """
         self.logger.debug(f"Retrieving consumption state: {self.current_consumption} MWh")
+        # Return float for backward compatibility, but State is available internally
         return self.current_consumption
 
-    def update(self, time: float, action: float = 0.0) -> None:
+    def update(self, state: Union[float, State], action: Union[float, Action] = 0.0) -> None:
         """
-        Updates the consumption level based on dynamics and time.
+        Updates the consumption level based on dynamics and state.
+
+        Supports both legacy and new interfaces:
+        - Legacy: update(0.5, action=0.0)  # float is interpreted as time
+        - New: update(state_obj, action_obj)
 
         Args:
-            time (float): Current time as a fraction of the day (0 to 1).
-            action (float, optional): Action to perform (default is 0.0).
-                                       Not used in this implementation.
+            state: State object containing time and other state information OR
+                   float (legacy) representing time as fraction of day (0 to 1).
+            action: Action value as float OR Action object (default is 0.0).
         """
-        self.logger.debug(f"Updating ConsumptionUnit at time: {time} with action: {action} MW")
+        # Handle both legacy (float) and new (State) interfaces
+        if isinstance(state, State):
+            # New interface: extract time from State
+            state_obj = state
+            time_value = state_obj.get_attribute('time')
+            if time_value is None:
+                self.logger.warning("State object missing 'time' attribute, using 0.0")
+                time_value = 0.0
+        else:
+            # Legacy interface: state parameter is actually just time as a float
+            time_value = state
+            state_obj = None
+
+        if isinstance(action, Action):
+            # New interface: extract action value from Action object
+            # For consumption units, we might look for a 'consumption_target' action
+            action_value = action.get_action('value')
+            if action_value is None:
+                action_value = 0.0
+        else:
+            # Legacy interface: action is a float
+            action_value = action
+
+        # First, perform the action (this may modify internal state)
+        self.perform_action(action if isinstance(action, Action) else action_value)
+
+        # Check if there's a pending action from a previous perform_action call
+        pending_action = self._state.get_attribute('pending_action')
+        if pending_action is not None:
+            action_value = pending_action
+            # Clear the pending action after using it
+            self._state.remove_attribute('pending_action')
+
+        self.logger.debug(f"Updating ConsumptionUnit at time: {time_value} with action: {action_value} MW")
+
         # Delegate the consumption calculation to the dynamics
         previous_consumption = self.current_consumption
-        self.current_consumption = self.dynamics.get_value(time=time, action=action)
+        self.current_consumption = self.dynamics.get_value(time=time_value, action=action_value)
+
+        # Update internal state
+        self._state.set_attribute('time', time_value)
+        self._state.set_attribute('consumption', self.current_consumption)
+
         self.logger.info(
             f"ConsumptionUnit consumption changed from {previous_consumption} MWh to {self.current_consumption} MWh")
 
@@ -79,4 +134,9 @@ class ConsumptionUnit(ElementaryGridEntity):
         self.logger.info(
             f"Resetting ConsumptionUnit from {self.current_consumption} MWh to initial consumption level: {self.initial_consumption} MWh")
         self.current_consumption = self.initial_consumption
+
+        # Reset internal state
+        self._state.set_attribute('consumption', self.initial_consumption)
+        self._state.set_attribute('time', 0.0)
+
         self.logger.debug(f"ConsumptionUnit reset complete. Current consumption: {self.current_consumption} MWh")

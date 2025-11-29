@@ -79,7 +79,8 @@ class TestPCSUnitSimulation(unittest.TestCase):
                         "ConsumptionUnit_0": consumption_action,
                         "ProductionUnit_0": production_action
                     }
-                    self.pcs_unit.update(current_time, actions)
+                    # Update now accepts state parameter (float is interpreted as time)
+                    self.pcs_unit.update(state=current_time, actions=actions)
                 except Exception as e:
                     self.fail(f"PCS unit simulation crashed at hour {hour + 1}: {e}")
 
