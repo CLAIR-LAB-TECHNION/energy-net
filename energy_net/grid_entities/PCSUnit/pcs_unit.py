@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, List
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.production.production_unit import ProductionUnit
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
-from energy_net.core.grid_entity import CompositeGridEntity
+from energy_net.foundation.grid_entity import CompositeGridEntity
 
 class PCSUnit(CompositeGridEntity):
     """

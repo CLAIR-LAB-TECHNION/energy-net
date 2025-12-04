@@ -1,10 +1,10 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Dict
-from energy_net.core import defs
-from energy_net.core.dynamics import EnergyDynamics
-from energy_net.core.utils import load_data_from_yaml, interpolate_value
-
+from energy_net.common import defs
+from energy_net.foundation.dynamics import EnergyDynamics
+from energy_net.common.utils import load_data_from_yaml, interpolate_value
+import pandas as pd
 class ConsumptionDynamics(EnergyDynamics):
     """
     Unified class for defining and handling energy consumption patterns and dynamics.
@@ -147,12 +147,12 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
     Consumption pattern based on external data loaded from a CSV file with Datetime and Consumption columns.
     Allows querying consumption at specific date/time values.
     """
-    def __init__(self, params: Dict[str, Any]):
+    def __init__(self, params: Dict[str, EnergyDynamics]):
         """
         Initializes the dynamics with a specific configuration.
 
         Args:
-            params (Dict[str, Any]): Configuration dictionary for the pattern.
+            params (Dict[str, EnergyDynamics]): Configuration dictionary for the pattern.
         """
         super().__init__(params)
         self.data_file = self.params.get('data_file')

@@ -5,12 +5,12 @@ from typing import Any, Dict, Optional, List
 from original.components.storage_devices.battery import Battery
 from original.components.production_devices.production_unit import ProductionUnit
 from original.components.consumption_devices.consumption_unit import ConsumptionUnit
-from energy_net.core.dynamics import EnergyDynamics
-from energy_net.core.grid_entity import CompositeGridEntity
-from energy_net.grid_entities.storage.battery_dynamics import Deterministicbattery
+from energy_net.foundation.dynamics import EnergyDynamics
+from energy_net.foundation.grid_entity import CompositeGridEntity
+from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from original.dynamics.production_dynamics.production_dynmaics_det import DeterministicProduction
 from original.dynamics.consumption_dynamics.consumption_dynamics_det import DeterministicConsumption
-from energy_net.core.dynamics import DataDrivenDynamics
+from energy_net.foundation.dynamics import YAMLDataDynamics
 
 
 
