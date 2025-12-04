@@ -134,9 +134,9 @@ class TestBattery(unittest.TestCase):
         self.assertEqual(self.battery.energy_change, 5)
 
     def test_get_state(self):
-        state = self.battery.get_state()
-        self.assertIsInstance(state, State)
-        self.assertEqual(state.get_attribute('energy_level'), 50)
+        state_value = self.battery.get_state()
+        self.assertIsInstance(state_value, (int, float))  # allow int or float
+        self.assertEqual(state_value, 50)
 
     def test_update_with_action(self):
         state = State({'time': 0.2})

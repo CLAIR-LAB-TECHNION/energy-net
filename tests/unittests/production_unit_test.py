@@ -32,12 +32,12 @@ class TestProductionUnit(unittest.TestCase):
         self.assertEqual(self.production_unit._state.get_attribute('time'), 0.0)
 
     def test_get_state(self):
-        # Test the get_state method returns State object
+        # Test the get_state method returns current production value
         self.production_unit.current_production = 75.0
         self.production_unit._state.set_attribute('production', 75.0)
-        state = self.production_unit.get_state()
-        self.assertIsInstance(state, State)
-        self.assertEqual(state.get_attribute('production'), 75.0)
+        state_value = self.production_unit.get_state()
+        self.assertIsInstance(state_value, float)
+        self.assertEqual(state_value, 75.0)
 
     def test_update_with_state_object(self):
         # Passing State object

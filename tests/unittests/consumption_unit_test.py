@@ -28,11 +28,10 @@ class TestConsumptionUnit(unittest.TestCase):
         self.assertEqual(self.consumption_unit._state.get_attribute('time'), 0.0)
 
     def test_get_state(self):
-        # get_state() returns State object
-        state = self.consumption_unit.get_state()
-        self.assertIsInstance(state, State)
-        self.assertEqual(state.get_attribute('consumption'), 0.0)
-        self.assertEqual(state.get_attribute('time'), 0.0)
+        # get_state() returns numeric consumption value
+        state_value = self.consumption_unit.get_state()
+        self.assertIsInstance(state_value, (int, float))  # allow int or float
+        self.assertEqual(state_value, 0.0)
 
     def test_update_with_state(self):
         # Passing State object
