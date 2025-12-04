@@ -26,31 +26,38 @@ class TestProductionUnit(unittest.TestCase):
         self.assertEqual(self.production_unit.production_capacity, 100.0)
         self.assertEqual(self.production_unit.current_production, 0.0)
         self.assertEqual(self.production_unit.initial_production, 0.0)
+        # Check internal state was initialized
+        self.assertIsNotNone(self.production_unit._state)
+        self.assertEqual(self.production_unit._state.get_attribute('production'), 0.0)
+        self.assertEqual(self.production_unit._state.get_attribute('time'), 0.0)
 
     def test_get_state(self):
-        # Test the get_state method
+        # Test the get_state method returns State object
         self.production_unit.current_production = 75.0
-        self.assertEqual(self.production_unit.get_state(), 75.0)
-        self.assertIsInstance(self.production_unit.get_state(), float)
-
-    def test_update_legacy_interface(self):
-        # Legacy: passing float as state (interpreted as time)
-        self.production_unit.update(0.5, action=0.0)
-        self.mock_dynamics.get_value.assert_called_once_with(time=0.5, action=0.0)
-        self.assertEqual(self.production_unit.current_production, 50.0)
+        self.production_unit._state.set_attribute('production', 75.0)
+        state = self.production_unit.get_state()
+        self.assertIsInstance(state, State)
+        self.assertEqual(state.get_attribute('production'), 75.0)
 
     def test_update_with_state_object(self):
-        # New: passing State object
+        # Passing State object
         state = State({'time': 0.5})
-        self.production_unit.update(state, action=0.0)
+        self.production_unit.update(state, action=None)
         self.mock_dynamics.get_value.assert_called_with(time=0.5, action=0.0)
         self.assertEqual(self.production_unit.current_production, 50.0)
 
     def test_update_with_action_object(self):
-        # New: passing Action object
+        # Passing State and Action objects
         state = State({'time': 0.5})
-        action = Action({'value': 0.0})
+        action = Action({'value': 10.0})
         self.production_unit.update(state, action)
+        self.mock_dynamics.get_value.assert_called_with(time=0.5, action=10.0)
+        self.assertEqual(self.production_unit.current_production, 50.0)
+
+    def test_update_without_action(self):
+        # Update with State but no action
+        state = State({'time': 0.5})
+        self.production_unit.update(state)
         self.mock_dynamics.get_value.assert_called_with(time=0.5, action=0.0)
         self.assertEqual(self.production_unit.current_production, 50.0)
 
@@ -61,21 +68,49 @@ class TestProductionUnit(unittest.TestCase):
         # Should default to 0.0
         self.mock_dynamics.get_value.assert_called_with(time=0.0, action=0.0)
 
+    def test_update_updates_internal_state(self):
+        # Verify internal state is updated
+        state = State({'time': 0.7})
+        self.production_unit.update(state)
+        internal_state = self.production_unit._state
+        self.assertEqual(internal_state.get_attribute('time'), 0.7)
+        self.assertEqual(internal_state.get_attribute('production'), 50.0)
+
     def test_reset(self):
         # Test the reset method
-        self.production_unit.current_production = 80.0
+        state = State({'time': 0.5})
+        self.production_unit.update(state)
+        self.assertEqual(self.production_unit.current_production, 50.0)
+
         self.production_unit.reset()
         self.assertEqual(self.production_unit.current_production, 0.0)
+        self.assertEqual(self.production_unit._state.get_attribute('production'), 0.0)
+        self.assertEqual(self.production_unit._state.get_attribute('time'), 0.0)
 
     def test_perform_action_is_noop(self):
         # perform_action is pass (no-op) for ProductionUnit
         # Just verify it can be called without errors
-        self.production_unit.perform_action(10.0)
-        self.assertEqual(self.production_unit.current_production, 0.0)
-
         action = Action({'value': 10.0})
         self.production_unit.perform_action(action)
         self.assertEqual(self.production_unit.current_production, 0.0)
+
+    def test_multiple_updates_track_state(self):
+        # Test that multiple updates correctly track state
+        state1 = State({'time': 0.3})
+        self.mock_dynamics.get_value.return_value = 30.0
+        self.production_unit.update(state1)
+
+        self.assertEqual(self.production_unit.current_production, 30.0)
+        self.assertEqual(self.production_unit._state.get_attribute('production'), 30.0)
+        self.assertEqual(self.production_unit._state.get_attribute('time'), 0.3)
+
+        state2 = State({'time': 0.7})
+        self.mock_dynamics.get_value.return_value = 70.0
+        self.production_unit.update(state2)
+
+        self.assertEqual(self.production_unit.current_production, 70.0)
+        self.assertEqual(self.production_unit._state.get_attribute('production'), 70.0)
+        self.assertEqual(self.production_unit._state.get_attribute('time'), 0.7)
 
 
 if __name__ == '__main__':

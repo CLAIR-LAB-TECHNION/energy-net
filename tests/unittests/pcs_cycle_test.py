@@ -1,4 +1,5 @@
 import unittest
+
 from energy_net.grid_entities.PCSUnit.pcs_unit import PCSUnit
 from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from energy_net.grid_entities.storage.battery import Battery
@@ -6,6 +7,7 @@ from energy_net.grid_entities.production.production_unit import ProductionUnit
 from energy_net.grid_entities.production.production_dynamics import GMMProductionDynamics
 from energy_net.grid_entities.consumption.consumption_dynamics import GMMConsumptionDynamics
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
+from energy_net.foundation.model import State, Action
 
 
 class TestPCSUnitSimulation(unittest.TestCase):
@@ -41,7 +43,10 @@ class TestPCSUnitSimulation(unittest.TestCase):
         }
         consumption_dynamics = GMMConsumptionDynamics(params=consumption_dynamics_config)
         consumption_unit_config = {"consumption_capacity": 5000.0}
-        self.consumption_unit = ConsumptionUnit(dynamics=consumption_dynamics, config=consumption_unit_config)
+        self.consumption_unit = ConsumptionUnit(
+            dynamics=consumption_dynamics,
+            config=consumption_unit_config
+        )
 
         # --- Initialize production unit ---
         production_dynamics_config = {
@@ -54,7 +59,10 @@ class TestPCSUnitSimulation(unittest.TestCase):
         }
         production_dynamics = GMMProductionDynamics(params=production_dynamics_config)
         production_unit_config = {"production_capacity": 5000.0}
-        self.production_unit = ProductionUnit(dynamics=production_dynamics, config=production_unit_config)
+        self.production_unit = ProductionUnit(
+            dynamics=production_dynamics,
+            config=production_unit_config
+        )
 
         # --- Create PCSUnit ---
         self.pcs_unit = PCSUnit(
@@ -66,39 +74,45 @@ class TestPCSUnitSimulation(unittest.TestCase):
     def test_run_24_hours_without_crash(self):
         """Run the PCSUnit simulation for 24 hours and ensure no exceptions occur."""
         time_step = 1.0 / 24  # 1 hour as fraction of a day
+
         for hour in range(24):
             current_time = hour * time_step
+
             with self.subTest(hour=hour + 1):
-                battery_action = 20.0  # Example charging action
-                consumption_action = self.consumption_unit.get_state()
-                production_action = self.production_unit.get_state()
+                # ---- Build State Object ----
+                state = State({
+                    "time": current_time
+                })
+
+                # ---- ONLY Battery Action ----
+                battery_action = Action({
+                    "value": 20.0  # example charging
+                })
+
+                actions = {
+                    "Battery_0": battery_action
+                }
 
                 try:
-                    actions = {
-                        "Battery_0": battery_action,
-                        "ConsumptionUnit_0": consumption_action,
-                        "ProductionUnit_0": production_action
-                    }
-                    # Update now accepts state parameter (float is interpreted as time)
-                    self.pcs_unit.update(state=current_time, actions=actions)
+                    self.pcs_unit.update(state=state, actions=actions)
                 except Exception as e:
                     self.fail(f"PCS unit simulation crashed at hour {hour + 1}: {e}")
 
-                # Log the state for inspection
+                # ---- Log the state for inspection ----
                 total_battery = self.pcs_unit.get_total_storage()
                 total_production = self.pcs_unit.get_production()
                 total_consumption = self.pcs_unit.get_consumption()
                 energy_change = self.pcs_unit.get_energy_change()
 
-                # Print/log output per hour
                 print(f"Hour {hour + 1}:")
-                print(f"  Battery Capacity: {total_battery} MWh")
+                print(f"  Total Storage: {total_battery} MWh")
                 print(f"  Total Production: {total_production} MW")
                 print(f"  Total Consumption: {total_consumption} MW")
-                print(f"  Energy Change: {energy_change} MWh")
+                print(
+                    f"  Energy Change: {energy_change:.3f} MWh (from hour {hour} to hour {hour + 1})")
                 print("-" * 40)
 
-                # Minimal assertions to satisfy unittest
+                # ---- Minimal Assertions ----
                 self.assertTrue(total_battery >= 0)
                 self.assertTrue(total_production >= 0)
                 self.assertTrue(total_consumption >= 0)

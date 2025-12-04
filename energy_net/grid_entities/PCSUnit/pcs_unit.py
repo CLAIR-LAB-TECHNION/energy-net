@@ -126,7 +126,7 @@ class PCSUnit(CompositeGridEntity):
             self.logger.error("No storage units available in PCSUnit.")
             return 0.0
 
-        total_energy_change = sum(battery.energy_change for battery in self.storage_units)
+        total_energy_change = sum(battery.get_energy_change() for battery in self.storage_units)
         self.logger.debug(f"Total energy change calculated: {total_energy_change} MWh")
 
         # Update internal state
@@ -184,72 +184,63 @@ class PCSUnit(CompositeGridEntity):
 
         self.logger.info("PCSUnit reset complete.")
 
-    def update(self, state: Union[float, State], actions: Optional[Union[Dict[str, Any], Action]] = None) -> None:
+    def update(self, state: State, actions: Optional[Dict[str, Action]] = None) -> None:
         """
-        Updates the PCSUnit by first updating all sub-entities, then balancing energy
-        by drawing from batteries when consumption exceeds production.
+        Updates all sub-entities based on the provided state, production, and consumption.
 
         Args:
-            state: State object containing time and other state information OR
-                   float (legacy) representing time as fraction of day (0 to 1).
-            actions: Can be:
-                    - Dict[str, float] (legacy): Maps sub-entity IDs to action values
-                    - Action object (new): Contains actions for sub-entities
-                    - None: No actions
+            state: State object containing time and other state information.
+            actions: Optional user-defined actions for batteries (only applied if surplus exists).
         """
-        # First, call parent update to update all sub-entities normally
-        super().update(state, actions)
+        # --- Extract time from state ---
+        current_time = state.get_attribute('time') or 0.0
+        self._state.set_attribute('time', current_time)
 
-        # Handle both legacy (float) and new (State) interfaces
-        if isinstance(state, State):
-            time_value = state.get_attribute('time')
-            if time_value is None:
-                self.logger.warning("State object missing 'time' attribute, using 0.0")
-                time_value = 0.0
-            state_obj = state
-        else:
-            # Legacy: state parameter is actually just time as a float
-            time_value = state
-            state_obj = State({'time': time_value})
+        # --- Get current totals ---
+        total_production = self.get_production()  # float
+        total_consumption = self.get_consumption()  # float
+        energy_diff = total_production - total_consumption  # positive = surplus, negative = deficit
 
-        # Calculate current production and consumption
-        total_production = self.get_production()
-        total_consumption = self.get_consumption()
+        self.logger.debug(f"Time {current_time}: production={total_production}, "
+                          f"consumption={total_consumption}, diff={energy_diff}")
 
-        # Calculate energy deficit (positive means we need to draw from batteries)
-        energy_deficit = total_consumption - total_production
-
-        if energy_deficit > 0:
-            # We need to draw energy from batteries
-            self.logger.info(f"Energy deficit detected: {energy_deficit:.4f} MWh. Drawing from batteries.")
-
-            if not self.storage_units:
-                self.logger.error("No storage units available to cover energy deficit.")
-                return
-
-            # Calculate how much each battery should provide (split evenly)
+        # --- Prepare battery actions based on surplus/deficit ---
+        battery_actions: Dict[str, Action] = {}
+        if self.storage_units:
             num_batteries = len(self.storage_units)
-            energy_per_battery = energy_deficit / num_batteries
 
-            if num_batteries > 1:
-                self.logger.debug(
-                    f"Distributing {energy_per_battery:.4f} MWh discharge to each of {num_batteries} batteries.")
-
-            # Update each battery to discharge the required amount
             for idx, battery in enumerate(self.storage_units):
-                battery_id = f"Battery_{idx}"
-                self.logger.debug(f"Discharging {energy_per_battery:.4f} MWh from '{battery_id}'.")
+                batt_id = f"Battery_{idx}"
 
-                # Create discharge action (negative value for discharge)
-                # Assuming battery.update expects a discharge action
-                discharge_action = -energy_per_battery
-                battery.update(state_obj, discharge_action)
+                if energy_diff > 0:
+                    # Surplus → charge
+                    max_charge = 20.0
+                    charge_value = min(max_charge, energy_diff / num_batteries)
 
-        elif energy_deficit < 0:
-            # Surplus production (could be used for charging batteries in future enhancement)
-            self.logger.info(f"Energy surplus: {abs(energy_deficit):.4f} MWh (production exceeds consumption).")
-        else:
-            self.logger.debug("Production and consumption are balanced.")
+                    # If user provided an action, respect it but cap at available surplus
+                    if actions and batt_id in actions:
+                        charge_value = min(charge_value, actions[batt_id].get_action('value') or 0.0)
 
-        # Update internal state with the current time
-        self._state.set_attribute('time', time_value)
+                    battery_actions[batt_id] = Action({'value': charge_value})
+
+                elif energy_diff < 0:
+                    # Deficit → discharge to cover deficit
+                    discharge_value = energy_diff / num_batteries  # negative value
+                    battery_actions[batt_id] = Action({'value': discharge_value})
+
+                else:
+                    # Balanced → do nothing
+                    battery_actions[batt_id] = Action({'value': 0.0})
+
+        # --- Update batteries ---
+        for idx, battery in enumerate(self.storage_units):
+            batt_id = f"Battery_{idx}"
+            action = battery_actions.get(batt_id)
+            battery.update(state, action)
+
+        # --- Update production and consumption units ---
+        for idx, prod_unit in enumerate(self.production_units):
+            prod_unit.update(state)
+
+        for idx, cons_unit in enumerate(self.consumption_units):
+            cons_unit.update(state)

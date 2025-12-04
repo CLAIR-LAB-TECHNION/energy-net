@@ -95,24 +95,6 @@ class ElementaryGridEntity(GridEntity):
                            New implementations can return State objects.
         """
         pass
-
-    def get_full_state(self) -> State:
-        """
-        Retrieves the full state as a State object.
-
-        Subclasses should override this to return their complete state.
-        Default implementation creates a basic State from get_state().
-
-        Returns:
-            State: Complete state information.
-        """
-        state_value = self.get_state()
-        if isinstance(state_value, State):
-            return state_value
-        else:
-            # Wrap float in a State object
-            return State({'value': state_value})
-
     @abstractmethod
     def perform_action(self, action: Union[float, Action]) -> None:
         """
@@ -209,64 +191,62 @@ class CompositeGridEntity(GridEntity):
             used_names.add(identifier)
             self.sub_entities[identifier] = entity
             self.logger.debug(f"Sub-entity added with ID '{identifier}': {entity}")
-    def update(self, state: Union[float, State], actions: Optional[Union[Dict[str, Any], Action]] = None) -> None:
-        """
-        Updates all sub-entities based on the provided state and actions.
 
-        Supports both legacy and new interfaces:
-        - Legacy: update(0.5, actions={'Battery_0': 5.0})  # float is time
-        - New: update(state_obj, action_obj)
+    def update(self, state: State, actions: Optional[Dict[str, Action]] = None) -> None:
+        """
+        Updates all sub-entities based on the provided state and per-entity Action objects.
 
         Args:
-            state: State object containing time and other state information OR
-                   float (legacy) representing time as fraction of day (0 to 1).
-            actions: Can be:
-                    - Dict[str, float] (legacy): Maps sub-entity IDs to action values
-                    - Action object (new): Contains actions for sub-entities
-                    - None: No actions
+            state (State): State object containing time and other state information.
+            actions (Optional[Dict[str, Action]]): Dictionary mapping sub-entity IDs
+                                                   to their respective Action objects.
         """
-        # Handle both legacy (float) and new (State) interfaces
-        if isinstance(state, State):
-            time_value = state.get_attribute('time')
-            if time_value is None:
-                self.logger.warning("State object missing 'time' attribute, using 0.0")
-                time_value = 0.0
-            state_obj = state
-        else:
-            # Legacy: state parameter is actually just time as a float
-            time_value = state
-            state_obj = State({'time': time_value})
+        # ---- Hard Type Enforcement ----
+        if not isinstance(state, State):
+            raise TypeError(
+                f"CompositeGridEntity.update requires a State object. "
+                f"Received: {type(state)}"
+            )
 
-        # Update internal state
+        if actions is not None and not isinstance(actions, dict):
+            raise TypeError(
+                f"CompositeGridEntity.update requires a Dict[str, Action] or None. "
+                f"Received: {type(actions)}"
+            )
+
+        if actions is not None:
+            for key, value in actions.items():
+                if not isinstance(key, str):
+                    raise TypeError("All action dictionary keys must be strings (entity IDs).")
+                if not isinstance(value, Action):
+                    raise TypeError(
+                        f"All values in actions dict must be Action objects. "
+                        f"Key '{key}' has type {type(value)}"
+                    )
+
+        # ---- Extract Time from State ----
+        time_value = state.get_attribute('time')
+        if time_value is None:
+            raise ValueError("State object must contain a 'time' attribute.")
+
+        # ---- Update Internal State ----
         self._state.set_attribute('time', time_value)
+        self.logger.debug(
+            f"Updating CompositeGridEntity at time: {time_value} with actions: {actions}"
+        )
 
-        self.logger.debug(f"Updating CompositeGridEntity at time: {time_value} with actions: {actions}")
-
-        # Handle both legacy (dict) and new (Action) interfaces for actions
-        if isinstance(actions, Action):
-            # New interface: extract actions from Action object
-            # Actions should be stored with sub-entity identifiers as keys
-            actions_dict = {}
-            for identifier in self.sub_entities.keys():
-                action_value = actions.get_action(identifier)
-                if action_value is not None:
-                    actions_dict[identifier] = action_value
-        elif isinstance(actions, dict):
-            # Legacy interface: actions is already a dict
-            actions_dict = actions
-        else:
-            # No actions provided
-            actions_dict = {}
-
-        # Update each sub-entity
+        # ---- Update Each Sub-Entity ----
         for identifier, entity in self.sub_entities.items():
-            # EXAMPLE IDENTIFIER: "Battery_0", "ProductionUnit_1", etc.
-            action = actions_dict.get(identifier) if actions_dict else None
-            if action is not None:
-                self.logger.info(f"Updating sub-entity '{identifier}' with action: {action}")
-                entity.update(state_obj, action)
+            entity_action = actions.get(identifier) if actions is not None else None
+
+            if entity_action is not None:
+                self.logger.info(
+                    f"Updating sub-entity '{identifier}' with Action: {entity_action}"
+                )
+                entity.update(state, entity_action)
             else:
-                entity.update(state_obj)
+                # Explicitly no action for this entity
+                entity.update(state)
 
     def get_state(self) -> Dict[str, Any]:
         """

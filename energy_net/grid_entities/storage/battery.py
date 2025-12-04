@@ -1,15 +1,13 @@
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.common.utils import setup_logger
-from energy_net.foundation.model import State, Action  # Import new classes
+from energy_net.foundation.model import State, Action
 
 
 class Battery(ElementaryGridEntity):
     """
     Battery component managing energy storage.
-
-    Supports both legacy (float) and new (State/Action) interfaces.
     """
 
     def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any], log_file: Optional[str] = 'logs/storage.log'):
@@ -49,7 +47,7 @@ class Battery(ElementaryGridEntity):
         self.energy_change: float = 0.0
         self.current_time: float = 0.0
 
-        # Initialize internal state using new State class
+        # Initialize internal state using State class
         self._state = State({
             'energy_level': self.energy_level,
             'energy_change': self.energy_change,
@@ -58,21 +56,18 @@ class Battery(ElementaryGridEntity):
 
         self.logger.info(f"Battery initialized with energy level: {self.energy_level} MWh")
 
-    def perform_action(self, action: Union[float, Action]) -> None:
+    def perform_action(self, action: Action) -> None:
         """
         Performs charging or discharging based on the action by delegating to the dynamic.
 
         Args:
-            action: Either a float (legacy) or Action object (new interface).
+            action: Action object containing the action to perform.
                    Positive for charging, negative for discharging.
         """
-        # Extract action value from either format
-        if isinstance(action, Action):
-            action_value = action.get_action('value')
-            if action_value is None:
-                action_value = 0.0
-        else:
-            action_value = action
+        # Extract action value from Action object
+        action_value = action.get_action('value')
+        if action_value is None:
+            action_value = 0.0
 
         self.logger.debug(f"Performing action: {action_value} MW")
 
@@ -94,74 +89,56 @@ class Battery(ElementaryGridEntity):
         self._state.set_attribute('energy_level', self.energy_level)
         self._state.set_attribute('energy_change', self.energy_change)
 
-    def get_state(self) -> Union[float, State]:
+    def get_state(self) -> float:
         """
-        Retrieves the current energy level of the storage.
+        Retrieves the current energy level of the battery as a float.
 
         Returns:
-            float or State: Current energy level in MWh (legacy mode) or 
-                           State object with full state information.
+            float: Current energy level in MWh.
         """
-        self.logger.debug(f"Retrieving storage state: {self.energy_level} MWh")
-        # Return float for backward compatibility, but State is available internally
+        self.logger.debug(f"Retrieving battery energy level: {self.energy_level} MWh")
         return self.energy_level
 
-    def get_full_state(self) -> State:
+    def get_energy_change(self) -> float:
         """
-        Retrieves the full state as a State object.
+        Retrieves the current energy change of the battery.
 
         Returns:
-            State: Complete state including energy level, energy change, time, etc.
+            float: Current energy change in MWh.
         """
-        # Update state before returning
-        self._state.set_attribute('energy_level', self.energy_level)
-        self._state.set_attribute('energy_change', self.energy_change)
-        self._state.set_attribute('time', self.current_time)
-        return self._state
+        self.logger.debug(f"Retrieving battery energy change: {self.energy_change} MWh")
+        return self.energy_change
 
-    def update(self, time: Union[float, State], action: Union[float, Action] = 0.0) -> None:
+    def update(self, state: State, action: Optional[Action] = None) -> None:
         """
-        Updates the storage's state based on dynamics, time, and action.
-
-        Supports both legacy and new interfaces:
-        - Legacy: update(time=0.5, action=5.0)
-        - New: update(state, action_obj)
+        Updates the storage's state based on dynamics, state, and action.
 
         Args:
-            time: Current time as float (0 to 1) OR State object containing time.
-            action: Action value as float OR Action object (default is 0.0).
+            state: State object containing time and other state information.
+            action: Action object containing actions to perform (optional).
                    Positive for charging, negative for discharging.
         """
-        # Handle both legacy (float) and new (State/Action) interfaces
-        if isinstance(time, State):
-            # New interface: extract time from State
-            state_obj = time
-            time_value = state_obj.get_attribute('time')
-            if time_value is None:
-                self.logger.warning("State object missing 'time' attribute, using 0.0")
-                time_value = 0.0
-        else:
-            # Legacy interface: time is a float
-            time_value = time
-            state_obj = None
+        # Extract time from State
+        time_value = state.get_attribute('time')
+        if time_value is None:
+            self.logger.warning("State object missing 'time' attribute, using 0.0")
+            time_value = 0.0
 
-        if isinstance(action, Action):
-            # New interface: extract action value from Action object
+        # Extract action value from Action object
+        action_value = 0.0
+        if action is not None:
             action_value = action.get_action('value')
             if action_value is None:
                 action_value = 0.0
-        else:
-            # Legacy interface: action is a float
-            action_value = action
 
         self.current_time = time_value
 
         # Update internal state time
         self._state.set_attribute('time', self.current_time)
 
-        if action_value != 0:
+        if action_value != 0 and action is not None:
             self.logger.debug(f"Updating Battery at time: {time_value} with action: {action_value} MW")
-            self.perform_action(action if isinstance(action, Action) else action_value)
+            self.perform_action(action)
 
     def reset(self, initial_level: Optional[float] = None) -> None:
         """

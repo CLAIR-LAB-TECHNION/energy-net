@@ -27,30 +27,27 @@ class TestConsumptionUnit(unittest.TestCase):
         self.assertEqual(self.consumption_unit._state.get_attribute('consumption'), 0.0)
         self.assertEqual(self.consumption_unit._state.get_attribute('time'), 0.0)
 
-    def test_get_state_legacy(self):
-        # get_state() returns float for backward compatibility
-        self.assertEqual(self.consumption_unit.get_state(), 0.0)
-        self.assertIsInstance(self.consumption_unit.get_state(), float)
+    def test_get_state(self):
+        # get_state() returns State object
+        state = self.consumption_unit.get_state()
+        self.assertIsInstance(state, State)
+        self.assertEqual(state.get_attribute('consumption'), 0.0)
+        self.assertEqual(state.get_attribute('time'), 0.0)
 
-    def test_update_legacy_interface(self):
-        # Legacy: passing float as state (interpreted as time)
-        self.consumption_unit.update(0.5, action=0.0)
-        self.assertEqual(self.consumption_unit.current_consumption, 50.0)
-        self.mock_dynamics.get_value.assert_called_with(time=0.5, action=0.0)
-
-    def test_update_new_interface_with_state(self):
-        # New: passing State object
+    def test_update_with_state(self):
+        # Passing State object
         state = State({'time': 0.5})
         action = Action({'value': 0.0})
         self.consumption_unit.update(state, action)
         self.assertEqual(self.consumption_unit.current_consumption, 50.0)
         self.mock_dynamics.get_value.assert_called_with(time=0.5, action=0.0)
 
-    def test_update_new_interface_with_float_action(self):
-        # Mixed: State object with float action
+    def test_update_with_state_no_action(self):
+        # State object without action
         state = State({'time': 0.5})
-        self.consumption_unit.update(state, 0.0)
+        self.consumption_unit.update(state)
         self.assertEqual(self.consumption_unit.current_consumption, 50.0)
+        self.mock_dynamics.get_value.assert_called_with(time=0.5, action=0.0)
 
     def test_update_updates_internal_state(self):
         # Verify internal state is updated
@@ -69,16 +66,10 @@ class TestConsumptionUnit(unittest.TestCase):
         # Verify it doesn't change consumption
         self.assertEqual(self.consumption_unit.current_consumption, 0.0)
 
-    def test_perform_action_legacy_does_nothing(self):
-        # Test perform_action with float (also a no-op)
-        self.consumption_unit.perform_action(5.0)
-
-        # Verify it doesn't change consumption
-        self.assertEqual(self.consumption_unit.current_consumption, 0.0)
-
     def test_reset(self):
         # Update to change state
-        self.consumption_unit.update(0.5)
+        state = State({'time': 0.5})
+        self.consumption_unit.update(state)
         self.assertEqual(self.consumption_unit.current_consumption, 50.0)
 
         # Reset

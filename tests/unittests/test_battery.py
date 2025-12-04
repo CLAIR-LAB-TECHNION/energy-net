@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
+from energy_net.foundation.model import State, Action
 from energy_net.common.utils import setup_logger
 import os
 
@@ -51,6 +52,7 @@ class TestDeterministicBattery(unittest.TestCase):
             'discharge_efficiency': 0.8,
             'lifetime_constant': 100
         })
+
     def test_get_value_charge(self):
         energy = self.dynamics.get_value(
             time=0.1,
@@ -126,16 +128,27 @@ class TestBattery(unittest.TestCase):
 
     def test_perform_action_updates_energy(self):
         self.battery.current_time = 0.1
-        self.battery.perform_action(10)
+        action = Action({'value': 10})
+        self.battery.perform_action(action)
         self.assertEqual(self.battery.energy_level, 55)
         self.assertEqual(self.battery.energy_change, 5)
 
     def test_get_state(self):
-        self.assertEqual(self.battery.get_state(), 50)
+        state = self.battery.get_state()
+        self.assertIsInstance(state, State)
+        self.assertEqual(state.get_attribute('energy_level'), 50)
 
     def test_update_with_action(self):
-        self.battery.update(0.2, action=5)
+        state = State({'time': 0.2})
+        action = Action({'value': 5})
+        self.battery.update(state, action)
         self.assertEqual(self.battery.energy_level, 55)
+
+    def test_update_without_action(self):
+        state = State({'time': 0.2})
+        # No action means no energy change
+        self.battery.update(state)
+        self.assertEqual(self.battery.energy_level, 50)
 
     def test_reset_default(self):
         self.battery.energy_level = 10

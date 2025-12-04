@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.common.utils import setup_logger
@@ -8,8 +8,6 @@ from energy_net.foundation.model import State, Action
 class ConsumptionUnit(ElementaryGridEntity):
     """
     Consumption Unit component managing energy consumption.
-
-    Supports both legacy (float) and new (State/Action) interfaces.
     """
 
     def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any],
@@ -38,7 +36,7 @@ class ConsumptionUnit(ElementaryGridEntity):
         self.current_consumption: float = 0.0
         self.initial_consumption: float = self.current_consumption
 
-        # Initialize internal state using new State class
+        # Initialize internal state using State class
         self._state = State({
             'consumption': self.current_consumption,
             'time': 0.0
@@ -47,65 +45,51 @@ class ConsumptionUnit(ElementaryGridEntity):
         self.logger.info(
             f"ConsumptionUnit initialized with capacity: {self.consumption_capacity} MWh and initial consumption: {self.current_consumption} MWh")
 
-    def perform_action(self, action: Union[float, Action]) -> None:
+    def perform_action(self, action: Action) -> None:
         """
         Perform an action on the consumption unit.
 
         Args:
-            action: Either a float (legacy) or Action object (new interface).
+            action: Action object containing the action to perform.
         """
-        # Extract action value from either format
+        # Extract action value from Action object
         pass
-    def get_state(self) -> Union[float, State]:
+
+    def get_state(self) -> float:
         """
-        Retrieves the current consumption level.
+        Retrieves the current consumption as a float.
 
         Returns:
-            float or State: Current consumption in MWh (legacy mode) or
-                           State object with full state information.
+            float: Current consumption in MWh.
         """
-        self.logger.debug(f"Retrieving consumption state: {self.current_consumption} MWh")
-        # Return float for backward compatibility, but State is available internally
+        self.logger.debug(f"Retrieving current consumption: {self.current_consumption} MWh")
         return self.current_consumption
 
-    def update(self, state: Union[float, State], action: Union[float, Action] = 0.0) -> None:
+    def update(self, state: State, action: Optional[Action] = None) -> None:
         """
         Updates the consumption level based on dynamics and state.
 
-        Supports both legacy and new interfaces:
-        - Legacy: update(0.5, action=0.0)  # float is interpreted as time
-        - New: update(state_obj, action_obj)
-
         Args:
-            state: State object containing time and other state information OR
-                   float (legacy) representing time as fraction of day (0 to 1).
-            action: Action value as float OR Action object (default is 0.0).
+            state: State object containing time and other state information.
+            action: Action object containing actions to perform (optional).
         """
-        # Handle both legacy (float) and new (State) interfaces
-        if isinstance(state, State):
-            # New interface: extract time from State
-            state_obj = state
-            time_value = state_obj.get_attribute('time')
-            if time_value is None:
-                self.logger.warning("State object missing 'time' attribute, using 0.0")
-                time_value = 0.0
-        else:
-            # Legacy interface: state parameter is actually just time as a float
-            time_value = state
-            state_obj = None
+        # Extract time from State
+        time_value = state.get_attribute('time')
+        if time_value is None:
+            self.logger.warning("State object missing 'time' attribute, using 0.0")
+            time_value = 0.0
 
-        if isinstance(action, Action):
-            # New interface: extract action value from Action object
-            # For consumption units, we might look for a 'consumption_target' action
+        # Extract action value from Action object
+        action_value = 0.0
+        if action is not None:
+            # For consumption units, we look for a 'value' action
             action_value = action.get_action('value')
             if action_value is None:
                 action_value = 0.0
-        else:
-            # Legacy interface: action is a float
-            action_value = action
 
         # First, perform the action (this may modify internal state)
-        self.perform_action(action if isinstance(action, Action) else action_value)
+        if action is not None:
+            self.perform_action(action)
 
         # Check if there's a pending action from a previous perform_action call
         pending_action = self._state.get_attribute('pending_action')
