@@ -1,7 +1,7 @@
 # components/grid_entity.py
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from original.utils.logger import setup_logger
 from energy_net.foundation.model import State, Action
 
@@ -13,8 +13,6 @@ class GridEntity(ABC):
 
     This class defines the interface that all grid entities must implement, ensuring consistency
     across different components within the smart grid simulation.
-
-    Supports both legacy (float for time) and new (State) interfaces.
     """
 
     def __init__(self, log_file: str):
@@ -27,24 +25,15 @@ class GridEntity(ABC):
         self.logger = setup_logger(self.__class__.__name__, log_file)
 
     @abstractmethod
-    def update(self, state: Union[float, State], action: Union[float, Action, Dict[str, Any], None] = None) -> None:
+    def update(self, state: State, action: Optional[Action] = None) -> None:
         """
         Updates the grid entity based on state and optional action.
-
-        Supports both legacy and new interfaces:
-        - Legacy: update(0.5, action=5.0)  # float is interpreted as time
-        - New: update(state_obj, action_obj)
 
         This method must be implemented by all subclasses, defining how the entity responds to a given action.
 
         Args:
-            state: State object containing time and other state information OR
-                   float (legacy) representing time as fraction of day (0 to 1).
-            action: The action to perform. Can be:
-                   - float (legacy): single action value
-                   - Dict (legacy): actions for composite entities
-                   - Action object (new): action with named parameters
-                   - None: no action
+            state (State): State object containing time and other state information.
+            action (Optional[Action]): The action to perform. None if no action is taken.
         """
         pass
 
@@ -65,8 +54,6 @@ class ElementaryGridEntity(GridEntity):
 
     This class defines the interface that all grid entities must implement, ensuring consistency
     across different components within the smart grid simulation.
-
-    Supports both legacy (float) and new (State/Action) interfaces.
     """
 
     def __init__(self, dynamics: Any, log_file: str):
@@ -82,7 +69,7 @@ class ElementaryGridEntity(GridEntity):
         self.logger.info(f"Initialized {self.__class__.__name__} with dynamics: {self.dynamics}")
 
     @abstractmethod
-    def get_state(self) -> Union[float, State]:
+    def get_state(self) -> State:
         """
         Retrieves the current state of the grid entity.
 
@@ -90,18 +77,17 @@ class ElementaryGridEntity(GridEntity):
         entity's current state (e.g., energy level for a Battery).
 
         Returns:
-            float or State: The current state of the entity.
-                           Legacy implementations return float.
-                           New implementations can return State objects.
+            State: The current state of the entity.
         """
         pass
+
     @abstractmethod
-    def perform_action(self, action: Union[float, Action]) -> None:
+    def perform_action(self, action: Action) -> None:
         """
         Performs an action on the grid entity.
 
         Args:
-            action: Either a float (legacy) or Action object (new interface).
+            action (Action): Action object specifying the operation to perform.
         """
         pass
 
@@ -110,8 +96,6 @@ class CompositeGridEntity(GridEntity):
     """
     Represents a composite grid entity composed of multiple sub-entities.
     Manages actions and updates across all sub-entities and aggregates their states.
-
-    Supports both legacy (dict) and new (State/Action) interfaces.
     """
 
     def __init__(self, sub_entities: List[GridEntity], log_file: str,
@@ -201,7 +185,7 @@ class CompositeGridEntity(GridEntity):
             actions (Optional[Dict[str, Action]]): Dictionary mapping sub-entity IDs
                                                    to their respective Action objects.
         """
-        # ---- Hard Type Enforcement ----
+        # Type validation
         if not isinstance(state, State):
             raise TypeError(
                 f"CompositeGridEntity.update requires a State object. "
@@ -224,18 +208,18 @@ class CompositeGridEntity(GridEntity):
                         f"Key '{key}' has type {type(value)}"
                     )
 
-        # ---- Extract Time from State ----
+        # Extract time from state
         time_value = state.get_attribute('time')
         if time_value is None:
             raise ValueError("State object must contain a 'time' attribute.")
 
-        # ---- Update Internal State ----
+        # Update internal state
         self._state.set_attribute('time', time_value)
         self.logger.debug(
             f"Updating CompositeGridEntity at time: {time_value} with actions: {actions}"
         )
 
-        # ---- Update Each Sub-Entity ----
+        # Update each sub-entity
         for identifier, entity in self.sub_entities.items():
             entity_action = actions.get(identifier) if actions is not None else None
 

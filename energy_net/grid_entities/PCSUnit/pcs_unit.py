@@ -1,10 +1,10 @@
-from typing import Any, Dict, Optional, List, Union
+from typing import Dict, Optional, List
 
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.production.production_unit import ProductionUnit
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
 from energy_net.foundation.grid_entity import CompositeGridEntity
-from energy_net.foundation.model import State, Action  # Import new classes
+from energy_net.foundation.model import State, Action
 
 
 class PCSUnit(CompositeGridEntity):
@@ -14,8 +14,6 @@ class PCSUnit(CompositeGridEntity):
     This class integrates the storage, production, and consumption components, allowing for
     coordinated updates and state management within the smart grid simulation.
     Inherits from CompositeGridEntity to manage its sub-entities.
-
-    Supports both legacy (float) and new (State/Action) interfaces.
     """
 
     def __init__(self,
@@ -49,7 +47,7 @@ class PCSUnit(CompositeGridEntity):
         self.production_units = production_units
         self.consumption_units = consumption_units
 
-        # Initialize internal state using new State class
+        # Initialize internal state
         self._state = State({
             'production': 0.0,
             'consumption': 0.0,
@@ -189,22 +187,23 @@ class PCSUnit(CompositeGridEntity):
         Updates all sub-entities based on the provided state, production, and consumption.
 
         Args:
-            state: State object containing time and other state information.
-            actions: Optional user-defined actions for batteries (only applied if surplus exists).
+            state (State): State object containing time and other state information.
+            actions (Optional[Dict[str, Action]]): Optional user-defined actions for batteries
+                                                    (only applied if surplus exists).
         """
-        # --- Extract time from state ---
+        # Extract time from state
         current_time = state.get_attribute('time') or 0.0
         self._state.set_attribute('time', current_time)
 
-        # --- Get current totals ---
-        total_production = self.get_production()  # float
-        total_consumption = self.get_consumption()  # float
+        # Get current totals
+        total_production = self.get_production()
+        total_consumption = self.get_consumption()
         energy_diff = total_production - total_consumption  # positive = surplus, negative = deficit
 
         self.logger.debug(f"Time {current_time}: production={total_production}, "
                           f"consumption={total_consumption}, diff={energy_diff}")
 
-        # --- Prepare battery actions based on surplus/deficit ---
+        # Prepare battery actions based on surplus/deficit
         battery_actions: Dict[str, Action] = {}
         if self.storage_units:
             num_batteries = len(self.storage_units)
@@ -214,14 +213,7 @@ class PCSUnit(CompositeGridEntity):
 
                 if energy_diff > 0:
                     # Surplus → charge
-                    max_charge = 20.0
-                    charge_value = min(max_charge, energy_diff / num_batteries)
-
-                    # If user provided an action, respect it but cap at available surplus
-                    if actions and batt_id in actions:
-                        charge_value = min(charge_value, actions[batt_id].get_action('value') or 0.0)
-
-                    battery_actions[batt_id] = Action({'value': charge_value})
+                    battery_actions[batt_id] = Action({'value': energy_diff / num_batteries})
 
                 elif energy_diff < 0:
                     # Deficit → discharge to cover deficit
@@ -232,13 +224,13 @@ class PCSUnit(CompositeGridEntity):
                     # Balanced → do nothing
                     battery_actions[batt_id] = Action({'value': 0.0})
 
-        # --- Update batteries ---
+        # Update batteries
         for idx, battery in enumerate(self.storage_units):
             batt_id = f"Battery_{idx}"
             action = battery_actions.get(batt_id)
             battery.update(state, action)
 
-        # --- Update production and consumption units ---
+        # Update production and consumption units
         for idx, prod_unit in enumerate(self.production_units):
             prod_unit.update(state)
 
