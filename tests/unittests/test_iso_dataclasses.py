@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from energy_net.grid_entities.management.iso_dataclasses import ISOState, ISOAction
+from energy_net.grid_entities.management.iso_classes import ISOState, ISOAction
 
 
 def test_iso_state_accepts_valid_arrays():

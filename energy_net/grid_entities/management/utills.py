@@ -1,7 +1,8 @@
 import numpy as np
-from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any
+from dataclasses import fields, is_dataclass
 
+import numpy as np
+from dataclasses import fields, is_dataclass
 
 def _ensure_same_shape(arr1: np.ndarray, arr2: np.ndarray) -> None:
     if not isinstance(arr1, np.ndarray) or not isinstance(arr2, np.ndarray):
@@ -62,32 +63,3 @@ def _validate_array_fields_same_shape_no_nans(
             _ensure_no_nans(arr)
         except Exception as exc:
             raise type(exc)(f"NaN/inf validation failed for field '{name}': {exc}") from exc           
-
-
-
-@dataclass
-class ISOState:
-    prev_day_realized_demand:   np.ndarray = field(metadata={"validate_array": True})
-    
-    prev_day_forecast:          np.ndarray = field(metadata={"validate_array": True})
-    prev_day_dispatch:          np.ndarray = field(metadata={"validate_array": True})
-    prev_day_buy_price:         np.ndarray = field(metadata={"validate_array": True})
-    prev_day_sell_price:        np.ndarray = field(metadata={"validate_array": True})
-
-    day_ahead_forecast:         np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_dispatch:         np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_buy_price:        np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_sell_price:       np.ndarray = field(metadata={"validate_array": True})    
-
-    def __post_init__(self) -> None:
-        _validate_array_fields_same_shape_no_nans(self) 
-
-
-@dataclass
-class ISOAction:
-    day_ahead_dispatch:    np.ndarray = field(metadata={"validate_array": True})      
-    day_ahead_buy_price:   np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_sell_price:  np.ndarray = field(metadata={"validate_array": True})
-
-    def __post_init__(self) -> None:
-        _validate_array_fields_same_shape_no_nans(self)

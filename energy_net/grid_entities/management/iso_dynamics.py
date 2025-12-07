@@ -1,5 +1,5 @@
 import numpy as np
-from .iso_dataclasses import ISOState, ISOAction
+from .iso_classes import ISOState, ISOAction
 
 
 def iso_day_to_day_transition(

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from energy_net.grid_entities.management.iso_dataclasses import ISOState, ISOAction
+from energy_net.grid_entities.management.iso_classes import ISOState, ISOAction
 from energy_net.grid_entities.management.iso_dynamics import iso_day_to_day_transition
 
 
