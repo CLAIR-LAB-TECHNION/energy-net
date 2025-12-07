@@ -1,33 +1,50 @@
 import numpy as np
-from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any
 from energy_net.foundation.model import State, Action
-from energy_net.management.utils import _validate_array_fields_same_shape_no_nans
+from .utils import validate_named_arrays_same_shape_no_nans
 
 
-@dataclass
 class ISOState(State):
-    prev_day_realized_demand:   np.ndarray = field(metadata={"validate_array": True})
-    
-    prev_day_forecast:          np.ndarray = field(metadata={"validate_array": True})
-    prev_day_dispatch:          np.ndarray = field(metadata={"validate_array": True})
-    prev_day_buy_price:         np.ndarray = field(metadata={"validate_array": True})
-    prev_day_sell_price:        np.ndarray = field(metadata={"validate_array": True})
+    def __init__(
+        self,
+        prev_day_realized_demand: np.ndarray,
+        prev_day_forecast: np.ndarray,
+        prev_day_dispatch: np.ndarray,
+        prev_day_buy_price: np.ndarray,
+        prev_day_sell_price: np.ndarray,
+        day_ahead_forecast: np.ndarray,
+        day_ahead_dispatch: np.ndarray,
+        day_ahead_buy_price: np.ndarray,
+        day_ahead_sell_price: np.ndarray,
+    ) -> None:
+        fields = {
+            "prev_day_realized_demand": prev_day_realized_demand,
+            "prev_day_forecast": prev_day_forecast,
+            "prev_day_dispatch": prev_day_dispatch,
+            "prev_day_buy_price": prev_day_buy_price,
+            "prev_day_sell_price": prev_day_sell_price,
+            "day_ahead_forecast": day_ahead_forecast,
+            "day_ahead_dispatch": day_ahead_dispatch,
+            "day_ahead_buy_price": day_ahead_buy_price,
+            "day_ahead_sell_price": day_ahead_sell_price,
+        }
 
-    day_ahead_forecast:         np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_dispatch:         np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_buy_price:        np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_sell_price:       np.ndarray = field(metadata={"validate_array": True})    
+        validate_named_arrays_same_shape_no_nans(fields)
 
-    def __post_init__(self) -> None:
-        _validate_array_fields_same_shape_no_nans(self) 
+        super().__init__(fields)
 
 
-@dataclass
 class ISOAction(Action):
-    day_ahead_dispatch:    np.ndarray = field(metadata={"validate_array": True})      
-    day_ahead_buy_price:   np.ndarray = field(metadata={"validate_array": True})
-    day_ahead_sell_price:  np.ndarray = field(metadata={"validate_array": True})
+    def __init__(
+        self,
+        day_ahead_dispatch: np.ndarray,
+        day_ahead_buy_price: np.ndarray,
+        day_ahead_sell_price: np.ndarray,
+    ) -> None:
+        fields = {
+            "day_ahead_dispatch": day_ahead_dispatch,
+            "day_ahead_buy_price": day_ahead_buy_price,
+            "day_ahead_sell_price": day_ahead_sell_price,
+        }
 
-    def __post_init__(self) -> None:
-        _validate_array_fields_same_shape_no_nans(self)
+        validate_named_arrays_same_shape_no_nans(fields)
+        super().__init__(fields)

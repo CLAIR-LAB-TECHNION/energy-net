@@ -19,7 +19,7 @@ def test_iso_state_accepts_valid_arrays():
     )
 
     assert isinstance(state, ISOState)
-    assert state.prev_day_realized_demand.shape == (24,)
+    assert state.get_attribute("prev_day_realized_demand").shape == (24,)
 
 
 def test_iso_state_rejects_shape_mismatch():
@@ -68,7 +68,7 @@ def test_iso_action_accepts_valid_arrays():
     )
 
     assert isinstance(action, ISOAction)
-    assert action.day_ahead_dispatch.shape == (24,)
+    assert action.get_action("day_ahead_dispatch").shape == (24,)
 
 
 def test_iso_action_rejects_shape_mismatch():
