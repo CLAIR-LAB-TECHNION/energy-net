@@ -2,6 +2,8 @@ from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.common.utils import setup_logger
+from energy_net.foundation.model import State, Action
+
 
 class ProductionUnit(ElementaryGridEntity):
     """
@@ -32,44 +34,79 @@ class ProductionUnit(ElementaryGridEntity):
 
         self.production_capacity: float = config['production_capacity']
         self.current_production: float = 0.0
-        self.initial_production: float = self.current_production  # Assuming initial production is 0.0
+        self.initial_production: float = self.current_production
+
+        # Initialize internal state using State class
+        self._state = State({
+            'production': self.current_production,
+            'time': 0.0
+        })
 
         self.logger.info(
             f"ProductionUnit initialized with capacity: {self.production_capacity} MWh and initial production: {self.current_production} MWh")
 
-    def perform_action(self, action: float) -> None:
+    def perform_action(self, action: Action) -> None:
         """
-        Production units typically do not require actions, but the method is defined for interface consistency.
+        Perform an action on the production unit.
 
         Args:
-            action (float): Not used in this implementation.
+            action: Action object containing the action to perform.
         """
-        self.logger.debug(f"Performing action: {action} MW (no effect on ProductionUnit)")
-        pass  # Production is typically autonomous and does not respond to actions
+        pass
 
     def get_state(self) -> float:
         """
-        Retrieves the current production level.
+        Retrieves the current production as a float.
 
         Returns:
             float: Current production in MWh.
         """
-        self.logger.debug(f"Retrieving production state: {self.current_production} MWh")
+        self.logger.debug(f"Retrieving current production: {self.current_production} MWh")
         return self.current_production
 
-    def update(self, time: float, action: float = 0.0) -> None:
+    def update(self, state: State, action: Optional[Action] = None) -> None:
         """
-        Updates the production level based on dynamics and time.
+        Updates the production level based on dynamics and state.
 
         Args:
-            time (float): Current time as a fraction of the day (0 to 1).
-            action (float, optional): Action to perform (default is 0.0).
-                                       Not used in this implementation.
+            state: State object containing time and other state information.
+            action: Action object containing actions to perform (optional).
         """
-        self.logger.debug(f"Updating ProductionUnit at time: {time} with action: {action} MW")
+        # Extract time from State
+        time_value = state.get_attribute('time')
+        if time_value is None:
+            self.logger.warning("State object missing 'time' attribute, using 0.0")
+            time_value = 0.0
+
+        # Extract action value from Action object
+        action_value = 0.0
+        if action is not None:
+            # For production units, we look for a 'value' action
+            action_value = action.get_action('value')
+            if action_value is None:
+                action_value = 0.0
+
+        # First, perform the action (this may modify internal state)
+        if action is not None:
+            self.perform_action(action)
+
+        # Check if there's a pending action from a previous perform_action call
+        pending_action = self._state.get_attribute('pending_action')
+        if pending_action is not None:
+            action_value = pending_action
+            # Clear the pending action after using it
+            self._state.remove_attribute('pending_action')
+
+        self.logger.debug(f"Updating ProductionUnit at time: {time_value} with action: {action_value} MW")
+
         # Delegate the production calculation to the dynamics
         previous_production = self.current_production
-        self.current_production = self.dynamics.get_value(time=time, action=action)
+        self.current_production = self.dynamics.get_value(time=time_value, action=action_value)
+
+        # Update internal state
+        self._state.set_attribute('time', time_value)
+        self._state.set_attribute('production', self.current_production)
+
         self.logger.info(
             f"ProductionUnit production changed from {previous_production} MWh to {self.current_production} MWh")
 
@@ -80,4 +117,9 @@ class ProductionUnit(ElementaryGridEntity):
         self.logger.info(
             f"Resetting ProductionUnit from {self.current_production} MWh to initial production level: {self.initial_production} MWh")
         self.current_production = self.initial_production
+
+        # Reset internal state
+        self._state.set_attribute('production', self.initial_production)
+        self._state.set_attribute('time', 0.0)
+
         self.logger.debug(f"ProductionUnit reset complete. Current production: {self.current_production} MWh")
