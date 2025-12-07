@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from energy_net.grid_entities.management.iso_dataclasses import ISOState, ISOAction
+from energy_net.grid_entities.management.iso_classes import ISOState, ISOAction
 from energy_net.grid_entities.management.iso_dynamics import iso_day_to_day_transition
 
 
@@ -41,20 +41,50 @@ def test_transition_updates_state_fields_correctly():
     )
 
     # prev_day_* in new_state
-    np.testing.assert_array_equal(new_state.prev_day_realized_demand, new_realized)
-    np.testing.assert_array_equal(new_state.prev_day_forecast, state.day_ahead_forecast)
-    np.testing.assert_array_equal(new_state.prev_day_dispatch, state.day_ahead_dispatch)
-    np.testing.assert_array_equal(new_state.prev_day_buy_price, state.day_ahead_buy_price)
-    np.testing.assert_array_equal(new_state.prev_day_sell_price, state.day_ahead_sell_price)
+    np.testing.assert_array_equal(
+        new_state.get_attribute("prev_day_realized_demand"),
+        new_realized,
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("prev_day_forecast"),
+        state.get_attribute("day_ahead_forecast"),
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("prev_day_dispatch"),
+        state.get_attribute("day_ahead_dispatch"),
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("prev_day_buy_price"),
+        state.get_attribute("day_ahead_buy_price"),
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("prev_day_sell_price"),
+        state.get_attribute("day_ahead_sell_price"),
+    )
 
     # day_ahead_* in new_state
-    np.testing.assert_array_equal(new_state.day_ahead_forecast, new_forecast)
-    np.testing.assert_array_equal(new_state.day_ahead_dispatch, action.day_ahead_dispatch)
-    np.testing.assert_array_equal(new_state.day_ahead_buy_price, action.day_ahead_buy_price)
-    np.testing.assert_array_equal(new_state.day_ahead_sell_price, action.day_ahead_sell_price)
+    np.testing.assert_array_equal(
+        new_state.get_attribute("day_ahead_forecast"),
+        new_forecast,
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("day_ahead_dispatch"),
+        action.get_action("day_ahead_dispatch"),
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("day_ahead_buy_price"),
+        action.get_action("day_ahead_buy_price"),
+    )
+    np.testing.assert_array_equal(
+        new_state.get_attribute("day_ahead_sell_price"),
+        action.get_action("day_ahead_sell_price"),
+    )
 
     # original state unchanged
-    np.testing.assert_array_equal(state.prev_day_realized_demand, np.zeros(3))
+    np.testing.assert_array_equal(
+        state.get_attribute("prev_day_realized_demand"),
+        np.zeros(3),
+    )
 
 
 def test_transition_info_dict_mismatches():
@@ -70,13 +100,18 @@ def test_transition_info_dict_mismatches():
         prev_day_realized_demand=prev_realized,
     )
 
+    # prev_day_forecast inside iso_day_to_day_transition is taken from
+    # state.get_attribute("day_ahead_forecast")
+    expected_forecast = state.get_attribute("day_ahead_forecast")
+    expected_dispatch = state.get_attribute("day_ahead_dispatch")
+
     np.testing.assert_array_equal(
         info["forecast_mismatch"],
-        state.day_ahead_forecast - prev_realized,
+        expected_forecast - prev_realized,
     )
     np.testing.assert_array_equal(
         info["dispatch_mismatch"],
-        state.day_ahead_dispatch - prev_realized,
+        expected_dispatch - prev_realized,
     )
 
 
