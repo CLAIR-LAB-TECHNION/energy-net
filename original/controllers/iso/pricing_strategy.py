@@ -35,7 +35,7 @@ class PricingStrategy(ABC):
     Each concrete strategy handles a specific pricing policy (Quadratic, Online, Constant).
     
     The Strategy pattern allows the ISO controller to use different pricing mechanisms
-    without changing its core logic, by delegating pricing decisions to the appropriate
+    without changing its foundation logic, by delegating pricing decisions to the appropriate
     strategy object.
     """
     

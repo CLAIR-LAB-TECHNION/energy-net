@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
-from energy_net.core.dynamics import EnergyDynamics
+from energy_net.foundation.dynamics import EnergyDynamics
 
 class TestConsumptionUnit(unittest.TestCase):
     def setUp(self):

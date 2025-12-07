@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import MagicMock
 from energy_net.grid_entities.production.production_unit import ProductionUnit
-from energy_net.core.dynamics import EnergyDynamics
+from energy_net.foundation.dynamics import EnergyDynamics
 
 
 class TestProductionUnit(unittest.TestCase):
