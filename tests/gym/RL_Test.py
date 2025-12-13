@@ -6,117 +6,323 @@ from energy_net.grid_entities.consumption.consumption_dynamics import CSV_DataCo
 from energy_net.grid_entities.PCSUnit.pcs_unit import PCSUnit
 from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from energy_net.grid_entities.storage.battery import Battery
-from energy_net.grid_entities.production.production_unit import ProductionUnit
-from energy_net.grid_entities.production.production_dynamics import GMMProductionDynamics
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
+from energy_net.consumption_prediction.predicting_consumption_model import (
+    create_predictor,
+    predict_consumption,
+    generate_day_predictions
+)
+from energy_net.foundation.model import State, Action
+from datetime import datetime, timedelta
 
 
 class PCSGymEnv(gym.Env):
     """
-    Generic Gym wrapper for ANY PCSUnit instance.
-    You fully control how PCS is constructed.
+    Enhanced Gym environment for PCSUnit with:
+    - Consumption prediction
+    - Dynamic electricity pricing
+    - Economic rewards based on buying/selling electricity
+    - Penalties for shortage
     """
 
-    def __init__(self, pcs_unit, dt=1.0 / 24):
+    def __init__(self,
+                 data_file='SystemDemand_30min_2023-2025.csv',
+                 dt=0.5 / 24,  # 30 minutes in days
+                 episode_length_days=30,
+                 train_test_split=0.8,  # 80% train, 20% test
+                 prediction_horizon=48,  # Number of future time steps to predict
+                 shortage_penalty=1000.0,  # $/kWh penalty for shortage
+                 base_price=0.10,  # Base electricity price $/kWh
+                 price_volatility=0.05):  # Price variation
+
         super().__init__()
 
-        # --- New battery ---
-        battery_dynamics = DeterministicBattery(model_parameters={"charge_efficiency": 0.95,
-                                                                      "discharge_efficiency": 0.9,
-                                                                      "lifetime_constant": 1e6})
-        battery_config = {
-            "min": 0.0,
-            "max": 2e6,
-            "charge_rate_max": 2e5,
-            "discharge_rate_max": 2e5,
-            "charge_efficiency": 0.95,
-            "discharge_efficiency": 0.9,
-            "init": 1e6
-        }
-        battery = Battery(dynamics=battery_dynamics, config=battery_config)
+        self.dt = dt
+        self.episode_length_days = episode_length_days
+        self.max_steps = int(episode_length_days / dt)
+        self.prediction_horizon = prediction_horizon
+        self.shortage_penalty = shortage_penalty
+        self.base_price = base_price
+        self.price_volatility = price_volatility
 
-        # --- New consumption unit ---
-        data_file = 'SystemDemand_30min_2023-2025.csv'
+        # --- Load and split data ---
+        print("Loading data and splitting into train/test sets...")
         df = pd.read_csv(data_file, index_col=0, parse_dates=True)
         if df.empty:
             raise ValueError(f"The data file {data_file} is empty or could not be loaded.")
 
-        consumption_dynamics = CSV_DataConsumptionDynamics(params={'data_file': data_file})
+        # Split data chronologically
+        split_idx = int(len(df) * train_test_split)
+        train_df = df.iloc[:split_idx]
+        test_df = df.iloc[split_idx:]
+
+        # Save train data to temporary file for predictor
+        train_file = data_file.replace('.csv', '_train.csv')
+        train_df.to_csv(train_file)
+        print(f"Training data: {len(train_df)} rows ({train_df.index[0]} to {train_df.index[-1]})")
+        print(f"Testing data: {len(test_df)} rows ({test_df.index[0]} to {test_df.index[-1]})")
+
+        # Save test data to temporary file for consumption unit
+        test_file = data_file.replace('.csv', '_test.csv')
+        test_df.to_csv(test_file)
+
+        # Store test date range
+        self.test_start_date = test_df.index[0]
+        self.test_end_date = test_df.index[-1]
+
+        # --- Initialize predictor on TRAINING data only ---
+        print("Creating consumption predictor on training data...")
+        self.predictor = create_predictor(train_file)
+
+        # --- New battery ---
+        battery_dynamics = DeterministicBattery(
+            model_parameters={
+                "charge_efficiency": 0.95,
+                "discharge_efficiency": 0.9,
+                "lifetime_constant": 1e6
+            }
+        )
+        battery_config = {
+            "min": 0.0,
+            "max": 2e6,  # 2 MWh
+            "charge_rate_max": 2e5,  # 200 kW
+            "discharge_rate_max": 2e5,
+            "charge_efficiency": 0.95,
+            "discharge_efficiency": 0.9,
+            "init": 1e6  # Start at 50% capacity
+        }
+        battery = Battery(dynamics=battery_dynamics, config=battery_config)
+
+        # --- New consumption unit using TEST data ---
+        print("Creating consumption unit on testing data...")
+        consumption_dynamics = CSV_DataConsumptionDynamics(params={'data_file': test_file})
         consumption_unit_config = {
-            'data_file': data_file,
+            'data_file': test_file,
             'consumption_capacity': 12000.0
         }
-        consumption_unit = ConsumptionUnit(dynamics=consumption_dynamics, config=consumption_unit_config)
-
-
-        # --- New production unit ---
-        production_dynamics = GMMProductionDynamics(params={
-            "peak_production1": 1500.0,
-            "peak_time1": 0.3,
-            "width1": 0.05,
-            "peak_production2": 2000.0,
-            "peak_time2": 0.8,
-            "width2": 0.1
-        })
-        production_unit = ProductionUnit(
-            dynamics=production_dynamics,
-            config={"production_capacity": 8000.0}
+        consumption_unit = ConsumptionUnit(
+            dynamics=consumption_dynamics,
+            config=consumption_unit_config
         )
 
         # --- Build PCSUnit ---
-        pcs_unit = PCSUnit(
+        self.pcs = PCSUnit(
             storage_units=[battery],
-            production_units=[production_unit],
             consumption_units=[consumption_unit]
         )
 
-
-        self.pcs = pcs_unit
-        self.dt = dt
-        self.time = 0.0
-
-        # ✅ ONLY control battery for now
+        # --- Action space: battery charge/discharge rate ---
+        # Negative = discharge (sell), Positive = charge (buy)
         self.action_space = spaces.Box(
-            low=-1e5,
-            high=1e5,
+            low=-2e5,  # Max discharge rate
+            high=2e5,  # Max charge rate
             shape=(1,),
             dtype=np.float32
         )
 
-        # ✅ Observation = [storage, production, consumption]
+        # --- Observation space ---
+        # [current_storage, current_consumption, current_price,
+        #  next N predicted consumptions]
+        obs_dim = 3 + prediction_horizon
         self.observation_space = spaces.Box(
-            low=0.0,
+            low=-np.inf,
             high=np.inf,
-            shape=(3,),
+            shape=(obs_dim,),
             dtype=np.float32
         )
 
+        # Episode tracking
+        self.current_step = 0
+        self.start_date = self.test_start_date
+        self.current_datetime = self.start_date
+        self.total_profit = 0.0
+        self.total_shortage_penalty = 0.0
+        self.shortage_count = 0
+
+        # Generate initial price curve (hidden from agent)
+        self.price_curve = self._generate_price_curve(self.max_steps)
+
+    def _generate_price_curve(self, num_steps):
+        """Generate a realistic price curve with daily and weekly patterns"""
+        t = np.arange(num_steps)
+
+        # Daily pattern (peak during day, low at night)
+        daily_pattern = np.sin(2 * np.pi * t * self.dt) * 0.3
+
+        # Weekly pattern (higher on weekdays)
+        weekly_pattern = np.sin(2 * np.pi * t * self.dt / 7) * 0.15
+
+        # Random variations
+        noise = np.random.randn(num_steps) * self.price_volatility
+
+        # Combine patterns
+        prices = self.base_price + daily_pattern + weekly_pattern + noise
+
+        # Ensure prices are positive
+        prices = np.maximum(prices, 0.01)
+
+        return prices
+
+    def _get_current_price(self):
+        """Get current electricity price"""
+        if self.price_curve is None or self.current_step >= len(self.price_curve):
+            return self.base_price
+        return self.price_curve[self.current_step]
+
+    def _get_predicted_consumption(self, num_steps):
+        """Get predicted future consumption using the trained model"""
+        predictions = []
+        for i in range(num_steps):
+            future_dt = self.current_datetime + timedelta(days=i * self.dt)
+            date_str = future_dt.strftime("%Y-%m-%d")
+            time_str = future_dt.strftime("%H:%M")
+
+            try:
+                pred = predict_consumption(self.predictor, date_str, time_str)
+                predictions.append(pred)
+            except:
+                # Fallback to current consumption if prediction fails
+                predictions.append(self.pcs.get_consumption())
+
+        return np.array(predictions)
+
     def reset(self):
-        # IMPORTANT: user recreates PCS manually outside
-        self.time = 0.0
+        """Reset environment to initial state"""
+        self.current_step = 0
+        self.total_profit = 0.0
+        self.total_shortage_penalty = 0.0
+        self.shortage_count = 0
+
+        # Random start date within test data range
+        # Calculate how many days of test data we have
+        test_days = (self.test_end_date - self.test_start_date).days
+        max_start_offset = max(0, test_days - self.episode_length_days)
+
+        # Random offset in days
+        if max_start_offset > 0:
+            random_offset_days = np.random.randint(0, max_start_offset)
+        else:
+            random_offset_days = 0
+
+        self.start_date = self.test_start_date + timedelta(days=random_offset_days)
+        self.current_datetime = self.start_date
+
+        # Generate new price curve for episode
+        self.price_curve = self._generate_price_curve(self.max_steps)
+
+        # Reset PCS using its built-in reset method
+        # Start battery at 50% capacity (1 MWh out of 2 MWh max)
+        self.pcs.reset(initial_storage_unit_level=1e6)
+
         return self._get_obs()
 
     def step(self, action):
-        battery_action = float(action)
+        """
+        Executes one environment timestep (t-1 -> t).
 
+        Args:
+            action: battery action (float), positive=charge, negative=discharge
+        Returns:
+            obs, reward, done, info
+        """
+
+        battery_action = float(action[0])  # convert from action array
+
+        # --- Step 1: Record storage before applying action ---
+        storage_before = self.pcs.get_total_storage()
+
+        # --- Step 2: Create state object with current timestep ---
+        current_time = self.current_step * self.dt
+        state = State()
+        state.set_attribute('time', current_time)
+
+        # --- Step 3: Prepare actions dict ---
         actions = {
-            "Battery_0": battery_action,
+            "Battery_0": Action({'value': battery_action})
         }
 
-        self.pcs.update(state=self.time, actions=actions)
-        self.time += self.dt
+        # --- Step 4: Apply PCS update and get actual energy moved ---
+        energy_sold_or_bought = self.pcs.update(state, actions)  # returns storage_after - storage_before
 
+        storage_after = self.pcs.get_total_storage()  # can use for info
+
+        # --- Step 5: Calculate total consumption for this timestep ---
+        total_consumption = self.pcs.get_consumption()
+
+        # Check if we can meet demand (consider battery storage)
+        battery_entity = self.pcs.storage_units[0]
+        available_discharge = battery_entity.get_available_discharge_capacity()
+
+        # Shortage occurs if total consumption exceeds production + what battery can provide
+        shortage = total_consumption > available_discharge
+
+        # --- Step 6: Compute reward ---
+        reward = 0.0
+
+        # Fixed penalty for shortage
+        if shortage:
+            reward -= self.shortage_penalty
+            self.shortage_count += 1
+            self.total_shortage_penalty += self.shortage_penalty
+
+        # Reward for energy moved by action (charging/discharging)
+        # Use energy_sold_or_bought returned from update
+        reward += self._get_current_price() * -energy_sold_or_bought  #
+
+        # Track total profit if desired (optional)
+        self.total_profit += reward
+
+        # --- Step 7: Increment timestep ---
+        self.current_step += 1
+        self.current_datetime += timedelta(days=self.dt)
+
+        # --- Step 8: Done flag ---
+        done = self.current_step >= self.max_steps
+
+        # --- Step 9: Observation ---
         obs = self._get_obs()
-        reward = -abs(self.pcs.get_energy_change())
-        done = self.time >= 1.0
-        info = {}
+
+        # --- Step 10: Info dictionary ---
+        info = {
+            'storage_before': storage_before,
+            'storage_after': storage_after,
+            'energy_sold_or_bought': energy_sold_or_bought,
+            'shortage': shortage,
+            'total_consumption': total_consumption,
+            'battery_action': battery_action
+        }
 
         return obs, reward, done, info
 
     def _get_obs(self):
-        return np.array([
-            self.pcs.get_total_storage(),
-            self.pcs.get_production(),
-            self.pcs.get_consumption(),
-        ], dtype=np.float32)
+        """Get current observation"""
+        # Current state
+        current_storage = self.pcs.get_total_storage() / 1e6  # Normalize to [0, 2]
+        current_consumption = self.pcs.get_consumption() / 10000  # Normalize
+        current_price = self._get_current_price() / self.base_price  # Normalize
 
+        # Future consumption predictions
+        predicted_consumption = self._get_predicted_consumption(self.prediction_horizon)
+        predicted_consumption = predicted_consumption / 10000  # Normalize
+
+        # Combine into observation (no predicted prices!)
+        obs = np.concatenate([
+            [current_storage, current_consumption, current_price],
+            predicted_consumption
+        ])
+
+        return obs.astype(np.float32)
+
+    def render(self, mode='human'):
+        """Render current state"""
+        if mode == 'human':
+            print(f"\n{'=' * 60}")
+            print(f"Step: {self.current_step}/{self.max_steps}")
+            print(f"Date: {self.current_datetime.strftime('%Y-%m-%d %H:%M')}")
+            print(f"Storage: {self.pcs.get_total_storage() / 1000:.2f} kWh")
+            print(f"Consumption: {self.pcs.get_consumption():.2f} kW")
+            print(f"Current Price: ${self._get_current_price():.3f}/kWh")
+            print(f"Total Profit: ${self.total_profit:.2f}")
+            print(f"Total Penalties: ${self.total_shortage_penalty:.2f}")
+            print(f"Shortages: {self.shortage_count}")
+            print(f"{'=' * 60}")

@@ -232,20 +232,6 @@ class CompositeGridEntity(GridEntity):
                 # Explicitly no action for this entity
                 entity.update(state)
 
-    def get_state(self) -> Dict[str, Any]:
-        """
-        Retrieves the current states of all sub-entities.
-
-        Returns:
-            Dict[str, Any]: A dictionary mapping sub-entity identifiers to their current states.
-        """
-        states = {}
-        for identifier, entity in self.sub_entities.items():
-            state = entity.get_state()
-            states[identifier] = state
-            self.logger.debug(f"State of '{identifier}': {state}")
-        return states
-
     def reset(self) -> None:
         """
         Resets all sub-entities to their initial states.

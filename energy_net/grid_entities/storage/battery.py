@@ -17,10 +17,15 @@ class Battery(ElementaryGridEntity):
         Args:
             dynamics (EnergyDynamics): The dynamics defining the storage's behavior.
             config (Dict[str, Any]): Configuration parameters for the storage.
+                Optional parameters with defaults:
+                - min: Minimum energy level (default: 0.0)
+                - max: Maximum energy level (default: inf)
+                - charge_rate_max: Maximum charge rate (default: inf)
+                - discharge_rate_max: Maximum discharge rate (default: inf)
+                - charge_efficiency: Charging efficiency (default: 1.0)
+                - discharge_efficiency: Discharging efficiency (default: 1.0)
+                - init: Initial energy level (default: 0.0)
             log_file (str, optional): Path to the Battery log file.
-
-        Raises:
-            AssertionError: If required configuration parameters are missing.
         """
         super().__init__(dynamics, log_file)
 
@@ -28,21 +33,14 @@ class Battery(ElementaryGridEntity):
         self.logger = setup_logger('Battery', log_file)
         self.logger.info("Initializing Battery component.")
 
-        # Ensure that all required configuration parameters are provided
-        required_params = [
-            'min', 'max', 'charge_rate_max', 'discharge_rate_max',
-            'charge_efficiency', 'discharge_efficiency', 'init'
-        ]
-        for param in required_params:
-            assert param in config, f"Missing required parameter '{param}' in Battery configuration."
-
-        self.energy_min: float = config['min']
-        self.energy_max: float = config['max']
-        self.charge_rate_max: float = config['charge_rate_max']
-        self.discharge_rate_max: float = config['discharge_rate_max']
-        self.charge_efficiency: float = config['charge_efficiency']
-        self.discharge_efficiency: float = config['discharge_efficiency']
-        self.initial_energy: float = config['init']
+        # Set parameters with least restrictive defaults
+        self.energy_min: float = config.get('min', 0.0)
+        self.energy_max: float = config.get('max', float('inf'))
+        self.charge_rate_max: float = config.get('charge_rate_max', float('inf'))
+        self.discharge_rate_max: float = config.get('discharge_rate_max', float('inf'))
+        self.charge_efficiency: float = config.get('charge_efficiency', 1.0)
+        self.discharge_efficiency: float = config.get('discharge_efficiency', 1.0)
+        self.initial_energy: float = config.get('init', 0.0)
         self.energy_level: float = self.initial_energy
         self.energy_change: float = 0.0
         self.current_time: float = 0.0
@@ -88,6 +86,28 @@ class Battery(ElementaryGridEntity):
         # Update internal state
         self._state.set_attribute('energy_level', self.energy_level)
         self._state.set_attribute('energy_change', self.energy_change)
+
+    def get_available_charge_capacity(self) -> float:
+        """
+        Calculates how much energy this battery can accept (charge).
+
+        Returns:
+            float: Maximum energy that can be charged, considering both
+                   the charge rate limit and remaining capacity to max.
+        """
+        remaining_capacity = self.energy_max - self.energy_level
+        return min(self.charge_rate_max, remaining_capacity)
+
+    def get_available_discharge_capacity(self) -> float:
+        """
+        Calculates how much energy this battery can provide (discharge).
+
+        Returns:
+            float: Maximum energy that can be discharged, considering both
+                   the discharge rate limit and available energy above min.
+        """
+        available_energy = self.energy_level - self.energy_min
+        return min(self.discharge_rate_max, available_energy)
 
     def get_state(self) -> float:
         """
