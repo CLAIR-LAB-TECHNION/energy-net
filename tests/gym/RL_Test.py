@@ -186,32 +186,25 @@ class PCSGymEnv(gym.Env):
 
         return np.array(predictions)
 
-    def reset(self):
+    def reset(self, start_date=None):
         """Reset environment to initial state"""
         self.current_step = 0
         self.total_profit = 0.0
         self.total_shortage_penalty = 0.0
         self.shortage_count = 0
 
-        # Random start date within test data range
-        # Calculate how many days of test data we have
-        test_days = (self.test_end_date - self.test_start_date).days
-        max_start_offset = max(0, test_days - self.episode_length_days)
-
-        # Random offset in days
-        if max_start_offset > 0:
-            random_offset_days = np.random.randint(0, max_start_offset)
+        # Use given start_date or default to test start
+        if start_date is not None:
+            self.start_date = start_date
         else:
-            random_offset_days = 0
+            self.start_date = self.test_start_date
 
-        self.start_date = self.test_start_date + timedelta(days=random_offset_days)
         self.current_datetime = self.start_date
 
-        # Generate new price curve for episode
+        # Generate new price curve for this episode
         self.price_curve = self._generate_price_curve(self.max_steps)
 
-        # Reset PCS using its built-in reset method
-        # Start battery at 50% capacity (1 MWh out of 2 MWh max)
+        # Reset PCS storage
         self.pcs.reset(initial_storage_unit_level=1e6)
 
         return self._get_obs()
@@ -326,3 +319,38 @@ class PCSGymEnv(gym.Env):
             print(f"Total Penalties: ${self.total_shortage_penalty:.2f}")
             print(f"Shortages: {self.shortage_count}")
             print(f"{'=' * 60}")
+def main():
+    # Initialize environment
+    env = PCSGymEnv()
+
+    current_date = env.test_start_date
+    end_date = env.test_end_date
+    episode_rewards = []
+
+    while current_date <= end_date:
+        # Reset environment at the start of the current day
+        obs = env.reset(start_date=current_date)
+        done = False
+        total_reward = 0.0
+
+        # Run episode for **one day only**
+        while not done:
+            action = env.action_space.sample()  # random action
+            obs, reward, done, info = env.step(action)
+            total_reward += reward
+
+            # Stop episode after 1 day
+            if (env.current_datetime - current_date).days >= 1:
+                done = True
+
+        episode_rewards.append(total_reward)
+        current_date += timedelta(days=1)  # move to next day for next episode
+
+    # Summary
+    print(f"Simulated {len(episode_rewards)} days")
+    print(f"Average daily reward: {np.mean(episode_rewards):.2f}")
+    print(f"Total reward: {np.sum(episode_rewards):.2f}")
+
+
+if __name__ == "__main__":
+    main()
