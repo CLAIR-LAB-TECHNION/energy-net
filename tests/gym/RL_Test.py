@@ -1,5 +1,5 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 import pandas as pd
 from energy_net.grid_entities.consumption.consumption_dynamics import CSV_DataConsumptionDynamics
@@ -28,7 +28,7 @@ class PCSGymEnv(gym.Env):
     def __init__(self,
                  data_file='SystemDemand_30min_2023-2025.csv',
                  dt=0.5 / 24,  # 30 minutes in days
-                 episode_length_days=30,
+                 episode_length_days=1,
                  train_test_split=0.8,  # 80% train, 20% test
                  prediction_horizon=48,  # Number of future time steps to predict
                  shortage_penalty=1000.0,  # $/kWh penalty for shortage
@@ -73,6 +73,11 @@ class PCSGymEnv(gym.Env):
         # --- Initialize predictor on TRAINING data only ---
         print("Creating consumption predictor on training data...")
         self.predictor = create_predictor(train_file)
+
+        # ✅ NEW: Pre-generate ALL predictions for entire test period
+        print("Pre-generating all consumption predictions for test period...")
+        self._pregenerate_all_predictions()
+        print(f"Generated {len(self.prediction_cache)} predictions")
 
         # --- New battery ---
         battery_dynamics = DeterministicBattery(
@@ -142,6 +147,33 @@ class PCSGymEnv(gym.Env):
         # Generate initial price curve (hidden from agent)
         self.price_curve = self._generate_price_curve(self.max_steps)
 
+    def _pregenerate_all_predictions(self):
+        """Generate all predictions for the entire test period once"""
+        # Calculate total number of timesteps in test period
+        total_days = (self.test_end_date - self.test_start_date).days + 1
+        total_steps = int(total_days / self.dt) + self.prediction_horizon
+
+        self.prediction_cache = []
+        current_dt = self.test_start_date
+
+        print(f"Generating predictions from {self.test_start_date} to {self.test_end_date}...")
+        for step in range(total_steps):
+            date_str = current_dt.strftime("%Y-%m-%d")
+            time_str = current_dt.strftime("%H:%M")
+
+            try:
+                pred = predict_consumption(self.predictor, date_str, time_str)
+            except Exception as e:
+                # Use a default value if prediction fails
+                pred = 0.0
+                if step < 10:  # Only print first few warnings to avoid spam
+                    print(f"Warning: Prediction failed for {date_str} {time_str}: {e}")
+
+            self.prediction_cache.append(pred)
+            current_dt += timedelta(days=self.dt)
+
+        self.prediction_cache = np.array(self.prediction_cache)
+
     def _generate_price_curve(self, num_steps):
         """Generate a realistic price curve with daily and weekly patterns"""
         t = np.arange(num_steps)
@@ -170,24 +202,30 @@ class PCSGymEnv(gym.Env):
         return self.price_curve[self.current_step]
 
     def _get_predicted_consumption(self, num_steps):
-        """Get predicted future consumption using the trained model"""
-        predictions = []
-        for i in range(num_steps):
-            future_dt = self.current_datetime + timedelta(days=i * self.dt)
-            date_str = future_dt.strftime("%Y-%m-%d")
-            time_str = future_dt.strftime("%H:%M")
+        """Get predictions from pre-generated cache"""
+        # Calculate index offset from test start date
+        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
+        current_idx = int(days_from_start / self.dt)
 
-            try:
-                pred = predict_consumption(self.predictor, date_str, time_str)
-                predictions.append(pred)
-            except:
-                # Fallback to current consumption if prediction fails
-                predictions.append(self.pcs.get_consumption())
+        end_idx = current_idx + num_steps
 
-        return np.array(predictions)
+        # Handle edge cases
+        if end_idx > len(self.prediction_cache):
+            # Pad with last available prediction if we go beyond cache
+            available = self.prediction_cache[current_idx:]
+            padding = np.full(num_steps - len(available), self.prediction_cache[-1])
+            return np.concatenate([available, padding])
 
-    def reset(self, start_date=None):
-        """Reset environment to initial state"""
+        return self.prediction_cache[current_idx:end_idx]
+
+    def reset(self, start_date=None, seed=None, options=None):
+        """
+        Reset environment to initial state.
+        Compatible with SB3/Gymnasium.
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
         self.current_step = 0
         self.total_profit = 0.0
         self.total_shortage_penalty = 0.0
@@ -207,7 +245,7 @@ class PCSGymEnv(gym.Env):
         # Reset PCS storage
         self.pcs.reset(initial_storage_unit_level=1e6)
 
-        return self._get_obs()
+        return self._get_obs(), {}  # Gymnasium expects obs, info
 
     def step(self, action):
         """
@@ -216,7 +254,7 @@ class PCSGymEnv(gym.Env):
         Args:
             action: battery action (float), positive=charge, negative=discharge
         Returns:
-            obs, reward, done, info
+            obs, reward, done, truncated, info
         """
 
         battery_action = float(action[0])  # convert from action array
@@ -260,7 +298,7 @@ class PCSGymEnv(gym.Env):
 
         # Reward for energy moved by action (charging/discharging)
         # Use energy_sold_or_bought returned from update
-        reward += self._get_current_price() * -energy_sold_or_bought  #
+        reward += self._get_current_price() * -energy_sold_or_bought
 
         # Track total profit if desired (optional)
         self.total_profit += reward
@@ -269,8 +307,10 @@ class PCSGymEnv(gym.Env):
         self.current_step += 1
         self.current_datetime += timedelta(days=self.dt)
 
-        # --- Step 8: Done flag ---
-        done = self.current_step >= self.max_steps
+        # --- Step 8: Terminated flag ---
+        terminated = self.current_step >= self.max_steps
+
+        truncated = False  # can be True if you implement time limits separately
 
         # --- Step 9: Observation ---
         obs = self._get_obs()
@@ -285,7 +325,8 @@ class PCSGymEnv(gym.Env):
             'battery_action': battery_action
         }
 
-        return obs, reward, done, info
+        # ✅ Return 5 values for Gymnasium
+        return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
         """Get current observation"""
@@ -294,7 +335,7 @@ class PCSGymEnv(gym.Env):
         current_consumption = self.pcs.get_consumption() / 10000  # Normalize
         current_price = self._get_current_price() / self.base_price  # Normalize
 
-        # Future consumption predictions
+        # Future consumption predictions (now from cache!)
         predicted_consumption = self._get_predicted_consumption(self.prediction_horizon)
         predicted_consumption = predicted_consumption / 10000  # Normalize
 
@@ -319,37 +360,46 @@ class PCSGymEnv(gym.Env):
             print(f"Total Penalties: ${self.total_shortage_penalty:.2f}")
             print(f"Shortages: {self.shortage_count}")
             print(f"{'=' * 60}")
+
+
 def main():
     # Initialize environment
     env = PCSGymEnv()
 
     current_date = env.test_start_date
-    end_date = env.test_end_date
+    num_episodes = 300
     episode_rewards = []
+    counter = 0
 
-    while current_date <= end_date:
+    print(f"\n{'=' * 60}")
+    print("Starting simulation with pre-generated predictions...")
+    print(f"{'=' * 60}\n")
+
+    while counter < num_episodes:
         # Reset environment at the start of the current day
-        obs = env.reset(start_date=current_date)
+        counter += 1
+        obs, info = env.reset(start_date=current_date)
         done = False
         total_reward = 0.0
 
         # Run episode for **one day only**
         while not done:
             action = env.action_space.sample()  # random action
-            obs, reward, done, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             total_reward += reward
 
-            # Stop episode after 1 day
-            if (env.current_datetime - current_date).days >= 1:
-                done = True
+        print(f"Day {counter} ({current_date.strftime('%Y-%m-%d')}): Total Reward = {total_reward:.2f}")
 
         episode_rewards.append(total_reward)
         current_date += timedelta(days=1)  # move to next day for next episode
 
     # Summary
+    print(f"\n{'=' * 60}")
     print(f"Simulated {len(episode_rewards)} days")
     print(f"Average daily reward: {np.mean(episode_rewards):.2f}")
     print(f"Total reward: {np.sum(episode_rewards):.2f}")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

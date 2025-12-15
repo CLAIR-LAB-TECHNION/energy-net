@@ -204,7 +204,6 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
         # Ensure the query time wraps around within the total days to handle dates that go past the data range
         query_time = query_time%self.total_days
 
-        print(query_time)
         if query_time not in self.consumption_data.index:
             # Interpolate the missing value
             extended_index = self.consumption_data.index.union([query_time]).sort_values()
