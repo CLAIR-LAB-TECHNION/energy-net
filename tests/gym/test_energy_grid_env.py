@@ -4,7 +4,7 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from energy_net.grid_entities.consumption.consumption_dynamics import GMMConsumptionDynamics
-
+#THIS IS A TEST FILE FROM THE EARLY STAGES OF ENERGY-NET-CLEAN DEVELOPMENT
 
 #To run from energy-net, run in terminal python -m tests.gym.test_energy_grid_env
 #To run from energy-net, run in terminal python -m tests.gym.test_energy_grid_env
