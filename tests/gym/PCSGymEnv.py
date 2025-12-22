@@ -1,35 +1,30 @@
 import gymnasium as gym
 from gymnasium import spaces
-import numpy as np
 import pandas as pd
 from energy_net.grid_entities.consumption.consumption_dynamics import CSV_DataConsumptionDynamics
 from energy_net.grid_entities.PCSUnit.pcs_unit import PCSUnit
 from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
-from energy_net.consumption_prediction.predicting_consumption_model import (
-    create_predictor,
-    predict_consumption,
-    generate_day_predictions
-)
 from energy_net.foundation.model import State, Action
 from datetime import timedelta
-import random
 import numpy as np
+
 
 class PCSGymEnv(gym.Env):
     """
-    Simplified unitless Gym environment for PCSUnit.
+    Simplified unit-less Gym environment for PCSUnit.
     - Uses internal "units" everywhere (battery capacity 0..100, consumption ~2 units/step).
     - Actions are normalized in [-1, 1] and passed directly to PCS/Battery.
     - No unit conversions to kWh/kW — everything stays in the same internal units.
+    - Loads pre-computed predictions from CSV file.
     """
 
     def __init__(self,
-                 data_file='synthetic_household_consumption.csv',
-                 dt=0.5 / 24,  # 30 minutes in days (kept for timestep logic but not used for unit conversions)
+                 test_data_file='synthetic_household_consumption_test.csv',
+                 predictions_file='consumption_predictions.csv',
+                 dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
-                 train_test_split=0.8,
                  prediction_horizon=48,
                  shortage_penalty=5.0,
                  base_price=0.10,
@@ -45,41 +40,36 @@ class PCSGymEnv(gym.Env):
         self.base_price = base_price
         self.price_volatility = price_volatility
 
-        # --- Load and split data ---
-        print("Loading data and splitting into train/test sets...")
-        df = pd.read_csv(data_file, index_col=0, parse_dates=True)
-        if df.empty:
-            raise ValueError(f"The data file {data_file} is empty or could not be loaded.")
+        # Load pre-computed predictions
+        print(f"Loading pre-computed predictions from {predictions_file}...")
+        predictions_df = pd.read_csv(predictions_file, parse_dates=['timestamp'])
+        self.prediction_cache = predictions_df['predicted_consumption'].values
+        self.prediction_timestamps = pd.to_datetime(predictions_df['timestamp'])
+        print(f"Loaded {len(self.prediction_cache)} predictions")
 
-        split_idx = int(len(df) * train_test_split)
-        train_df = df.iloc[:split_idx]
-        test_df = df.iloc[split_idx:]
+        # Load test data info
+        print(f"Loading test data from {test_data_file}...")
+        test_df = pd.read_csv(test_data_file, index_col=0, parse_dates=True)
 
-        train_file = data_file.replace('.csv', '_train.csv')
-        train_df.to_csv(train_file)
-        print(f"Training data: {len(train_df)} rows ({train_df.index[0]} to {train_df.index[-1]})")
-        print(f"Testing data: {len(test_df)} rows ({test_df.index[0]} to {test_df.index[-1]})")
+        # Round test start to beginning of day if needed
+        initial_start = test_df.index[0]
+        if initial_start.hour != 0 or initial_start.minute != 0 or initial_start.second != 0:
+            self.test_start_date = (initial_start + timedelta(days=1)).replace(hour=0, minute=0, second=0,
+                                                                               microsecond=0)
+            print(f"Rounded test start from {initial_start} to {self.test_start_date}")
+            # Filter test_df to only include data from the rounded start date
+            test_df = test_df[test_df.index >= self.test_start_date]
+        else:
+            self.test_start_date = initial_start
 
-        test_file = data_file.replace('.csv', '_test.csv')
-        test_df.to_csv(test_file)
-
-        self.test_start_date = test_df.index[0]
         self.test_end_date = test_df.index[-1]
-
-        # Predictor on training data only
-        print("Creating consumption predictor on training data...")
-        self.predictor = create_predictor(train_file)
-
-        # Pre-generate predictions for test period
-        print("Pre-generating all consumption predictions for test period...")
-        self._pregenerate_all_predictions()
-        print(f"Generated {len(self.prediction_cache)} predictions")
+        print(f"Testing data: {len(test_df)} rows ({self.test_start_date} to {self.test_end_date})")
 
         # Battery (internal units: 0..100)
         battery_dynamics = DeterministicBattery(model_parameters={})
         battery_config = {
             "min": 0.0,
-            "max": 100.0,       # battery capacity in internal units
+            "max": 100.0,  # battery capacity in internal units
             "charge_rate_max": 2e5,
             "discharge_rate_max": 2e5,
             "init": 0.0
@@ -88,16 +78,16 @@ class PCSGymEnv(gym.Env):
 
         # Consumption unit using test data
         print("Creating consumption unit on testing data...")
-        consumption_dynamics = CSV_DataConsumptionDynamics(params={'data_file': test_file})
+        consumption_dynamics = CSV_DataConsumptionDynamics(params={'data_file': test_data_file})
         consumption_unit_config = {
-            'data_file': test_file,
-            'consumption_capacity': 6.0  # this stays as whatever your CSV provides; we treat it as internal units
+            'data_file': test_data_file,
+            'consumption_capacity': 6.0
         }
         consumption_unit = ConsumptionUnit(dynamics=consumption_dynamics, config=consumption_unit_config)
 
         self.pcs = PCSUnit(storage_units=[battery], consumption_units=[consumption_unit])
 
-        # Action space: normalized [-1, 1]
+        # Action space: normalized [-10, 10]
         self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(1,), dtype=np.float32)
 
         # Observation: [current_storage, current_consumption, current_price, next N predicted consumptions]
@@ -115,36 +105,16 @@ class PCSGymEnv(gym.Env):
         # Price curve
         self.price_curve = self._generate_price_curve(self.max_steps)
 
-    def _pregenerate_all_predictions(self):
-        total_days = (self.test_end_date - self.test_start_date).days + 1
-        total_steps = int(total_days / self.dt) + self.prediction_horizon
-
-        self.prediction_cache = []
-        current_dt = self.test_start_date
-
-        print(f"Generating predictions from {self.test_start_date} to {self.test_end_date}...")
-        for step in range(total_steps):
-            date_str = current_dt.strftime("%Y-%m-%d")
-            time_str = current_dt.strftime("%H:%M")
-            try:
-                pred = predict_consumption(self.predictor, date_str, time_str)
-            except Exception as e:
-                pred = 0.0
-                if step < 10:
-                    print(f"Warning: Prediction failed for {date_str} {time_str}: {e}")
-            self.prediction_cache.append(pred)
-            current_dt += timedelta(days=self.dt)
-
-        self.prediction_cache = np.array(self.prediction_cache)
-
     def _generate_price_curve(self, num_steps):
-        t = np.arange(num_steps)
-        daily_pattern = np.sin(2 * np.pi * t * self.dt) * 0.3
-        weekly_pattern = np.sin(2 * np.pi * t * self.dt / 7) * 0.15
-        noise = np.random.randn(num_steps) * self.price_volatility
-        prices = self.base_price + daily_pattern + weekly_pattern + noise
-        prices = np.maximum(prices, 0.0001)
-        return prices
+        """Generate a simple price curve with some variation."""
+        prices = []
+        for i in range(num_steps):
+            # Simple sinusoidal price variation
+            time_of_day = (i * self.dt * 24) % 24  # hour of day
+            variation = np.sin(2 * np.pi * time_of_day / 24) * self.price_volatility
+            price = self.base_price + variation
+            prices.append(max(0.01, price))  # ensure positive
+        return np.array(prices)
 
     def _get_current_price(self):
         if self.price_curve is None or self.current_step >= len(self.price_curve):
@@ -152,6 +122,7 @@ class PCSGymEnv(gym.Env):
         return self.price_curve[self.current_step]
 
     def _get_predicted_consumption(self, num_steps):
+        """Get predicted consumption from preloaded cache."""
         days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
         current_idx = int(days_from_start / self.dt)
         end_idx = current_idx + num_steps
@@ -185,7 +156,7 @@ class PCSGymEnv(gym.Env):
 
     def step(self, action):
         """
-        action: normalized intent in [-1, 1]
+        action: normalized intent in [-10, 10]
         All returned values and checks use the same internal "units".
         """
 
@@ -206,32 +177,31 @@ class PCSGymEnv(gym.Env):
         # Pass normalized intent directly to PCS/Battery
         actions = {"Battery_0": Action({'value': raw_action})}
 
-        # Apply PCS update. energy_sold_or_bought is returned in the same internal units (storage_after - storage_before)
+        # Apply PCS update
         energy_sold_or_bought = self.pcs.update(state, actions)
 
         storage_after = self.pcs.get_total_storage()
 
-        # Total consumption reported by PCS — treated as internal units (power-like but we use as "units per step")
+        # Total consumption reported by PCS
         consumption_units = float(self.pcs.get_consumption())
 
-        # Available discharge reported by battery (assumed in same internal units)
+        # Available discharge reported by battery
         try:
             available_discharge_units = float(battery_entity.get_available_discharge_capacity())
         except Exception:
-            # fallback if method not present
             available_discharge_units = getattr(battery_entity, 'available_discharge', 0.0)
 
-        # Shortage check: compare consumption_units to available_discharge_units (same unit system)
+        # Shortage check
         shortage = consumption_units > available_discharge_units
 
-        # Compute reward using price per internal unit
+        # Compute reward
         reward = 0.0
         if shortage:
             reward -= self.shortage_penalty
             self.shortage_count += 1
             self.total_shortage_penalty += self.shortage_penalty
 
-        # Money for moved units (price is per internal unit)
+        # Money for moved units
         reward += self._get_current_price() * -energy_sold_or_bought
         self.total_profit += reward
 
@@ -244,7 +214,6 @@ class PCSGymEnv(gym.Env):
 
         obs = self._get_obs()
 
-        # Info in internal units for easy human-reading
         info = {
             'storage_before_units': storage_before,
             'storage_after_units': storage_after,
@@ -258,9 +227,9 @@ class PCSGymEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
-        # Normalizations in observation are kept as before but operate on internal units:
-        current_storage = self.pcs.get_total_storage() / 100.0  # normalize 0..100 -> 0..1
-        current_consumption = self.pcs.get_consumption() / 10.0  # scale-down so the value is reasonable in obs
+        # Normalizations in observation
+        current_storage = self.pcs.get_total_storage() / 100.0
+        current_consumption = self.pcs.get_consumption() / 10.0
         current_price = self._get_current_price() / self.base_price
 
         predicted_consumption = self._get_predicted_consumption(self.prediction_horizon)
@@ -288,6 +257,11 @@ class PCSGymEnv(gym.Env):
 
 
 if __name__ == "__main__":
+    # First, generate predictions if not already done
+    # Uncomment and run generate_predictions.py first, or:
+    # from generate_predictions import generate_and_save_predictions
+    # generate_and_save_predictions()
+
     env = PCSGymEnv()
     obs, info = env.reset()
 
@@ -296,10 +270,7 @@ if __name__ == "__main__":
 
     print("\n=== Debugging Random Actions in main() (uniform continuous) ===\n")
     for step in range(num_steps):
-        # sample fresh each step from continuous uniform
         action_value = float(np.random.uniform(-10.0, 10.0))
-
-
         action = np.array([action_value], dtype=np.float32)
 
         obs, reward, terminated, truncated, info = env.step(action)
