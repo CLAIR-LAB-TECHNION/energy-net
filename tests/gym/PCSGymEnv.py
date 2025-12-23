@@ -32,6 +32,9 @@ class PCSGymEnv(gym.Env):
 
         super().__init__()
 
+        # -------------------------
+        # Basic parameters
+        # -------------------------
         self.dt = dt
         self.episode_length_days = episode_length_days
         self.max_steps = int(episode_length_days / dt)
@@ -40,70 +43,105 @@ class PCSGymEnv(gym.Env):
         self.base_price = base_price
         self.price_volatility = price_volatility
 
-        # Load pre-computed predictions
-        print(f"Loading pre-computed predictions from {predictions_file}...")
-        predictions_df = pd.read_csv(predictions_file, parse_dates=['timestamp'])
-        self.prediction_cache = predictions_df['predicted_consumption'].values
-        self.prediction_timestamps = pd.to_datetime(predictions_df['timestamp'])
-        print(f"Loaded {len(self.prediction_cache)} predictions")
+        # -------------------------
+        # Load test data
+        # -------------------------
+        self.test_df = pd.read_csv(
+            test_data_file,
+            index_col=0,
+            parse_dates=True
+        )
 
-        # Load test data info
-        print(f"Loading test data from {test_data_file}...")
-        test_df = pd.read_csv(test_data_file, index_col=0, parse_dates=True)
+        self.test_start_date = self.test_df.index[0]
+        self.test_end_date = self.test_df.index[-1]
 
-        # Round test start to beginning of day if needed
-        initial_start = test_df.index[0]
-        if initial_start.hour != 0 or initial_start.minute != 0 or initial_start.second != 0:
-            self.test_start_date = (initial_start + timedelta(days=1)).replace(hour=0, minute=0, second=0,
-                                                                               microsecond=0)
-            print(f"Rounded test start from {initial_start} to {self.test_start_date}")
-            # Filter test_df to only include data from the rounded start date
-            test_df = test_df[test_df.index >= self.test_start_date]
-        else:
-            self.test_start_date = initial_start
+        # -------------------------
+        # Load predictions
+        # -------------------------
+        pred_df = pd.read_csv(
+            predictions_file,
+            parse_dates=['timestamp']
+        ).set_index('timestamp').sort_index()
 
-        self.test_end_date = test_df.index[-1]
-        print(f"Testing data: {len(test_df)} rows ({self.test_start_date} to {self.test_end_date})")
+        # -------------------------
+        # Trust that everything matches
+        # -------------------------
+        self.pred_df = pred_df
+        self.prediction_cache = pred_df['predicted_consumption'].values
+        self.prediction_timestamps = pred_df.index
+        print(f"Loaded {len(self.prediction_cache)} aligned predictions")
 
-        # Battery (internal units: 0..100)
+        # ==============================================================
+        # Battery
+        # ==============================================================
         battery_dynamics = DeterministicBattery(model_parameters={})
         battery_config = {
             "min": 0.0,
-            "max": 100.0,  # battery capacity in internal units
-            "charge_rate_max": 2e5,
-            "discharge_rate_max": 2e5,
+            "max": 100.0,
             "init": 0.0
         }
         battery = Battery(dynamics=battery_dynamics, config=battery_config)
 
-        # Consumption unit using test data
+        # ==============================================================
+        # Consumption unit (test data)
+        # ==============================================================
         print("Creating consumption unit on testing data...")
-        consumption_dynamics = CSV_DataConsumptionDynamics(params={'data_file': test_data_file})
+        consumption_dynamics = CSV_DataConsumptionDynamics(
+            params={'data_file': test_data_file}
+        )
         consumption_unit_config = {
             'data_file': test_data_file,
             'consumption_capacity': 6.0
         }
-        consumption_unit = ConsumptionUnit(dynamics=consumption_dynamics, config=consumption_unit_config)
+        consumption_unit = ConsumptionUnit(
+            dynamics=consumption_dynamics,
+            config=consumption_unit_config
+        )
 
-        self.pcs = PCSUnit(storage_units=[battery], consumption_units=[consumption_unit])
+        self.pcs = PCSUnit(
+            storage_units=[battery],
+            consumption_units=[consumption_unit]
+        )
 
-        # Action space: normalized [-10, 10]
-        self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(1,), dtype=np.float32)
+        # ==============================================================
+        # Gym spaces
+        # ==============================================================
+        self.action_space = spaces.Box(
+            low=-10.0,
+            high=10.0,
+            shape=(1,),
+            dtype=np.float32
+        )
 
-        # Observation: [current_storage, current_consumption, current_price, next N predicted consumptions]
         obs_dim = 3 + prediction_horizon
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(obs_dim,),
+            dtype=np.float32
+        )
 
-        # Episode tracking
+        # ==============================================================
+        # Episode state
+        # ==============================================================
         self.current_step = 0
         self.start_date = self.test_start_date
         self.current_datetime = self.start_date
-        self.total_profit = 0.0
+
+        # New split tracking variables
+        self.total_reward = 0.0  # Accumulated reward (includes penalties)
+        self.total_money_earned = 0.0  # Accumulated money made (pure transaction money)
         self.total_shortage_penalty = 0.0
         self.shortage_count = 0
 
+        # ==============================================================
         # Price curve
+        # ==============================================================
         self.price_curve = self._generate_price_curve(self.max_steps)
+
+    def get_money(self):
+        """Returns the accumulated money made from transactions, ignoring shortage penalties."""
+        return self.total_money_earned
 
     def _generate_price_curve(self, num_steps):
         """Generate a simple price curve with some variation."""
@@ -134,22 +172,38 @@ class PCSGymEnv(gym.Env):
 
         return self.prediction_cache[current_idx:end_idx]
 
-    def reset(self, start_date=None, seed=None, options=None):
-        if seed is not None:
-            np.random.seed(seed)
+    def set_price_curve(self, prices: np.ndarray):
+        """External setter to inject prices from the ISO agent."""
+        if len(prices) != self.max_steps:
+            raise ValueError(f"Price curve must have {self.max_steps} steps.")
+        self.price_curve = prices
 
+    def reset(self, start_date=None, options=None, seed=None):
+        # 1. Standard Gymnasium seeding
+        super().reset(seed=seed)
+
+        # 2. Reset intra-day progress ONLY
         self.current_step = 0
-        self.total_profit = 0.0
+        self.total_reward = 0.0
+        self.total_money_earned = 0.0
         self.total_shortage_penalty = 0.0
         self.shortage_count = 0
 
+        # 3. Handle the Calendar
         if start_date is not None:
-            self.start_date = start_date
+            # Manual override (e.g., if you want to jump to a specific day)
+            self.current_datetime = start_date
         else:
-            self.start_date = self.test_start_date
+            # Check if we are at the end of the dataset
+            if self.current_datetime >= self.test_end_date:
+                print("Reached end of dataset. Looping back to start.")
+                self.current_datetime = self.test_start_date
 
-        self.current_datetime = self.start_date
-        self.price_curve = self._generate_price_curve(self.max_steps)
+            # LOGIC: If we don't change self.current_datetime here,
+            # it stays at the value it reached at the end of the last episode
+            # (which is 00:00 of the next day).
+
+        # 4. Wipe physical state (battery)
         self.pcs.reset(initial_storage_unit_level=0)
 
         return self._get_obs(), {}
@@ -191,19 +245,30 @@ class PCSGymEnv(gym.Env):
         except Exception:
             available_discharge_units = getattr(battery_entity, 'available_discharge', 0.0)
 
-        # Shortage check
+        # ----------------------------------------------------------
+        # Split Reward Logic
+        # ----------------------------------------------------------
+
+        # 1. Calculate transaction money (Price * units moved)
+        # Note: -energy_sold_or_bought because negative = selling = revenue
+        step_money = self._get_current_price() * -energy_sold_or_bought
+
+        # 2. Shortage check and penalty
         shortage = consumption_units > available_discharge_units
-
-        # Compute reward
-        reward = 0.0
+        step_penalty = 0.0
         if shortage:
-            reward -= self.shortage_penalty
+            step_penalty = self.shortage_penalty
             self.shortage_count += 1
-            self.total_shortage_penalty += self.shortage_penalty
+            self.total_shortage_penalty += step_penalty
 
-        # Money for moved units
-        reward += self._get_current_price() * -energy_sold_or_bought
-        self.total_profit += reward
+        # 3. Update trackers
+        self.total_money_earned += step_money
+
+        # The step reward for the RL agent includes the shortage penalty
+        reward = step_money - step_penalty
+        self.total_reward += reward
+
+        # ----------------------------------------------------------
 
         # Advance time
         self.current_step += 1
@@ -222,6 +287,8 @@ class PCSGymEnv(gym.Env):
             'available_discharge_units': available_discharge_units,
             'shortage': shortage,
             'battery_action_normalized': raw_action,
+            'step_money': step_money,
+            'total_money_so_far': self.total_money_earned
         }
 
         return obs, reward, terminated, truncated, info
@@ -250,43 +317,8 @@ class PCSGymEnv(gym.Env):
             print(f"Storage: {self.pcs.get_total_storage():.2f} units (capacity=100)")
             print(f"Consumption: {self.pcs.get_consumption():.2f} units/step")
             print(f"Current Price: {self._get_current_price():.4f} $/unit")
-            print(f"Total Profit: ${self.total_profit:.2f}")
+            print(f"Total Reward (Net): ${self.total_reward:.2f}")
+            print(f"Total Money (Gross): ${self.total_money_earned:.2f}")
             print(f"Total Penalties: ${self.total_shortage_penalty:.2f}")
             print(f"Shortages: {self.shortage_count}")
             print(f"{'=' * 60}")
-
-
-if __name__ == "__main__":
-    # First, generate predictions if not already done
-    # Uncomment and run generate_predictions.py first, or:
-    # from generate_predictions import generate_and_save_predictions
-    # generate_and_save_predictions()
-
-    env = PCSGymEnv()
-    obs, info = env.reset()
-
-    accumulated_reward = 0.0
-    num_steps = 20
-
-    print("\n=== Debugging Random Actions in main() (uniform continuous) ===\n")
-    for step in range(num_steps):
-        action_value = float(np.random.uniform(-10.0, 10.0))
-        action = np.array([action_value], dtype=np.float32)
-
-        obs, reward, terminated, truncated, info = env.step(action)
-        accumulated_reward += reward
-
-        print(f"Step {step + 1}")
-        print(f"  Battery action (normalized): {action[0]:.3f}")
-        print(f"  Energy bought or sold (internal units): {info['energy_sold_or_bought_units']:.3f} units")
-        print(f"  Consumption this step: {info['consumption_units']:.3f} units")
-        print(f"  Available discharge now: {info['available_discharge_units']:.3f} units")
-        print(f"  Storage before/after: {info['storage_before_units']:.2f} / {info['storage_after_units']:.2f}")
-        print(f"  Step reward: {reward:.2f}")
-        print(f"  Accumulated reward: {accumulated_reward:.2f}")
-        print(f"  Shortage: {info['shortage']}")
-        print("-" * 50)
-
-        if terminated or truncated:
-            print("Environment terminated early.")
-            break

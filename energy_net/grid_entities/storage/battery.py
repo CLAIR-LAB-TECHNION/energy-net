@@ -66,7 +66,6 @@ class Battery(ElementaryGridEntity):
         action_value = action.get_action('value')
         if action_value is None:
             action_value = 0.0
-
         self.logger.debug(f"Performing action: {action_value} MW")
 
         # Delegate the calculation to the dynamics
