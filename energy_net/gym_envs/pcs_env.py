@@ -30,7 +30,7 @@ class PCSEnv(gym.Env):
                  shortage_penalty=5.0,
                  base_price=0.10,
                  price_volatility=0.15,
-                 log_path='tests/gym/logs'):  # <--- New optional parameter
+                 log_path='../../tests/gym/logs'):  # <--- New optional parameter
 
         super().__init__()
 
