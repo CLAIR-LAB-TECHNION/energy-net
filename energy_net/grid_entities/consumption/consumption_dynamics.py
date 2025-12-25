@@ -147,7 +147,7 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
     Consumption pattern based on external data loaded from a CSV file with Datetime and Consumption columns.
     Allows querying consumption at specific date/time values.
     """
-    def __init__(self, params: Dict[str, EnergyDynamics]):
+    def __init__(self, params: Dict[str, str]):
         """
         Initializes the dynamics with a specific configuration.
 
@@ -204,7 +204,6 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
         # Ensure the query time wraps around within the total days to handle dates that go past the data range
         query_time = query_time%self.total_days
 
-        print(query_time)
         if query_time not in self.consumption_data.index:
             # Interpolate the missing value
             extended_index = self.consumption_data.index.union([query_time]).sort_values()

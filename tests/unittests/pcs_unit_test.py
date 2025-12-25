@@ -19,6 +19,10 @@ class TestPCSUnitEnergyStorage(unittest.TestCase):
         # If energy_change is a property on the real Battery, mock it properly:
         type(self.battery).energy_change = PropertyMock(return_value=0.0)
 
+        # Add the new capacity methods
+        self.battery.get_available_charge_capacity.return_value = 50.0  # Can charge up to 50 MWh
+        self.battery.get_available_discharge_capacity.return_value = 30.0  # Can discharge up to 30 MWh
+
         # Mock Production Unit
         self.production_unit = MagicMock(spec=ProductionUnit)
         self.production_unit.get_state.return_value = 100.0
@@ -80,6 +84,12 @@ class TestPCSUnit(unittest.TestCase):
         # Directly assign numeric energy_change
         self.battery1.energy_change = 5.0
         self.battery2.energy_change = -3.0
+
+        # Add the new capacity methods for both batteries
+        self.battery1.get_available_charge_capacity.return_value = 40.0  # Can charge up to 40 MWh
+        self.battery1.get_available_discharge_capacity.return_value = 35.0  # Can discharge up to 35 MWh
+        self.battery2.get_available_charge_capacity.return_value = 60.0  # Can charge up to 60 MWh
+        self.battery2.get_available_discharge_capacity.return_value = 25.0  # Can discharge up to 25 MWh
 
         # Mock Production Units
         self.production_unit1 = MagicMock(spec=ProductionUnit)

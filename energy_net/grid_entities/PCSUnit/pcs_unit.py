@@ -17,30 +17,37 @@ class PCSUnit(CompositeGridEntity):
     """
 
     def __init__(self,
-                 storage_units: List[Battery],
-                 production_units: List[ProductionUnit],
-                 consumption_units: List[ConsumptionUnit],
+                 storage_units: Optional[List[Battery]] = None,
+                 production_units: Optional[List[ProductionUnit]] = None,
+                 consumption_units: Optional[List[ConsumptionUnit]] = None,
                  log_file: Optional[str] = 'logs/pcs_unit.log') -> None:
         """
         Initializes the PCSUnit with the provided components.
 
         Args:
-            storage_units (List[Battery]): List of Battery instances.
-            production_units (List[ProductionUnit]): List of ProductionUnit instances.
-            consumption_units (List[ConsumptionUnit]): List of ConsumptionUnit instances.
+            storage_units (Optional[List[Battery]]): List of Battery instances.
+            production_units (Optional[List[ProductionUnit]]): List of ProductionUnit instances.
+            consumption_units (Optional[List[ConsumptionUnit]]): List of ConsumptionUnit instances.
             log_file (Optional[str]): Path to the log file.
         """
+        # Handle None inputs by converting to empty lists
+        storage_units = storage_units or []
+        production_units = production_units or []
+        consumption_units = consumption_units or []
+
         # Combine all sub-entities into a single list
         sub_entities = storage_units + production_units + consumption_units
 
+        # Initialize the CompositeGridEntity with sub-entities FIRST
+        # This sets up self.logger which we need for the warning below
+        super().__init__(sub_entities=sub_entities, log_file=log_file)
+
+        # NOW we can safely use self.logger
         # Check for duplicate objects in sub_entities
         seen = set()
         duplicates = [entity for entity in sub_entities if entity in seen or seen.add(entity)]
         if duplicates:
             self.logger.warning(f"Duplicate references to entities found in sub_entities: {duplicates}")
-
-        # Initialize the CompositeGridEntity with sub-entities
-        super().__init__(sub_entities=sub_entities, log_file=log_file)
 
         # Store references to the components
         self.storage_units = storage_units
@@ -113,6 +120,32 @@ class PCSUnit(CompositeGridEntity):
 
         return total_storage
 
+    def get_total_available_discharge_capacity(self) -> float:
+        """
+        Calculates the total energy that all storage units can discharge
+        during the current timestep.
+
+        Returns:
+            float: Total available discharge capacity (same units as battery capacity).
+        """
+        if not self.storage_units:
+            self.logger.error("No storage units available in PCSUnit.")
+            return 0.0
+
+        total_capacity = sum(
+            battery.get_available_discharge_capacity()
+            for battery in self.storage_units
+        )
+
+        self.logger.debug(
+            f"Total available discharge capacity calculated: {total_capacity}"
+        )
+
+        # Optional: track it in PCS internal state if you want
+        # self._state.set_attribute('available_discharge_capacity', total_capacity)
+
+        return total_capacity
+
     def get_energy_change(self) -> float:
         """
         Retrieves the total energy change from all storage units.
@@ -182,57 +215,114 @@ class PCSUnit(CompositeGridEntity):
 
         self.logger.info("PCSUnit reset complete.")
 
-    def update(self, state: State, actions: Optional[Dict[str, Action]] = None) -> None:
+    def update(self, state: State, actions: Optional[Dict[str, Action]] = None) -> float:
         """
-        Updates all sub-entities based on the provided state, production, and consumption.
-
-        Args:
-            state (State): State object containing time and other state information.
-            actions (Optional[Dict[str, Action]]): Optional user-defined actions for batteries
-                                                    (only applied if surplus exists).
+        Updates all sub-entities and handles surplus/deficit distribution.
+        Now returns the actual energy change due to the applied actions (intentionally not including the changes
+        affected by the production/consumption deficit).
         """
-        # Extract time from state
-        current_time = state.get_attribute('time') or 0.0
-        self._state.set_attribute('time', current_time)
 
-        # Get current totals
+        # --- Step 1: Compute totals ---
         total_production = self.get_production()
         total_consumption = self.get_consumption()
         energy_diff = total_production - total_consumption  # positive = surplus, negative = deficit
 
+        current_time = state.get_attribute('time') or 0.0
+        self._state.set_attribute('time', current_time)
         self.logger.debug(f"Time {current_time}: production={total_production}, "
                           f"consumption={total_consumption}, diff={energy_diff}")
 
-        # Prepare battery actions based on surplus/deficit
-        battery_actions: Dict[str, Action] = {}
-        if self.storage_units:
-            num_batteries = len(self.storage_units)
+        # --- Step 2: Apply PCS energy distribution ---
+        if self.storage_units and energy_diff != 0:
+            if energy_diff > 0:
+                self._distribute_surplus(energy_diff)
+            else:
+                self._distribute_deficit(abs(energy_diff))
 
-            for idx, battery in enumerate(self.storage_units):
-                batt_id = f"Battery_{idx}"
+        # --- Step 3: Apply user actions and measure effect ---
+        storage_before = self.get_total_storage()  # total storage before applying actions
 
-                if energy_diff > 0:
-                    # Surplus → charge
-                    battery_actions[batt_id] = Action({'value': energy_diff / num_batteries})
+        super().update(state, actions)  # applies the battery actions
 
-                elif energy_diff < 0:
-                    # Deficit → discharge to cover deficit
-                    discharge_value = energy_diff / num_batteries  # negative value
-                    battery_actions[batt_id] = Action({'value': discharge_value})
+        storage_after = self.get_total_storage()  # total storage after applying actions
 
-                else:
-                    # Balanced → do nothing
-                    battery_actions[batt_id] = Action({'value': 0.0})
+        # Compute actual energy change caused by the action
+        action_energy_change = storage_after - storage_before
+        self._state.set_attribute('energy_change', action_energy_change)
 
-        # Update batteries
-        for idx, battery in enumerate(self.storage_units):
-            batt_id = f"Battery_{idx}"
-            action = battery_actions.get(batt_id)
-            battery.update(state, action)
+        # Return it if needed for reward
+        return action_energy_change
 
-        # Update production and consumption units
-        for idx, prod_unit in enumerate(self.production_units):
-            prod_unit.update(state)
+    def _distribute_surplus(self, surplus: float) -> None:
+        """
+        Distributes surplus energy across batteries for charging.
 
-        for idx, cons_unit in enumerate(self.consumption_units):
-            cons_unit.update(state)
+        Args:
+            surplus (float): Amount of surplus energy to distribute (positive value).
+        """
+        # Calculate how much each battery can accept
+        battery_capacities = []
+        for battery in self.storage_units:
+            capacity = battery.get_available_charge_capacity()
+            battery_capacities.append(capacity)
+
+        total_capacity = sum(battery_capacities)
+
+        if total_capacity == 0:
+            self.logger.warning(f"Cannot store surplus of {surplus} MWh - all batteries at max capacity")
+            return
+
+        # Check if we can store all the surplus
+        if total_capacity < surplus:
+            self.logger.warning(f"Cannot store all surplus: {surplus} MWh available, "
+                                f"but only {total_capacity} MWh capacity")
+            amount_to_distribute = total_capacity
+        else:
+            amount_to_distribute = surplus
+
+        # Distribute proportionally based on available capacity
+        for idx, (battery, capacity) in enumerate(zip(self.storage_units, battery_capacities)):
+            if capacity > 0:
+                proportion = capacity / total_capacity
+                charge_amount = amount_to_distribute * proportion
+                action = Action({'value': charge_amount})
+                battery.perform_action(action)
+                self.logger.debug(f"Battery_{idx} charged by {charge_amount} MWh "
+                                  f"(capacity: {capacity}, proportion: {proportion:.2%})")
+
+    def _distribute_deficit(self, deficit: float) -> None:
+        """
+        Distributes deficit energy across batteries for discharging.
+
+        Args:
+            deficit (float): Amount of deficit energy to cover (positive value).
+        """
+        # Calculate how much each battery can provide
+        battery_capacities = []
+        for battery in self.storage_units:
+            capacity = battery.get_available_discharge_capacity()
+            battery_capacities.append(capacity)
+
+        total_capacity = sum(battery_capacities)
+
+        if total_capacity == 0:
+            self.logger.warning(f"Cannot cover deficit of {deficit} MWh - all batteries at min capacity")
+            return
+
+        # Check if we can cover all the deficit
+        if total_capacity < deficit:
+            self.logger.warning(f"Cannot cover all deficit: {deficit} MWh needed, "
+                                f"but only {total_capacity} MWh available")
+            amount_to_distribute = total_capacity
+        else:
+            amount_to_distribute = deficit
+
+        # Distribute proportionally based on available capacity
+        for idx, (battery, capacity) in enumerate(zip(self.storage_units, battery_capacities)):
+            if capacity > 0:
+                proportion = capacity / total_capacity
+                discharge_amount = -(amount_to_distribute * proportion)  # Negative for discharge
+                action = Action({'value': discharge_amount})
+                battery.perform_action(action)
+                self.logger.debug(f"Battery_{idx} discharged by {abs(discharge_amount)} MWh "
+                                  f"(capacity: {capacity}, proportion: {proportion:.2%})")

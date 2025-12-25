@@ -7,7 +7,7 @@ from energy_net.common import defs
 class DeterministicBattery(EnergyDynamics):
     """
     Deterministic Battery Dynamics.
-    
+
     This class models the dynamics of a storage within the smart grid, handling charging
     and discharging actions, applying efficiencies, and accounting for natural decay losses.
     """
@@ -18,25 +18,22 @@ class DeterministicBattery(EnergyDynamics):
 
         Args:
             model_parameters (Dict[str, Any]):
-                - charge_efficiency (float): Efficiency factor for charging (0 < charge_efficiency <= 1).
-                - discharge_efficiency (float): Efficiency factor for discharging (0 < discharge_efficiency <= 1).
-                - lifetime_constant (float): Lifetime constant representing the rate of decay (lifetime_constant > 0).
+                Optional parameters with defaults:
+                - charge_efficiency (float): Efficiency factor for charging (default: 1.0, range: 0 < x <= 1).
+                - discharge_efficiency (float): Efficiency factor for discharging (default: 1.0, range: 0 < x <= 1).
+                - lifetime_constant (float): Lifetime constant representing the rate of decay (default: inf, no decay).
 
         Raises:
-            AssertionError: If any required parameter is missing or invalid.
+            AssertionError: If any parameter value is invalid.
         """
         self.model_parameters = model_parameters
-        
-        # Ensure all required parameters are provided
-        required_params = ['charge_efficiency', 'discharge_efficiency', 'lifetime_constant']
-        for param in required_params:
-            assert param in model_parameters, f"Missing required parameter '{param}' for DeterministicBattery."
+
+        # Set parameters with least restrictive defaults
+        charge_efficiency = model_parameters.get('charge_efficiency', 1.0)
+        discharge_efficiency = model_parameters.get('discharge_efficiency', 1.0)
+        lifetime_constant = model_parameters.get('lifetime_constant', float('inf'))
 
         # Validate parameter values
-        charge_efficiency = model_parameters['charge_efficiency']
-        discharge_efficiency = model_parameters['discharge_efficiency']
-        lifetime_constant = model_parameters['lifetime_constant']
-
         assert 0 < charge_efficiency <= 1, "charge_efficiency must be in the range (0, 1]."
         assert 0 < discharge_efficiency <= 1, "discharge_efficiency must be in the range (0, 1]."
         assert lifetime_constant > 0, "lifetime_constant must be positive."
@@ -44,6 +41,13 @@ class DeterministicBattery(EnergyDynamics):
         self.charge_efficiency = charge_efficiency
         self.discharge_efficiency = discharge_efficiency
         self.lifetime_constant = lifetime_constant
+
+        # Store initial parameters for reset
+        self.initial_parameters = {
+            'charge_efficiency': charge_efficiency,
+            'discharge_efficiency': discharge_efficiency,
+            'lifetime_constant': lifetime_constant
+        }
 
     def get_value(self, **kwargs) -> float:
         """
@@ -85,6 +89,7 @@ class DeterministicBattery(EnergyDynamics):
         # Validate state parameters
         assert max_energy > min_energy, "max_energy must be greater than min_energy."
         assert min_energy <= current_energy <= max_energy, "current_energy must be within [min_energy, max_energy]."
+
         # Apply charging or discharging efficiency
         if action > 0:
             assert action <= charge_rate_max, "Charging action exceeds maximum charge rate."
