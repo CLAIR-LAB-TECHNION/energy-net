@@ -105,7 +105,13 @@ class AlternatingISOEnv(ISOEnv):
         return self._expected, iso_reward, True, False, iso_info
 
 
-def run_alternating_training():
+def run_alternating_training(cycle_days: int = 7, total_iterations: int = 50):
+    """Main training loop for tandem ISO <-> PCS training.
+
+    Args:
+        cycle_days: number of days in each ISO/PCS cycle (replaces the hardcoded 7).
+        total_iterations: how many ISO<->PCS iterations to run.
+    """
     print("--- INITIALIZING TANDEM TRAINING ---")
 
     # 1) Create PCS environment directly (assume PCSEnv now implements
@@ -126,8 +132,8 @@ def run_alternating_training():
         pcs_model=pcs_model
     )
 
-    # 4) ISO agent (acts once per day; n_steps=7 means it updates every 7 days)
-    iso_model = PPO("MlpPolicy", iso_env, verbose=0, n_steps=7, batch_size=7)
+    # 4) ISO agent (acts once per day; set n_steps/batch_size to cycle_days)
+    iso_model = PPO("MlpPolicy", iso_env, verbose=0, n_steps=cycle_days, batch_size=cycle_days)
 
     print(f"Simulation Started. ISO pointer at Row: {iso_env._next_start_idx + 2}")
     print("-" * 50)
@@ -138,16 +144,16 @@ def run_alternating_training():
     steps_per_day = iso_env.T
 
     # --- Main alternating training loop ---
-    for iteration in range(1, 51):
-        # PHASE 1: ISO Learning Phase (ISO updates across 7 day-steps)
-        print(f"[Iteration {iteration}] ISO Learning Phase (1 Days)...")
-        iso_model.learn(total_timesteps=7, reset_num_timesteps=False)
+    for iteration in range(1, total_iterations + 1):
+        # PHASE 1: ISO Learning Phase (ISO updates across cycle_days day-steps)
+        print(f"[Iteration {iteration}] ISO Learning Phase ({cycle_days} Days)...")
+        iso_model.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
 
         # PHASE 2: PCS Learning Phase - one fixed-day episode per day
         print(f"[Iteration {iteration}] PCS Learning Phase...")
         base_idx = iso_env._next_start_idx
 
-        for day in range(7):
+        for day in range(cycle_days):
             # compute global half-hour start index for this day
             start = base_idx + day * steps_per_day
 
@@ -161,10 +167,10 @@ def run_alternating_training():
             base_pcs_env.set_price_curve(price_curve.astype(np.float32))
             base_pcs_env.set_step_index(start)
 
-            # train PCS for exactly one day (48 steps) under this fixed curve
+            # train PCS for exactly one day (steps_per_day steps) under this fixed curve
             pcs_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
 
-        # After PCS completes the week of day-episodes, sync ISO pointer forward
+        # After PCS completes the cycle of day-episodes, sync ISO pointer forward
         pcs_idx = base_pcs_env.get_step_index()
         iso_env.sync_to_pcs(pcs_idx)
 
