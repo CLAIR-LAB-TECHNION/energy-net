@@ -3,12 +3,14 @@ from datetime import timedelta
 from energy_net.gym_envs.pcs_env import PCSEnv
 from stable_baselines3 import PPO
 import numpy as np
+import pandas as pd
 from iso_env import ISOEnv
 
+
 class ISOPricingWrapper:
-    """
-    Direct bridge between a live ISO model and the PCS environment.
-    Converts RL actions into realistic price curves ($/unit).
+    """Direct bridge between an ISO RL model and the PCS environment.
+    Converts a 48-step predicted consumption window into a realistic
+    price curve (in $/unit) using the ISO policy's first 48 action values.
     """
 
     def __init__(self, iso_model, base_price=0.10, price_scale=0.20):
@@ -17,98 +19,106 @@ class ISOPricingWrapper:
         self.price_scale = price_scale
 
     def generate_price_curve(self, predicted_consumption: np.ndarray) -> np.ndarray:
-        # ISO expects float32 forecast (48,)
+        # ISO expects a float32 (48,) forecast observation
         obs = predicted_consumption.astype(np.float32)
 
-        # 1. Get raw action from the model
+        # Query the ISO policy deterministically
         action, _ = self.iso_model.predict(obs, deterministic=True)
 
-        # 2. Slice the first 48 elements (prices)
+        # First 48 entries represent an unscaled price signal
         raw_prices = action[:48]
 
-        # 3. Scale to actual currency range
+        # Robust min-max normalization
         min_p, max_p = raw_prices.min(), raw_prices.max()
         denom = (max_p - min_p) + 1e-8
         normalized = (raw_prices - min_p) / denom
 
-        # Center the price around base_price
+        # Center and scale into a realistic price range
         scaled_prices = (self.base_price - self.price_scale / 2) + (normalized * self.price_scale)
-
         return scaled_prices.astype(np.float32)
 
 
 class AlternatingISOEnv(ISOEnv):
-    def __init__(self, actual_csv, predicted_csv, pcs_env, pcs_model, steps_per_day=48):
-        # Initialize the parent ISOEnv (handles data loading and the day pointer)
-        super().__init__(actual_csv, predicted_csv, steps_per_day)
+    """An ISO environment that internally coordinates a PCS environment.
 
+    Behavior differences compared to a simple nested reset:
+    - The ISO queries the PCS env for its global half-hour index and advances
+      the ISO pointer forward to that index (prevents rewinding).
+    - The ISO injects its price curve into the PCS and runs the PCS policy for
+      T=48 steps to produce an economic reward which becomes the ISO reward.
+    """
+
+    def __init__(self, actual_csv, predicted_csv, pcs_env: PCSEnv, pcs_model, steps_per_day=48):
+        super().__init__(actual_csv, predicted_csv, steps_per_day)
         self.pcs_env = pcs_env
         self.pcs_model = pcs_model
 
+    def sync_to_pcs(self, pcs_step_index: int):
+        """Move the ISO's internal pointer to match the PCS half-hour index."""
+        self._next_start_idx = int(pcs_step_index)
+
+    def _get_iso_timestamp_from_pcs_index(self, pcs_index: int):
+        return self.base_timestamp + timedelta(minutes=30 * int(pcs_index))
+
     def step(self, action):
+        """Map ISO action to prices, sync to PCS, run PCS for a day, then advance ISO.
+
+        Returns: (obs, reward, done, truncated, info) where reward is PCS earnings.
         """
-        1. Captures current index/timestamp.
-        2. Injects ISO prices into PCS environment.
-        3. Runs PCS agent for 48 sub-steps to get reward.
-        4. Calls super().step() to advance the day pointer.
-        """
-        # --- 1. Map ISO Action to actual prices ($/unit) ---
+        # --- 1) Map ISO action -> realistic price curve ($/unit) ---
         raw_prices = action[:self.T]
-        # Robust normalization to avoid division by zero
         p_min, p_max = raw_prices.min(), raw_prices.max()
         denom = (p_max - p_min) + 1e-8
         normalized_prices = (raw_prices - p_min) / denom
-        # Scale to a realistic range (e.g., $0.05 to $0.25)
         price_curve = 0.05 + (normalized_prices * 0.20)
 
-        # --- 2. Sync PCS environment to the ISO's CURRENT pointer ---
-        # We use self._next_start_idx BEFORE super().step() advances it.
-        current_iso_timestamp = self.base_timestamp + timedelta(minutes=30 * self._next_start_idx)
+        # --- 2) Query PCS for current index and sync ISO pointer forward ---
+        pcs_index = self.pcs_env.get_step_index()
+        self.sync_to_pcs(pcs_index)
 
+        # Timestamp corresponding to the PCS index (used for PCS.reset)
+        current_iso_timestamp = self._get_iso_timestamp_from_pcs_index(pcs_index)
+
+        # --- 3) Inject prices into PCS and align its index ---
         self.pcs_env.set_price_curve(price_curve.astype(np.float32))
+        # Align PCS internal pointers so it starts the episode at the same index
+        self.pcs_env.set_step_index(pcs_index)
 
-        # --- 3. Run the PCS Agent for the full day ---
-        # We force the PCS clock to match the ISO clock for this day
+        # Reset PCS to start the episode (this resets physical state but does not rewind the dataset)
         obs, _ = self.pcs_env.reset(start_date=current_iso_timestamp)
 
+        # Run the PCS policy for a full day, accumulate money
         day_money = 0
         for _ in range(self.T):
-            # PCS acts based on the ISO's price curve
             pcs_action, _ = self.pcs_model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = self.pcs_env.step(pcs_action)
             day_money += info.get('step_money', 0)
 
-        # --- 4. Advance the ISO pointer and get internal evaluation ---
-        # This calls the parent ISOEnv.step, which performs the debug prints,
-        # calculates the MAE, and then increments self._next_start_idx.
+        # --- 4) Advance the ISO pointer and collect ISO internal info ---
         _, _, _, _, iso_info = super().step(action)
 
-        # --- 5. Return results ---
-        # We override the reward to be the money earned by the PCS
+        # Make the ISO reward equal to the PCS money earned for that day
         iso_reward = day_money
-
-        # Add the money earned to the info dict for tracking
         iso_info["money_earned"] = day_money
 
+        # Return observation expected by ISOEnv (self._expected), reward and info
         return self._expected, iso_reward, True, False, iso_info
 
 
 def run_alternating_training():
-    print("\n--- INITIALIZING TANDEM TRAINING ---")
+    print("--- INITIALIZING TANDEM TRAINING ---")
 
-    # 1. Initialize the internal PCS Environment
-    # Note: Ensure the CSV filenames match your local files exactly
+    # 1) Create PCS environment directly (assume PCSEnv now implements
+    #    get_step_index() and set_step_index())
     base_pcs_env = PCSEnv(
         test_data_file='data_for_tests/synthetic_household_consumption_test.csv',
         predictions_file='data_for_tests/consumption_predictions.csv'
     )
 
-    # 2. Initialize the PCS Agent
-    # It learns in blocks of 48 steps (1 day)
+    # 2) Create PCS policy on the PCS env
     pcs_model = PPO("MlpPolicy", base_pcs_env, verbose=0, n_steps=48, batch_size=48)
 
-    # 3. Initialize the Alternating ISO Environment
-    # This environment now 'controls' the base_pcs_env internally
+    # 3) Create the Alternating ISO environment which will coordinate the PCS
     iso_env = AlternatingISOEnv(
         actual_csv='data_for_tests/synthetic_household_consumption_test.csv',
         predicted_csv='data_for_tests/consumption_predictions.csv',
@@ -116,46 +126,58 @@ def run_alternating_training():
         pcs_model=pcs_model
     )
 
-    # 4. Initialize the ISO Agent
-    # It acts once per day, but we update every 7 days (n_steps=7)
+    # 4) ISO agent (acts once per day; n_steps=7 means it updates every 7 days)
     iso_model = PPO("MlpPolicy", iso_env, verbose=0, n_steps=7, batch_size=7)
 
     print(f"Simulation Started. ISO pointer at Row: {iso_env._next_start_idx + 2}")
     print("-" * 50)
 
-    # 5. THE MAIN TRAINING LOOP
-    # We loop through iterations. In each iteration, both agents get to learn.
-    for iteration in range(1, 51):  # Run for 50 iterations
+    # Preload predicted values once (they wrap naturally as you said)
+    predicted_vals = pd.read_csv('data_for_tests/consumption_predictions.csv', header=None).to_numpy().flatten()
+    pricing = ISOPricingWrapper(iso_model)
+    steps_per_day = iso_env.T
 
-        # --- PHASE 1: ISO ACTION & PCS SIMULATION ---
-        # We tell the ISO to learn for 7 steps (7 days).
-        # Inside each step, AlternatingISOEnv.step() is called.
-        # That step triggers 48 steps in the PCS env and advances the CSV pointer.
-        print(f"\n[Iteration {iteration}] ISO Learning Phase (1 Days)...")
+    # --- Main alternating training loop ---
+    for iteration in range(1, 51):
+        # PHASE 1: ISO Learning Phase (ISO updates across 7 day-steps)
+        print(f"[Iteration {iteration}] ISO Learning Phase (1 Days)...")
         iso_model.learn(total_timesteps=7, reset_num_timesteps=False)
 
-        # --- PHASE 2: PCS POLICY UPDATE ---
-        # The PCS has just experienced 7 days (7 * 48 = 336 steps) of data
-        # while the ISO was 'learning'. Now we let the PCS update its own brain
-        # based on the price curves the ISO just set.
+        # PHASE 2: PCS Learning Phase - one fixed-day episode per day
         print(f"[Iteration {iteration}] PCS Learning Phase...")
-        pcs_model.learn(total_timesteps=336, reset_num_timesteps=False)
+        base_idx = iso_env._next_start_idx
 
-        # --- LOGGING ---
-        # The ISOEnv inherited pointer tells us exactly where we are in the CSV
+        for day in range(7):
+            # compute global half-hour start index for this day
+            start = base_idx + day * steps_per_day
+
+            # slice the predicted window (prediction file wraps naturally)
+            pred_window = predicted_vals[start:start + steps_per_day].astype(np.float32)
+
+            # get the ISO's price curve for that day (ISO policy static during PCS updates)
+            price_curve = pricing.generate_price_curve(pred_window)
+
+            # inject curve and align PCS to the intended start
+            base_pcs_env.set_price_curve(price_curve.astype(np.float32))
+            base_pcs_env.set_step_index(start)
+
+            # train PCS for exactly one day (48 steps) under this fixed curve
+            pcs_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
+
+        # After PCS completes the week of day-episodes, sync ISO pointer forward
+        pcs_idx = base_pcs_env.get_step_index()
+        iso_env.sync_to_pcs(pcs_idx)
+
+        # Logging
         current_row = iso_env._next_start_idx + 2
         print(f">>> End of Iteration {iteration}. Next ISO start row: {current_row}")
-
-        # Access profit from the base environment
         print(f">>> Cumulative PCS Money: ${base_pcs_env.get_money():.2f}")
 
 
 if __name__ == "__main__":
-    # Ensure you are in the correct directory where your CSVs are located
     try:
         run_alternating_training()
     except Exception as e:
-        print(f"\nFATAL ERROR during training: {e}")
+        print(f"FATAL ERROR during training: {e}")
         import traceback
-
         traceback.print_exc()

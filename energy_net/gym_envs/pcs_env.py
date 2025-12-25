@@ -334,6 +334,27 @@ class PCSEnv(gym.Env):
             print(f"Total Penalties: ${self.total_shortage_penalty:.2f}")
             print(f"Shortages: {self.shortage_count}")
             print(f"{'=' * 60}")
+    # ---------- new helpers for indexing / sync ----------
+    def get_step_index(self) -> int:
+        """
+        Return the global half-hour step index since test_start_date.
+        This uses current_datetime so it reflects where the env currently is
+        in the full dataset (not just intra-day current_step).
+        """
+        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
+        return int(days_from_start / self.dt)
+
+    def set_step_index(self, idx: int):
+        """
+        Set the environment's current_datetime and intra-day current_step
+        from a global half-hour index. Useful to align the PCS env to a
+        desired point in the dataset without 'rewinding' oddities.
+        """
+        idx = int(idx)
+        # compute datetime (30 minutes per step)
+        self.current_datetime = self.test_start_date + timedelta(minutes=30 * idx)
+        # set intra-day index (0..max_steps-1)
+        self.current_step = int(idx % self.max_steps)
 
 
 
