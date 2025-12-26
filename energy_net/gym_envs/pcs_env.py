@@ -27,10 +27,11 @@ class PCSEnv(gym.Env):
                  dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
                  prediction_horizon=48,
-                 shortage_penalty=5.0,
+                 shortage_penalty=100.0,
                  base_price=0.10,
                  price_volatility=0.15,
-                 log_path='../../tests/gym/logs'):  # <--- New optional parameter
+                 log_path='../../tests/gym/logs',
+                render_mode: str | None = None):  # <--- New optional parameter
 
         super().__init__()
 
@@ -52,7 +53,8 @@ class PCSEnv(gym.Env):
         self.base_price = base_price
         self.price_volatility = price_volatility
         self.log_path = log_path  # Storing it in case it's needed later
-
+        self.render_mode = render_mode
+        self.last_action = None
         # -------------------------
         # Load test data
         # -------------------------
@@ -218,6 +220,8 @@ class PCSEnv(gym.Env):
         # 4. Wipe physical state (battery)
         self.pcs.reset(initial_storage_unit_level=0)
 
+        self.last_action = None
+
         return self._get_obs(), {}
 
     def step(self, action):
@@ -228,6 +232,7 @@ class PCSEnv(gym.Env):
 
         # Clip and interpret normalized action
         raw_action = float(action[0])
+        self.last_action = raw_action
 
         # Storage before (internal units, 0..100)
         storage_before = self.pcs.get_total_storage()
@@ -298,10 +303,11 @@ class PCSEnv(gym.Env):
             'consumption_units': consumption_units,
             'available_discharge_units': available_discharge_units,
             'shortage': shortage,
-            'battery_action_normalized': raw_action,
+            'battery_action': raw_action,
             'step_money': step_money,
             'total_money_so_far': self.total_money_earned
         }
+        self._last_action = raw_action
 
         return obs, reward, terminated, truncated, info
 
@@ -321,13 +327,15 @@ class PCSEnv(gym.Env):
 
         return obs.astype(np.float32)
 
-    def render(self, mode='human'):
-        if mode == 'human':
+    def render(self):
+        if self.render_mode == 'human':
             print(f"\n{'=' * 60}")
             print(f"Step: {self.current_step}/{self.max_steps}")
             print(f"Date: {self.current_datetime.strftime('%Y-%m-%d %H:%M')}")
             print(f"Storage: {self.pcs.get_total_storage():.2f} units (capacity=100)")
-            print(f"Consumption: {self.pcs.get_consumption():.2f} units/step")
+            print(f"Consumption (will affect next time step): {self.pcs.get_consumption():.2f} units/step")
+            if self.last_action is not None:
+                print(f"Last Action (Battery intent): {self.last_action:.2f} units")
             print(f"Current Price: {self._get_current_price():.4f} $/unit")
             print(f"Total Reward (Net): ${self.total_reward:.2f}")
             print(f"Total Money (Gross): ${self.total_money_earned:.2f}")
@@ -359,43 +367,36 @@ class PCSEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    env = PCSEnv()
+    env = PCSEnv(render_mode='human')
 
-    # Run for 3 full days
     num_days_to_run = 3
     accumulated_reward = 0.0
+    render_every_n_steps = 1  # render once every 6 steps (3 hours)
 
     for day in range(num_days_to_run):
-        # 1. Reset at the start of every day
         obs, info = env.reset()
+        env.render()  # show initial state
 
-        print(f"\n" + "=" * 60)
-        print(f"STARTING DAY {day + 1}")
-        print(f"Current Date in Simulation: {env.current_datetime.strftime('%Y-%m-%d')}")
-        print("=" * 60)
-
-        # 2. Print Initial State (T=0) before any steps are taken
-        print(f"INITIAL STATE (Time: {env.current_datetime.strftime('%H:%M')})")
-        print(f"  Storage: {env.pcs.get_total_storage():.2f} units")
-        print(f"  Accumulated Reward so far: {accumulated_reward:.2f}")
-        print(f"  Starting Price: {env._get_current_price():.4f} $/unit")
-        print("-" * 50)
+        print(f"\n{'=' * 60}")
+        print(f"STARTING DAY {day + 1}  |  Date: {env.current_datetime.strftime('%Y-%m-%d')}")
+        print(f"{'=' * 60}")
 
         day_reward = 0.0
 
-        # 3. Run until the day is over
         while True:
             action_value = float(np.random.uniform(-10.0, 10.0))
             action = np.array([action_value], dtype=np.float32)
 
             obs, reward, terminated, truncated, info = env.step(action)
+
+            # throttled render — change N or set to 1 to render every step
+            if env.render_mode == "human" and env.current_step % render_every_n_steps == 0:
+                env.render()
+
             day_reward += reward
             accumulated_reward += reward
 
-            print(f"Step {env.current_step} | Time: {env.current_datetime.strftime('%H:%M')} | "
-                  f"Storage: {info['storage_after_units']:.2f} | "
-                  f"Consumption (from timestep t-1): {info['consumption_units']:.2f} | "
-                  f"Step Reward (from timestep t-1): {reward:.2f}")
+            print(f"Step Reward: {reward:.2f}")
 
             if terminated or truncated:
                 print(f"\n>>> Day {day + 1} Finished!")
@@ -404,6 +405,6 @@ if __name__ == "__main__":
                 print(f">>> Total Shortages Today: {env.shortage_count}")
                 break
 
-    print(f"\n" + "!" * 60)
+    print(f"\n{'!' * 60}")
     print(f"Simulation Complete. Total Reward over {num_days_to_run} days: {accumulated_reward:.2f}")
-    print("!" * 60)
+    print(f"{'!' * 60}")

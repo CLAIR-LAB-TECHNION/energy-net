@@ -1,4 +1,4 @@
-# alternating_env.py
+# alternating_env.py (Enhanced with shortage & MAE tracking)
 from datetime import timedelta
 from typing import Sequence
 
@@ -48,12 +48,18 @@ class AlternatingISOEnv(ISOEnv):
       the ISO pointer forward to that index (prevents rewinding).
     - The ISO injects its price curve into the PCS and runs the PCS policy for
       T=48 steps to produce an economic reward which becomes the ISO reward.
+    - TRACKS MAE and shortages separately from the money-based reward for comparison.
     """
 
-    def __init__(self, actual_csv, predicted_csv, pcs_env: PCSEnv, pcs_model, steps_per_day=48):
+    def __init__(self, actual_csv, predicted_csv, pcs_env, pcs_model,
+                 steps_per_day=48, render_enabled: bool = False, render_every_n: int = 1):
         super().__init__(actual_csv, predicted_csv, steps_per_day)
         self.pcs_env = pcs_env
         self.pcs_model = pcs_model
+
+        # Rendering control for ISO-driven PCS runs
+        self.render_enabled = bool(render_enabled)
+        self.render_every_n = max(1, int(render_every_n))
 
     def sync_to_pcs(self, pcs_step_index: int):
         """Move the ISO's internal pointer to match the PCS half-hour index."""
@@ -79,18 +85,122 @@ class AlternatingISOEnv(ISOEnv):
         self.pcs_env.set_step_index(current_idx)
         obs, _ = self.pcs_env.reset(start_date=current_iso_timestamp)
 
+        # render initial PCS state if requested
+        if self.render_enabled:
+            self.pcs_env.render()
+
         day_money = 0
-        for _ in range(self.T):
+        day_shortages = 0  # Track shortages for this day
+        realized_consumption = []
+
+        for step_i in range(self.T):
             pcs_action, _ = self.pcs_model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = self.pcs_env.step(pcs_action)
             day_money += info.get('step_money', 0)
 
-        # 4) Advance ISO pointer via super()
-        # This moves _next_start_idx forward by exactly self.T (48)
+            # Collect actual consumption and shortages
+            realized_consumption.append(info.get('consumption_units', 0))
+            if info.get('shortage', False):
+                day_shortages += 1
+
+            # render during the PCS internal loop (throttled)
+            if self.render_enabled and (self.pcs_env.current_step % self.render_every_n == 0):
+                self.pcs_env.render()
+
+        # 4) Calculate MAE between dispatch (prices imply expected consumption) and realized
+        dispatch = action[self.T:]
+        realized_array = np.array(realized_consumption, dtype=np.float32)
+        mae = float(np.mean(np.abs(dispatch - realized_array)))
+
+        # 5) Advance ISO pointer via super().step()
         _, _, _, _, iso_info = super().step(action)
 
+        # 6) Update info with all metrics
         iso_info["money_earned"] = day_money
+        iso_info["mae"] = mae
+        iso_info["shortages"] = day_shortages
+        iso_info["realized_consumption"] = realized_array
+        iso_info["dispatch"] = dispatch
+
+        # Store for render
+        self._last_step_info["mae"] = mae
+        self._last_step_info["money_earned"] = day_money
+        self._last_step_info["shortages"] = day_shortages
+        self._last_reward = day_money
+
         return self._expected, day_money, True, False, iso_info
+
+    def render(self):
+        """Enhanced render that shows MAE, money earned, and shortages."""
+        if self._last_reset_info is None or self._last_step_info is None:
+            print("Nothing to render yet. Call reset() and step() first for the day.")
+            return None
+
+        info = self._last_reset_info
+        step_info = self._last_step_info
+        reward = self._last_reward
+
+        # Print header for the day
+        start_row = info['start_idx'] + 2
+        end_row = info['start_idx'] + self.T + 1
+        print(f"\n{'=' * 70}")
+        print(f"--- [ISO DAY SUMMARY] ---")
+        print(f"CSV Row Range: {start_row} to {end_row}")
+        print(f"Calendar Date: {info['timestamp'].strftime('%Y-%m-%d')}")
+        print(f"{'=' * 70}")
+
+        # Show all metrics prominently
+        mae = step_info.get('mae', 'N/A')
+        money = step_info.get('money_earned', 'N/A')
+        shortages = step_info.get('shortages', 'N/A')
+
+        print(f"Money Earned (Primary Reward): ${money:.2f}" if isinstance(money,
+                                                                           (int, float)) else f"Money Earned: {money}")
+        print(f"MAE (Dispatch vs Realized):     {mae:.4f}" if isinstance(mae, (int, float)) else f"MAE: {mae}")
+        print(
+            f"Shortages This Day:             {shortages}" if isinstance(shortages, int) else f"Shortages: {shortages}")
+        print(f"{'=' * 70}")
+
+        print(f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}")
+        print("-" * 70)
+
+        rows = []
+        for i in range(0, self.T, 4):
+            slot_time = info['timestamp'] + timedelta(minutes=30 * i)
+            row_num = info['start_idx'] + i + 2
+
+            p = step_info['predicted'][i]
+            a = step_info['realized'][i]
+            d = step_info['dispatch'][i]
+            pr = step_info['prices'][i]
+
+            print(f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}")
+
+            rows.append({
+                "slot_time": slot_time,
+                "row_num": int(row_num),
+                "pred": float(p),
+                "actual": float(a),
+                "dispatch": float(d),
+                "price": float(pr)
+            })
+
+        print("-" * 70)
+        print(f"Day Complete.\n")
+
+        # return a structured record with all metrics
+        record = {
+            "csv_range": (int(start_row), int(end_row)),
+            "calendar_date": info['timestamp'],
+            "rows": rows,
+            "mae": float(mae) if isinstance(mae, (int, float)) else None,
+            "money_earned": float(money) if isinstance(money, (int, float)) else None,
+            "shortages": int(shortages) if isinstance(shortages, int) else None,
+            "reward": float(reward)
+        }
+        return record
+
+
 def get_pred_window(preds: Sequence[float], start: int, length: int) -> np.ndarray:
     """Return a length-sized window starting at `start` from preds, wrapping if necessary."""
     n = len(preds)
@@ -102,7 +212,6 @@ def get_pred_window(preds: Sequence[float], start: int, length: int) -> np.ndarr
     # wrap-around case
     first = preds[start:]
     remaining = length - len(first)
-    # take from the beginning as needed
     second = preds[:remaining]
     return np.concatenate([first, second], axis=0)
 
@@ -122,30 +231,24 @@ def run_alternating_training(
         iso_algo_kwargs: dict | None = None,
         pcs_steps_per_day: int | None = None,
         verbose: int = 0,
-        # if True prints per-day debug eval money
         per_day_debug: bool = True,
+        render: bool = False,
+        render_every_n_steps: int = 1,
 ):
-    """
-    Tandem ISO <-> PCS training loop (configurable).
-    ... (comments preserved) ...
-    """
+    """Tandem ISO <-> PCS training loop with convergence tracking."""
 
-    # -------------------------
-    # Basic validation & kwargs
-    # -------------------------
     if cycle_days < 1:
         raise ValueError("cycle_days must be >= 1")
     if total_iterations < 1:
         raise ValueError("total_iterations must be >= 1")
 
-    # FIX: Force BOTH models to respect the step limits.
-    # Without this, PPO runs 2048 steps by default, causing the jump.
     pcs_algo_kwargs = {} if pcs_algo_kwargs is None else dict(pcs_algo_kwargs)
 
-    # determine how many steps constitute a day (default to env.max_steps)
-    # We need this early to set the buffer size
-    temp_env = PCSEnv(test_data_file='data_for_tests/synthetic_household_consumption_test.csv',
-                      predictions_file='data_for_tests/consumption_predictions.csv')
+    temp_env = PCSEnv(
+        test_data_file='data_for_tests/synthetic_household_consumption_test.csv',
+        predictions_file='data_for_tests/consumption_predictions.csv',
+        render_mode="human" if render else None
+    )
     steps_per_day = int(pcs_steps_per_day or temp_env.max_steps)
 
     pcs_algo_kwargs.setdefault('n_steps', steps_per_day)
@@ -157,92 +260,94 @@ def run_alternating_training(
 
     print("\n--- INITIALIZING TANDEM TRAINING ---")
 
-    # 1) Create PCS environment
-    base_pcs_env = temp_env  # Use the one we already created
+    base_pcs_env = temp_env
 
-    # 2) Create PCS RL agent
-    print(f"Creating PCS model: {pcs_algo_cls.__name__} policy={pcs_policy} kwargs={pcs_algo_kwargs}")
     pcs_model = pcs_algo_cls(pcs_policy, base_pcs_env, verbose=verbose, **pcs_algo_kwargs)
 
-    # 3) Create Alternating ISO env and ISO model
     iso_env = AlternatingISOEnv(
         actual_csv='data_for_tests/synthetic_household_consumption_test.csv',
         predicted_csv='data_for_tests/consumption_predictions.csv',
         pcs_env=base_pcs_env,
-        pcs_model=pcs_model
+        pcs_model=pcs_model,
+        render_enabled=render,
+        render_every_n=max(1, int(render_every_n_steps))
     )
 
-    print(f"Creating ISO model: {iso_algo_cls.__name__} policy={iso_policy} kwargs={iso_algo_kwargs}")
     iso_model = iso_algo_cls(iso_policy, iso_env, verbose=verbose, **iso_algo_kwargs)
 
-    print(f"Simulation Started. ISO pointer at Row: {iso_env._next_start_idx + 2}")
-    print("-" * 50)
-
-    # Preload predicted values
     pred_df = pd.read_csv('data_for_tests/consumption_predictions.csv', parse_dates=['timestamp']).set_index(
         'timestamp').sort_index()
     predicted_vals = pred_df['predicted_consumption'].astype(float).to_numpy().flatten()
     pricing = ISOPricingWrapper(iso_model)
 
-    # -------------------------
-    # Main alternating loop
-    # -------------------------
+    # --- NEW: Metric Tracking Initialization ---
+    history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": []}
+
     for iteration in range(1, total_iterations + 1):
-        # ------- PHASE 1: ISO Learning -------
         print(f"\n[Iteration {iteration}] ISO Learning Phase ({cycle_days} Days)...")
         iso_model.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
 
-        # ------- PHASE 2: PCS Learning (per-day eval + training) -------
         print(f"[Iteration {iteration}] PCS Learning Phase...")
 
-        # Start PCS right after the ISO block
         base_idx = iso_env._next_start_idx
-
         day_money_list = []
+        iteration_maes = []  # Track MAE for this iteration
+        iteration_shortages = 0  # Track Shortages for this iteration
 
         for day in range(cycle_days):
             start = base_idx + day * steps_per_day
-
             pred_window = get_pred_window(predicted_vals, start, steps_per_day).astype(np.float32)
             price_curve = pricing.generate_price_curve(pred_window)
 
             base_pcs_env.set_price_curve(price_curve.astype(np.float32))
             base_pcs_env.set_step_index(start)
-
-            # 1) EVALUATE (deterministic)
             obs, _ = base_pcs_env.reset(start_date=iso_env._get_iso_timestamp_from_pcs_index(start))
+
             eval_day_money = 0.0
-            for _step in range(steps_per_day):
+            day_actuals = []
+
+            # Use the dispatch from the ISO's prediction (second half of action)
+            iso_action, _ = iso_model.predict(pred_window, deterministic=True)
+            day_dispatch = iso_action[steps_per_day:]
+
+            for step_i in range(steps_per_day):
                 pcs_action, _ = pcs_model.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = base_pcs_env.step(pcs_action)
+
                 eval_day_money += info.get('step_money', 0.0)
+                day_actuals.append(info.get('consumption_units', 0.0))
+                if info.get('shortage', False):
+                    iteration_shortages += 1
+
             day_money_list.append(eval_day_money)
+            iteration_maes.append(np.mean(np.abs(np.array(day_actuals) - day_dispatch)))
 
-            if per_day_debug:
-                print(f"  [DEBUG] Day {day + 1}/{cycle_days} start_idx={start} eval_money=${eval_day_money:.2f}")
-
-            # 2) TRAIN the PCS on that same day
             base_pcs_env.set_step_index(start)
             obs, _ = base_pcs_env.reset(start_date=iso_env._get_iso_timestamp_from_pcs_index(start))
-
-            # This now stops exactly at steps_per_day because of pcs_algo_kwargs
             pcs_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
 
-        # Sync ISO pointer forward to where the LAST day of training finished
-        # If Day 7 started at 624 and ran 48 steps, this sets us to 672.
         final_idx = base_idx + (cycle_days * steps_per_day)
         iso_env.sync_to_pcs(final_idx)
 
-        # ------- Logging -------
-        avg_money = float(np.mean(day_money_list)) if day_money_list else 0.0
-        print(f">>> End of Iteration {iteration}. Next ISO start row: {iso_env._next_start_idx + 2}")
-        print(f">>> Iteration {iteration} average PCS money per day: ${avg_money:.2f}")
+        # --- NEW: Store Metrics for this Iteration ---
+        avg_money = float(np.mean(day_money_list))
+        avg_mae = float(np.mean(iteration_maes))
+
+        history["iteration"].append(iteration)
+        history["avg_money"].append(avg_money)
+        history["avg_mae"].append(avg_mae)
+        history["total_shortages"].append(iteration_shortages)
+
+        print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f}")
 
     print("\n--- TRAINING COMPLETE ---")
+    return history  # Return the history for plotting
+
 if __name__ == "__main__":
     try:
-        run_alternating_training()
+        run_alternating_training(render=False, render_every_n_steps=1)
     except Exception as e:
         print(f"\nFATAL ERROR during training: {e}")
         import traceback
+
         traceback.print_exc()

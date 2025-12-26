@@ -44,6 +44,12 @@ class ISOEnv(gym.Env):
         # This is the specific attribute your Tandem script was missing
         self._next_start_idx = 0
 
+        # ---- bookkeeping for render() ----
+        # stored info from most recent reset() and step(), used by render()
+        self._last_reset_info = None
+        self._last_step_info = None
+        self._last_reward = None
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
@@ -61,10 +67,15 @@ class ISOEnv(gym.Env):
         current_time = self.base_timestamp + timedelta(minutes=30 * idx)
 
         # Return info with names that match your test script and Tandem script
-        return self._expected, {
+        info = {
             "start_idx": idx,
             "timestamp": current_time
         }
+
+        # store for render()
+        self._last_reset_info = info
+
+        return self._expected, info
 
     def step(self, action):
         # 1. EVALUATION (Before moving the pointer)
@@ -86,6 +97,10 @@ class ISOEnv(gym.Env):
             "timestamp": current_time
         }
 
+        # store for render()
+        self._last_step_info = step_info
+        self._last_reward = -cost
+
         # 3. ADVANCE THE POINTER (Move to the next day)
         self._next_start_idx += self.T
 
@@ -97,11 +112,71 @@ class ISOEnv(gym.Env):
         # One step = One day. Always terminated=True.
         return self._expected, -cost, True, False, step_info
 
+    def render(self):
+        """
+        Render information for the most recent timestep (a 'day').
+
+        This expects that reset() and step() have been called for the day,
+        and uses the stored `_last_reset_info` and `_last_step_info` to
+        reproduce the exact console output the old `main()` printed.
+        It also returns a record dict containing the same structured data.
+        """
+        if self._last_reset_info is None or self._last_step_info is None:
+            print("Nothing to render yet. Call reset() and step() first for the day.")
+            return None
+
+        info = self._last_reset_info
+        step_info = self._last_step_info
+        reward = self._last_reward
+
+        # Print header for the day (matching original formatting)
+        start_row = info['start_idx'] + 2
+        end_row = info['start_idx'] + self.T + 1
+        print(f"--- [DAY] ---")
+        print(f"CSV Row Range: {start_row} to {end_row}")
+        print(f"Calendar Date: {info['timestamp'].strftime('%Y-%m-%d')}")
+        print(f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}")
+        print("-" * 70)
+
+        rows = []
+        for i in range(0, self.T, 4):
+            slot_time = info['timestamp'] + timedelta(minutes=30 * i)
+            row_num = info['start_idx'] + i + 2
+
+            p = step_info['predicted'][i]
+            a = step_info['realized'][i]
+            d = step_info['dispatch'][i]
+            pr = step_info['prices'][i]
+
+            print(f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}")
+
+            rows.append({
+                "slot_time": slot_time,
+                "row_num": int(row_num),
+                "pred": float(p),
+                "actual": float(a),
+                "dispatch": float(d),
+                "price": float(pr)
+            })
+
+        print("-" * 70)
+        print(f"Day Summary: Avg MAE = {step_info['mae']:.4f}\n")
+
+        # return a structured record identical in content to what was printed
+        record = {
+            "csv_range": (int(start_row), int(end_row)),
+            "calendar_date": info['timestamp'],
+            "rows": rows,
+            "mae": float(step_info['mae']),
+            "reward": float(reward)
+        }
+        return record
+
 
 # ==========================================
 # MAIN FUNCTION: THE CLI MONITOR
 # ==========================================
-def main():
+if __name__ == "__main__":
     # Make sure these filenames match your local files!
     # These paths are relative to where you run the script
     try:
@@ -118,36 +193,15 @@ def main():
 
     print(f"\nSimulation Started. Total Records: {env.total_rows}")
 
+    # Run for 3 days, but delegate printing/recording to env.render()
     for day in range(1, 4):  # Look at 3 days
         obs, info = env.reset()
 
         # Dummy Action (Example: 48 prices, 48 dispatch values)
-        # We concatenate dummy prices (0.1 to 0.5) with the forecast (obs)
         dummy_prices = np.linspace(0.1, 0.5, 48)
         action = np.concatenate([dummy_prices, obs])
 
         _, reward, _, _, step_info = env.step(action)
 
-        print(f"--- [DAY {day}] ---")
-        print(f"CSV Row Range: {info['start_idx'] + 2} to {info['start_idx'] + 49}")
-        print(f"Calendar Date: {info['timestamp'].strftime('%Y-%m-%d')}")
-        print(f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}")
-        print("-" * 70)
-
-        for i in range(0, 48, 4):
-            slot_time = info['timestamp'] + timedelta(minutes=30 * i)
-            row_num = info['start_idx'] + i + 2
-
-            p = step_info['predicted'][i]
-            a = step_info['realized'][i]
-            d = step_info['dispatch'][i]
-            pr = step_info['prices'][i]
-
-            print(f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}")
-
-        print("-" * 70)
-        print(f"Day Summary: Avg MAE = {step_info['mae']:.4f}\n")
-
-
-if __name__ == "__main__":
-    main()
+        # Use the env's render() to print/record the day's info (render handles the formatting)
+        env.render()
