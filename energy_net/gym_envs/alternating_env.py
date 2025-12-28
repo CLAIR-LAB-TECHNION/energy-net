@@ -1,4 +1,4 @@
-# alternating_env.py (Enhanced with shortage & MAE tracking)
+# alternating_env.py (Enhanced with shortage & MAE tracking + avg ISO price tracking)
 from datetime import timedelta
 from typing import Sequence
 
@@ -200,6 +200,47 @@ class AlternatingISOEnv(ISOEnv):
         }
         return record
 
+class PenalizedAlternatingISOEnv(AlternatingISOEnv):
+    """
+    Child of AlternatingISOEnv that applies a small penalty for shortages to the ISO reward.
+    Everything else behaves the same.
+    """
+
+    def __init__(self, *args, shortage_penalty: float = 100.0, **kwargs):
+        """
+        Pass all arguments to parent constructor.
+        shortage_penalty: amount to subtract per shortage from the ISO reward
+        """
+        super().__init__(*args, **kwargs)
+        self.shortage_penalty = shortage_penalty
+
+    def step(self, action):
+        # Call the original step method to run everything as usual
+        expected, reward, done, truncated, info = super().step(action)
+
+        # Apply shortage penalty (minimal change)
+        penalties = info.get("shortages", 0) * self.shortage_penalty
+        net_reward = reward - penalties
+
+        # Update info and _last_reward for render() and tracking
+        info["shortage_penalty"] = penalties
+        info["net_reward"] = net_reward
+        self._last_reward = net_reward
+
+        return expected, net_reward, done, truncated, info
+
+    def render(self):
+        """
+        Extend render to include penalty and net reward.
+        Calls parent render and then prints extra info.
+        """
+        record = super().render()
+        if record is not None:
+            penalties = self._last_step_info.get("shortage_penalty", 0)
+            net = self._last_step_info.get("net_reward", self._last_reward)
+            print(f"Shortage Penalty Applied:       ${penalties:.2f}")
+            print(f"Net Reward (after penalty):     ${net:.2f}\n")
+        return record
 
 def get_pred_window(preds: Sequence[float], start: int, length: int) -> np.ndarray:
     """Return a length-sized window starting at `start` from preds, wrapping if necessary."""
@@ -281,7 +322,7 @@ def run_alternating_training(
     pricing = ISOPricingWrapper(iso_model)
 
     # --- NEW: Metric Tracking Initialization ---
-    history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": []}
+    history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}
 
     for iteration in range(1, total_iterations + 1):
         print(f"\n[Iteration {iteration}] ISO Learning Phase ({cycle_days} Days)...")
@@ -293,11 +334,18 @@ def run_alternating_training(
         day_money_list = []
         iteration_maes = []  # Track MAE for this iteration
         iteration_shortages = 0  # Track Shortages for this iteration
+        day_avg_prices = []  # Track average ISO price per day (true price produced by ISO at this iteration)
 
         for day in range(cycle_days):
             start = base_idx + day * steps_per_day
             pred_window = get_pred_window(predicted_vals, start, steps_per_day).astype(np.float32)
             price_curve = pricing.generate_price_curve(pred_window)
+
+            # record average price for this day (true price using current iso_model)
+            try:
+                day_avg_prices.append(float(np.mean(price_curve)))
+            except Exception:
+                day_avg_prices.append(0.0)
 
             base_pcs_env.set_price_curve(price_curve.astype(np.float32))
             base_pcs_env.set_step_index(start)
@@ -332,16 +380,20 @@ def run_alternating_training(
         # --- NEW: Store Metrics for this Iteration ---
         avg_money = float(np.mean(day_money_list))
         avg_mae = float(np.mean(iteration_maes))
+        # average the per-day mean prices to make iteration-level avg ISO price
+        avg_iso_price = float(np.mean(day_avg_prices)) if len(day_avg_prices) > 0 else 0.0
 
         history["iteration"].append(iteration)
         history["avg_money"].append(avg_money)
         history["avg_mae"].append(avg_mae)
         history["total_shortages"].append(iteration_shortages)
+        history["avg_iso_price"].append(avg_iso_price)
 
-        print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f}")
+        print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
 
     print("\n--- TRAINING COMPLETE ---")
     return history  # Return the history for plotting
+
 
 if __name__ == "__main__":
     try:

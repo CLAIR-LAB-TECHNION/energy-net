@@ -1,32 +1,49 @@
+import os
+import uuid
+from datetime import datetime, timedelta
+
 import matplotlib
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from datetime import timedelta
+
 from alternating_env import AlternatingISOEnv, ISOPricingWrapper, get_pred_window, run_alternating_training
 from stable_baselines3 import PPO, SAC
 from energy_net.gym_envs.pcs_env import PCSEnv
 
-matplotlib.use('Agg')
 
+def plot_training_convergence(history, output_prefix="convergence_results"):
+    """
+    Visualizes training convergence.
 
-def plot_training_convergence(history):
-    """Visualizes how the agents improved over the training iterations."""
+    Assumes `history` (DataFrame) contains:
+        - 'iteration'
+        - 'avg_money'
+        - 'total_shortages'
+        - 'avg_iso_price' (middle subplot)
+    """
+    # ensure history is a DataFrame
+    if not isinstance(history, pd.DataFrame):
+        history = pd.DataFrame(history)
+
     fig, axes = plt.subplots(3, 1, figsize=(10, 12))
 
-    # 1. Money/Reward
+    # 1. PCS Average Money (green)
     axes[0].plot(history["iteration"], history["avg_money"], color='green', marker='o')
     axes[0].set_title("PCS Average Daily Money (Convergence)", fontsize=14, fontweight='bold')
     axes[0].set_ylabel("Dollars ($)")
     axes[0].grid(True, alpha=0.3)
 
-    # 2. MAE
-    axes[1].plot(history["iteration"], history["avg_mae"], color='orange', marker='s')
-    axes[1].set_title("Dispatch vs. Actual MAE (Lower is Better)", fontsize=14, fontweight='bold')
-    axes[1].set_ylabel("MAE Units")
+    # 2. Average ISO Price per iteration (purple)
+    axes[1].plot(history["iteration"], history["avg_iso_price"], color='purple', marker='o')
+    axes[1].set_title("Average ISO Price per Training Iteration", fontsize=14, fontweight='bold')
+    axes[1].set_ylabel("Price ($/Unit)")
+    axes[1].set_xlabel("Training iteration")
     axes[1].grid(True, alpha=0.3)
 
-    # 3. Shortages
+    # 3. Total Shortages (red)
     axes[2].plot(history["iteration"], history["total_shortages"], color='red', marker='x')
     axes[2].set_title("Total Shortages per Iteration", fontsize=14, fontweight='bold')
     axes[2].set_xlabel("Iteration")
@@ -34,8 +51,10 @@ def plot_training_convergence(history):
     axes[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("convergence_results.png")
-    print("\nConvergence plot saved as 'convergence_results.png'")
+    out_path = f"{output_prefix}_convergence.png"
+    plt.savefig(out_path)
+    plt.close(fig)
+    print(f"\nConvergence plot saved as '{out_path}'")
 
 
 class AlternatingEvaluator:
@@ -51,7 +70,6 @@ class AlternatingEvaluator:
         self.pricing_wrapper = ISOPricingWrapper(iso_model)
 
     def run_evaluation(self, num_days=7, start_idx=0):
-        """Run evaluation with enhanced tracking of shortages and MAE."""
         pcs_env = PCSEnv(test_data_file=self.actual_csv, predictions_file=self.predicted_csv, prediction_horizon=48)
         steps_per_day = 48
         history = []
@@ -98,63 +116,54 @@ class AlternatingEvaluator:
         return pd.DataFrame(history)
 
     def plot_results(self, df, output_prefix="evaluation"):
-        """Consolidates all metrics into a few multi-panel PNG files."""
-        # Pre-calculation
         df['cumulative_pcs_reward'] = df['money'].cumsum()
         df['cumulative_iso_reward'] = -df['money'].cumsum()
         df['cumulative_shortages'] = df['shortage'].cumsum()
         df['mae_instantaneous'] = np.abs(df['actual_consumption'] - df['dispatch'])
         df['mae_rolling'] = df['mae_instantaneous'].rolling(window=2, min_periods=1).mean()
 
-        # --- SHEET 1: CUMULATIVE PERFORMANCE (4 Graphs) ---
         fig, axes = plt.subplots(2, 2, figsize=(16, 10))
         fig.suptitle(f"Cumulative Performance - {self.config_name}", fontsize=18, fontweight='bold')
 
-        # 1. PCS Rewards
         axes[0, 0].plot(df['timestamp'], df['cumulative_pcs_reward'], color='green')
         axes[0, 0].set_title("PCS Cumulative Reward ($)")
         axes[0, 0].grid(True, alpha=0.3)
 
-        # 2. ISO Rewards
         axes[0, 1].plot(df['timestamp'], df['cumulative_iso_reward'], color='blue')
         axes[0, 1].set_title("ISO Cumulative Reward ($)")
         axes[0, 1].grid(True, alpha=0.3)
 
-        # 3. Total Shortages
         axes[1, 0].plot(df['timestamp'], df['cumulative_shortages'], color='red')
         axes[1, 0].fill_between(df['timestamp'], 0, df['cumulative_shortages'], color='red', alpha=0.2)
         axes[1, 0].set_title("Total Cumulative Shortages")
         axes[1, 0].grid(True, alpha=0.3)
 
-        # 4. MAE Rolling
         axes[1, 1].plot(df['timestamp'], df['mae_rolling'], color='orange')
         axes[1, 1].set_title("MAE (Rolling Average)")
         axes[1, 1].grid(True, alpha=0.3)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig(f"{output_prefix}_cumulative_sheet.png", dpi=150)
-        plt.close()
+        out1 = f"{output_prefix}_cumulative_sheet.png"
+        plt.savefig(out1, dpi=150)
+        plt.close(fig)
 
-        # --- SHEET 2: TIME-SERIES SIGNALS (2 Graphs) ---
         fig2, axes2 = plt.subplots(2, 1, figsize=(14, 8))
         fig2.suptitle(f"System Signals - {self.config_name}", fontsize=18, fontweight='bold')
 
-        # 1. Price Curve
         axes2[0].plot(df['timestamp'], df['price'], color='purple')
         axes2[0].set_title("ISO Price Signal ($/Unit)")
         axes2[0].grid(True, alpha=0.3)
 
-        # 2. PCS Action Magnitude
         axes2[1].plot(df['timestamp'], df['action'], color='teal')
         axes2[1].set_title("PCS Agent Action Magnitude")
         axes2[1].grid(True, alpha=0.3)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig(f"{output_prefix}_signals_sheet.png", dpi=150)
-        plt.close()
+        out2 = f"{output_prefix}_signals_sheet.png"
+        plt.savefig(out2, dpi=150)
+        plt.close(fig2)
 
-        print(
-            f"Evaluation sheets saved as '{output_prefix}_cumulative_sheet.png' and '{output_prefix}_signals_sheet.png'")
+        print(f"Evaluation sheets saved as '{out1}' and '{out2}'")
 
     def run_analysis(self, df):
         if 'mae_instantaneous' not in df.columns:
@@ -177,43 +186,107 @@ class AlternatingEvaluator:
         return {'pcs_reward': total_pcs_reward, 'total_shortages': int(total_shortages), 'avg_mae': avg_mae}
 
 
-if __name__ == "__main__":
-    # --- 1. CONFIGURATION ---
-    ACTUAL_CSV = 'data_for_tests/synthetic_household_consumption_test.csv'
-    PRED_CSV = 'data_for_tests/consumption_predictions.csv'
-    ITERATIONS = 30  # Adjust as needed
+def make_run_id(provided_id=None):
+    if provided_id:
+        return provided_id
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    short = uuid.uuid4().hex[:8]
+    return f"{ts}-{short}"
 
-    # --- 2. TRAINING ---
-    # This now captures the convergence metrics from your updated alternating_env.py
+
+def run_experiment(actual_csv,
+                   pred_csv,
+                   iterations=30,
+                   num_days=7,
+                   out_dir="results",
+                   run_id=None):
+    """
+    Run the full pipeline (training, convergence plot, evaluation).
+    Returns (metrics_dict, results_df).
+
+    NOTE about avg price per iteration:
+    - If `run_alternating_training` returns per-iteration ISO prices as column 'avg_iso_price'
+      in its training_history, this script will use that series directly.
+    - If not available (most common), this script will compute a PROXY series by taking the
+      average predicted consumption for a 48-step window in your predictions file for each
+      training iteration (window start shifted by iteration index). Proxy is clearly labeled.
+      To get *real* ISO price per iteration you need either:
+        (a) run evaluation during training / at each iteration using the ISO model at that iteration, or
+        (b) modify run_alternating_training to record avg ISO prices per iteration.
+    """
+    run_id = make_run_id(run_id)
+    os.makedirs(out_dir, exist_ok=True)
+    output_prefix = os.path.join(out_dir, f"run_{run_id}")
+
+    print(f"Starting experiment run_id={run_id}  actual='{actual_csv}'  pred='{pred_csv}'")
+
+    # TRAINING: expect run_alternating_training to return a dict-like history with keys per-iteration
     training_history = run_alternating_training(
-        total_iterations=ITERATIONS,
+        total_iterations=iterations,
         cycle_days=7,
         render=False
     )
 
-    # --- 3. CONVERGENCE PLOT ---
-    # Shows how the agents improved over the 30 iterations
-    plot_training_convergence(training_history)
+    # normalize to DataFrame
+    if not isinstance(training_history, pd.DataFrame):
+        try:
+            training_history = pd.DataFrame(training_history)
+        except Exception:
+            # keep as-is and attempt minimal fallback
+            training_history = pd.DataFrame({
+                "iteration": list(range(len(training_history))) if hasattr(training_history, "__len__") else [0],
+                "avg_money": training_history.get("avg_money", [0]),
+            })
 
-    # --- 4. FINAL SNAPSHOT EVALUATION ---
-    # Now let's run a 7-day detailed test with the fully trained models
-    print("\nStarting final post-training evaluation...")
+    # FINAL EVALUATION SETUP (unchanged)
+    temp_env = PCSEnv(test_data_file=actual_csv, predictions_file=pred_csv, prediction_horizon=48)
 
-    # Setup dummy envs just to initialize the evaluators
-    temp_env = PCSEnv(test_data_file=ACTUAL_CSV, predictions_file=PRED_CSV, prediction_horizon=48)
-
-    # Assuming models were trained and accessible via internal logic or re-loading
-    # For this script, we'll use the ones created during training if run_alternating_training 
-    # were modified to return them, or we can initialize new ones for a fresh eval.
-    pcs_mod = SAC("MlpPolicy", temp_env)  # Replace with loaded model if saved
-    iso_env_eval = AlternatingISOEnv(ACTUAL_CSV, PRED_CSV, temp_env, pcs_mod)
-    iso_mod = PPO("MlpPolicy", iso_env_eval)  # Replace with loaded model if saved
+    # NOTE: if you saved models in run_alternating_training, replace these with model.load(...) calls
+    pcs_mod = SAC("MlpPolicy", temp_env)
+    iso_env_eval = AlternatingISOEnv(actual_csv, pred_csv, temp_env, pcs_mod)
+    iso_mod = PPO("MlpPolicy", iso_env_eval)
 
     evaluator = AlternatingEvaluator(
-        iso_mod, pcs_mod, ACTUAL_CSV, PRED_CSV,
-        config_name=f"{ITERATIONS} Iterations / Combined Eval"
+        iso_mod, pcs_mod, actual_csv, pred_csv,
+        config_name=f"{iterations} Iterations / Combined Eval"
     )
 
-    results_df = evaluator.run_evaluation(num_days=7)
-    evaluator.plot_results(results_df, output_prefix="final_eval")
+    results_df = evaluator.run_evaluation(num_days=num_days)
+    evaluator.plot_results(results_df, output_prefix=output_prefix)
     metrics = evaluator.run_analysis(results_df)
+
+    # PLOT CONVERGENCE: supply avg_price_per_iter if we have one (real or proxy)
+    plot_training_convergence(training_history,
+                              output_prefix=output_prefix)
+    # NOTE: removed saving of metrics/history files per request
+
+    return metrics, results_df
+
+
+if __name__ == "__main__":
+    # --- Example: list multiple runs here, edit file paths as needed ---
+    runs = [
+        {
+            "actual_csv": "data_for_tests/synthetic_household_consumption_test.csv",
+            "pred_csv": "data_for_tests/consumption_predictions.csv",
+            "iterations": 30,
+            "num_days": 7,
+            "out_dir": "results",
+            "run_id": "normal_run",
+        },
+        {
+            "actual_csv": "data_for_tests/zero_consumption.csv",
+            "pred_csv": "data_for_tests/zero_consumption_predictions.csv",
+            "iterations": 30,
+            "num_days": 7,
+            "out_dir": "results",
+            "run_id": "zero_consumption_run",
+        },
+    ]
+
+    # Run them sequentially; each will produce files like:
+    # results/run_<run_id>_convergence.png
+    # results/run_<run_id>_cumulative_sheet.png
+    # results/run_<run_id>_signals_sheet.png
+    for r in runs:
+        run_experiment(**r)
