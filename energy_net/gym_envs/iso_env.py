@@ -187,8 +187,8 @@ if __name__ == "__main__":
     except FileNotFoundError:
         # Fallback for the folder structure in your Tandem script
         env = ISOEnv(
-            actual_csv='data_for_tests/synthetic_household_consumption_test.csv',
-            predicted_csv='data_for_tests/consumption_predictions.csv'
+            actual_csv='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
+            predicted_csv='../../tests/gym/data_for_tests/consumption_predictions.csv'
         )
 
     print(f"\nSimulation Started. Total Records: {env.total_rows}")

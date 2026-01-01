@@ -286,8 +286,8 @@ def run_alternating_training(
     pcs_algo_kwargs = {} if pcs_algo_kwargs is None else dict(pcs_algo_kwargs)
 
     temp_env = PCSEnv(
-        test_data_file='data_for_tests/synthetic_household_consumption_test.csv',
-        predictions_file='data_for_tests/consumption_predictions.csv',
+        test_data_file='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
+        predictions_file='../../tests/gym/data_for_tests/consumption_predictions.csv',
         render_mode="human" if render else None
     )
     steps_per_day = int(pcs_steps_per_day or temp_env.max_steps)
@@ -306,8 +306,8 @@ def run_alternating_training(
     pcs_model = pcs_algo_cls(pcs_policy, base_pcs_env, verbose=verbose, **pcs_algo_kwargs)
 
     iso_env = AlternatingISOEnv(
-        actual_csv='data_for_tests/synthetic_household_consumption_test.csv',
-        predicted_csv='data_for_tests/consumption_predictions.csv',
+        actual_csv='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
+        predicted_csv='../../tests/gym/data_for_tests/consumption_predictions.csv',
         pcs_env=base_pcs_env,
         pcs_model=pcs_model,
         render_enabled=render,
@@ -316,7 +316,7 @@ def run_alternating_training(
 
     iso_model = iso_algo_cls(iso_policy, iso_env, verbose=verbose, **iso_algo_kwargs)
 
-    pred_df = pd.read_csv('data_for_tests/consumption_predictions.csv', parse_dates=['timestamp']).set_index(
+    pred_df = pd.read_csv('../../tests/gym/data_for_tests/consumption_predictions.csv', parse_dates=['timestamp']).set_index(
         'timestamp').sort_index()
     predicted_vals = pred_df['predicted_consumption'].astype(float).to_numpy().flatten()
     pricing = ISOPricingWrapper(iso_model)

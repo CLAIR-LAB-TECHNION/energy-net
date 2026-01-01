@@ -22,8 +22,8 @@ class PCSEnv(gym.Env):
     """
 
     def __init__(self,
-                 test_data_file='data_for_tests/synthetic_household_consumption_test.csv',
-                 predictions_file='data_for_tests/consumption_predictions.csv',
+                 test_data_file='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
+                 predictions_file='../../tests/gym/data_for_tests/consumption_predictions.csv',
                  dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
                  prediction_horizon=48,

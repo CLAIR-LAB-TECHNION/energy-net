@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-from original.utils.logger import setup_logger
+from energy_net.common.utils import setup_logger
 from energy_net.foundation.model import State, Action
 
 
