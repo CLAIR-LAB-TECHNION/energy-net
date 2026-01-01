@@ -1,8 +1,6 @@
 import numpy as np
 from energy_net.foundation.model import State, Action
-from .utils import validate_named_arrays_same_shape_no_nans
-
-
+from energy_net.common.utils import validate_named_arrays_same_shape_no_nans
 class ISOState(State):
     def __init__(
         self,

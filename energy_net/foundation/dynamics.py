@@ -1,8 +1,7 @@
 # dynamics/energy_dynamics.py
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
-import pandas as pd
+from typing import Any
 
 class EnergyDynamics(ABC):
     """

@@ -18,8 +18,8 @@ def make_env():
     MATCHES the updated PCSGymEnv parameters.
     """
     return PCSEnv(
-        test_data_file='../../energy_net/gym_envs/data_for_tests/synthetic_household_consumption_test.csv',
-        predictions_file='../../energy_net/gym_envs/data_for_tests/consumption_predictions.csv',
+        test_data_file='data_for_tests/synthetic_household_consumption_test.csv',
+        predictions_file='data_for_tests/consumption_predictions.csv',
         dt=0.5 / 24,  # 30 minutes in days
         episode_length_days=1,
         prediction_horizon=48,

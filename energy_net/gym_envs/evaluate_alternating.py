@@ -198,7 +198,7 @@ def run_experiment(actual_csv,
                    pred_csv,
                    iterations=30,
                    num_days=7,
-                   out_dir="results",
+                   out_dir="../../tests/gym/results",
                    run_id=None):
     """
     Run the full pipeline (training, convergence plot, evaluation).
@@ -267,26 +267,26 @@ if __name__ == "__main__":
     # --- Example: list multiple runs here, edit file paths as needed ---
     runs = [
         {
-            "actual_csv": "data_for_tests/synthetic_household_consumption_test.csv",
-            "pred_csv": "data_for_tests/consumption_predictions.csv",
+            "actual_csv": "../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv",
+            "pred_csv": "../../tests/gym/data_for_tests/consumption_predictions.csv",
             "iterations": 30,
             "num_days": 7,
-            "out_dir": "results",
+            "out_dir": "../../tests/gym/results",
             "run_id": "normal_run",
         },
         {
-            "actual_csv": "data_for_tests/zero_consumption.csv",
-            "pred_csv": "data_for_tests/zero_consumption_predictions.csv",
+            "actual_csv": "../../tests/gym/data_for_tests/zero_consumption.csv",
+            "pred_csv": "../../tests/gym/data_for_tests/zero_consumption_predictions.csv",
             "iterations": 30,
             "num_days": 7,
-            "out_dir": "results",
+            "out_dir": "../../tests/gym/results",
             "run_id": "zero_consumption_run",
         },
     ]
 
     # Run them sequentially; each will produce files like:
-    # results/run_<run_id>_convergence.png
-    # results/run_<run_id>_cumulative_sheet.png
-    # results/run_<run_id>_signals_sheet.png
+    # ../../tests/gym/results/run_<run_id>_convergence.png
+    # ../../tests/gym/results/run_<run_id>_cumulative_sheet.png
+    # ../../tests/gym/results/run_<run_id>_signals_sheet.png
     for r in runs:
         run_experiment(**r)
