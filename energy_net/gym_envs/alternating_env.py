@@ -1,11 +1,12 @@
 # alternating_env.py (Enhanced with shortage & MAE tracking + avg ISO price tracking + dynamic features)
 from datetime import timedelta
-from typing import Sequence
 
 from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy,SineWavePriceStrategy
+
+
 from stable_baselines3 import PPO
 import numpy as np
-import pandas as pd
 from iso_env import ISOEnv
 
 
@@ -66,6 +67,7 @@ class AlternatingISOEnv(ISOEnv):
         super().__init__(actual_csv, predicted_csv, steps_per_day)
         self.pcs_env = pcs_env
         self.pcs_model = pcs_model
+        self.iso_model = None
 
         # Rendering control for ISO-driven PCS runs
         self.render_enabled = bool(render_enabled)
@@ -79,67 +81,77 @@ class AlternatingISOEnv(ISOEnv):
         return self.base_timestamp + timedelta(minutes=30 * int(pcs_index))
 
     def step(self, action):
-        # 1) Price mapping logic
-        raw_prices = action[:self.T]
-        p_min, p_max = raw_prices.min(), raw_prices.max()
-        denom = (p_max - p_min) + 1e-8
-        normalized_prices = (raw_prices - p_min) / denom
-        price_curve = 0.05 + (normalized_prices * 0.20)
-
-        # 2) Anchor the index to the ISO's current position
+        """
+        ISO environment step.
+        Uses RLPriceCurveStrategy to bridge the ISO brain to the PCS environment.
+        """
+        # 1) Anchor the index to the ISO's current position
         current_idx = self._next_start_idx
         current_iso_timestamp = self._get_iso_timestamp_from_pcs_index(current_idx)
 
-        # 3) Setup PCS
-        self.pcs_env.set_price_curve(price_curve.astype(np.float32))
+        # 2) Get the observation window needed for the Strategy
+        # This is the (384,) vector: 48 predictions + 336 features
+        iso_obs = get_pred_window(self, current_idx, self.T)
+
+        # 3) Setup the RL Price Strategy
+        if self.iso_model is not None:
+            strategy = RLPriceCurveStrategy(iso_model=self.iso_model)
+            # Capture the ACTUAL scaled prices for the render/info dictionary
+            actual_scaled_prices = strategy.calculate_price(iso_obs)
+        else:
+            strategy = SineWavePriceStrategy()
+            actual_scaled_prices = strategy.calculate_price()
+
+        # 4) Inject strategy into PCS and sync time
+        self.pcs_env.set_price_strategy(strategy)
         self.pcs_env.set_step_index(current_idx)
+
+        # Reset the PCS env for the day.
         obs, _ = self.pcs_env.reset(start_date=current_iso_timestamp)
 
-        # render initial PCS state if requested
         if self.render_enabled:
             self.pcs_env.render()
 
         day_money = 0
-        day_shortages = 0  # Track shortages for this day
+        day_shortages = 0
         realized_consumption = []
 
+        # 5) Run the PCS loop for 48 steps (one day)
         for step_i in range(self.T):
             pcs_action, _ = self.pcs_model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = self.pcs_env.step(pcs_action)
-            day_money += info.get('step_money', 0)
 
-            # Collect actual consumption and shortages
+            day_money += info.get('step_money', 0)
             realized_consumption.append(info.get('consumption_units', 0))
             if info.get('shortage', False):
                 day_shortages += 1
 
-            # render during the PCS internal loop (throttled)
             if self.render_enabled and (self.pcs_env.current_step % self.render_every_n == 0):
                 self.pcs_env.render()
 
-        # 4) Calculate MAE between dispatch (prices imply expected consumption) and realized
+        # 6) Calculate metrics for ISO reward
         dispatch = action[self.T:]
         realized_array = np.array(realized_consumption, dtype=np.float32)
         mae = float(np.mean(np.abs(dispatch - realized_array)))
 
-        # 5) Advance ISO pointer via super().step()
+        # 7) Advance ISO state via parent class
         next_obs, _, _, _, iso_info = super().step(action)
 
-        # 6) Update info with all metrics
-        iso_info["money_earned"] = day_money
-        iso_info["mae"] = mae
-        iso_info["shortages"] = day_shortages
-        iso_info["realized_consumption"] = realized_array
-        iso_info["dispatch"] = dispatch
+        # 8) Enrich info dict with ACTUAL prices for the render function
+        iso_info.update({
+            "prices": actual_scaled_prices,  # Now render() shows real $ prices
+            "money_earned": day_money,
+            "mae": mae,
+            "shortages": day_shortages,
+            "realized_consumption": realized_array,
+            "dispatch": dispatch
+        })
 
-        # Store for render
-        self._last_step_info["mae"] = mae
-        self._last_step_info["money_earned"] = day_money
-        self._last_step_info["shortages"] = day_shortages
+        # Update render bookkeeping
+        self._last_step_info.update(iso_info)
         self._last_reward = day_money
 
         return next_obs, day_money, True, False, iso_info
-
     def render(self):
         """Enhanced render that shows MAE, money earned, and shortages."""
         if self._last_reset_info is None or self._last_step_info is None:
@@ -248,16 +260,19 @@ class PenalizedAlternatingISOEnv(AlternatingISOEnv):
         """
         super().__init__(*args, **kwargs)
         self.shortage_penalty = shortage_penalty
+        # This ensures that even the penalized version has the model placeholder
+        # which is needed for RLPriceCurveStrategy to function.
+        self.iso_model = None
 
     def step(self, action):
-        # Call the original step method to run everything as usual
+        # 1. Call the original step method (which now uses RLPriceCurveStrategy)
         expected, reward, done, truncated, info = super().step(action)
 
-        # Apply shortage penalty (minimal change)
+        # 2. Apply shortage penalty based on the data returned from the parent's PCS loop
         penalties = info.get("shortages", 0) * self.shortage_penalty
         net_reward = reward - penalties
 
-        # Update info and _last_reward for render() and tracking
+        # 3. Update info and _last_reward for tracking and visualization
         info["shortage_penalty"] = penalties
         info["net_reward"] = net_reward
         self._last_reward = net_reward
@@ -266,17 +281,24 @@ class PenalizedAlternatingISOEnv(AlternatingISOEnv):
 
     def render(self):
         """
-        Extend render to include penalty and net reward.
-        Calls parent render and then prints extra info.
+        Extend render to include penalty, net reward, and the strategy name.
         """
         record = super().render()
-        if record is not None:
-            penalties = self._last_step_info.get("shortage_penalty", 0)
+        if record is not None and self._last_step_info is not None:
+            # Safely retrieve values from the updated step info
+            penalties = self._last_step_info.get("shortage_penalty", 0.0)
             net = self._last_step_info.get("net_reward", self._last_reward)
-            print(f"Shortage Penalty Applied:       ${penalties:.2f}")
-            print(f"Net Reward (after penalty):     ${net:.2f}\n")
-        return record
 
+            # Add a clear indicator of which pricing strategy was active
+            if self.iso_model is not None:
+                print(f"Pricing Logic:                  RLPriceCurveStrategy (Active)")
+            else:
+                print(f"Pricing Logic:                  Fallback (SineWave)")
+
+            print(f"Shortage Penalty Applied:       -${penalties:.2f}")
+            print(f"Net Reward (ISO Profit):        ${net:.2f}\n")
+
+        return record
 
 def get_pred_window(env: ISOEnv, start: int, length: int) -> np.ndarray:
     """
@@ -329,11 +351,13 @@ def run_alternating_training(
         iso_algo_kwargs: dict | None = None,
         pcs_steps_per_day: int | None = None,
         verbose: int = 0,
-        per_day_debug: bool = True,
         render: bool = False,
         render_every_n_steps: int = 1,
 ):
-    """Tandem ISO <-> PCS training loop with convergence tracking and feature support."""
+    """
+    Tandem ISO <-> PCS training loop with convergence tracking and feature support.
+    Uses the RLPriceCurveStrategy to bridge the ISO agent's policy into the PCS environment.
+    """
 
     if cycle_days < 1:
         raise ValueError("cycle_days must be >= 1")
@@ -342,6 +366,7 @@ def run_alternating_training(
 
     pcs_algo_kwargs = {} if pcs_algo_kwargs is None else dict(pcs_algo_kwargs)
 
+    # Initialize the base environment for the household/battery agent (PCS)
     temp_env = PCSEnv(
         test_data_file='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
         predictions_file='../../tests/gym/data_for_tests/consumption_predictions.csv',
@@ -360,8 +385,11 @@ def run_alternating_training(
 
     base_pcs_env = temp_env
 
+    # 1. Create the PCS (Household) Model
     pcs_model = pcs_algo_cls(pcs_policy, base_pcs_env, verbose=verbose, **pcs_algo_kwargs)
 
+    # 2. Create the ISO (Grid) Environment
+    # Note: AlternatingISOEnv needs the PCS model to simulate household responses
     iso_env = AlternatingISOEnv(
         actual_csv='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
         predicted_csv='../../tests/gym/data_for_tests/consumption_predictions.csv',
@@ -371,52 +399,54 @@ def run_alternating_training(
         render_every_n=max(1, int(render_every_n_steps))
     )
 
+    # 3. Create the ISO (Grid) Model
     iso_model = iso_algo_cls(iso_policy, iso_env, verbose=verbose, **iso_algo_kwargs)
 
-    pricing = ISOPricingWrapper(iso_model)
+    # 4. LINK MODELS: Crucial step to avoid shape mismatch errors
+    # Inject the ISO model back into the env so it can use RLPriceCurveStrategy internally
+    iso_env.iso_model = iso_model
+    pricing_strategy = RLPriceCurveStrategy(iso_model=iso_model)
 
-    # --- NEW: Metric Tracking Initialization ---
+    # Metric Tracking Initialization
     history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}
 
     for iteration in range(1, total_iterations + 1):
         print(f"\n[Iteration {iteration}] ISO Learning Phase ({cycle_days} Days)...")
+        # ISO learns optimal pricing given current household behavior
         iso_model.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
 
         print(f"[Iteration {iteration}] PCS Learning Phase...")
 
         base_idx = iso_env._next_start_idx
         day_money_list = []
-        iteration_maes = []  # Track MAE for this iteration
-        iteration_shortages = 0  # Track Shortages for this iteration
-        day_avg_prices = []  # Track average ISO price per day
+        iteration_maes = []
+        iteration_shortages = 0
+        day_avg_prices = []
 
         for day in range(cycle_days):
             start = base_idx + day * steps_per_day
 
-            # Get full observation (predictions + features)
+            # Get the ISO's full observation (predictions + features)
             obs_window = get_pred_window(iso_env, start, steps_per_day)
 
-            # Generate price curve using full observation
-            price_curve = pricing.generate_price_curve(obs_window)
+            # Record average daily price using the strategy
+            price_curve = pricing_strategy.calculate_price(obs_window)
+            day_avg_prices.append(float(np.mean(price_curve)))
 
-            # record average price for this day
-            try:
-                day_avg_prices.append(float(np.mean(price_curve)))
-            except Exception:
-                day_avg_prices.append(0.0)
-
-            base_pcs_env.set_price_curve(price_curve.astype(np.float32))
+            # Inject the strategy into the PCS environment for the learning loop
+            base_pcs_env.set_price_strategy(pricing_strategy)
             base_pcs_env.set_step_index(start)
             obs, _ = base_pcs_env.reset(start_date=iso_env._get_iso_timestamp_from_pcs_index(start))
 
             eval_day_money = 0.0
             day_actuals = []
 
-            # Use the dispatch from the ISO's prediction (second half of action)
+            # Extract the ISO's target dispatch values (second half of action)
             iso_action, _ = iso_model.predict(obs_window, deterministic=True)
             day_dispatch = iso_action[steps_per_day:]
 
             for step_i in range(steps_per_day):
+                # PCS Agent acts based on the current ISO-generated price
                 pcs_action, _ = pcs_model.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = base_pcs_env.step(pcs_action)
 
@@ -428,14 +458,16 @@ def run_alternating_training(
             day_money_list.append(eval_day_money)
             iteration_maes.append(np.mean(np.abs(np.array(day_actuals) - day_dispatch)))
 
+            # PCS agent learns from the rewards earned today
             base_pcs_env.set_step_index(start)
             obs, _ = base_pcs_env.reset(start_date=iso_env._get_iso_timestamp_from_pcs_index(start))
             pcs_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
 
+        # Advance global clock
         final_idx = base_idx + (cycle_days * steps_per_day)
         iso_env.sync_to_pcs(final_idx)
 
-        # --- NEW: Store Metrics for this Iteration ---
+        # Update History
         avg_money = float(np.mean(day_money_list))
         avg_mae = float(np.mean(iteration_maes))
         avg_iso_price = float(np.mean(day_avg_prices)) if len(day_avg_prices) > 0 else 0.0
@@ -446,16 +478,14 @@ def run_alternating_training(
         history["total_shortages"].append(iteration_shortages)
         history["avg_iso_price"].append(avg_iso_price)
 
-        print(
-            f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
+        print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
 
     print("\n--- TRAINING COMPLETE ---")
-    return history  # Return the history for plotting
-
+    return history
 
 if __name__ == "__main__":
     try:
-        run_alternating_training(render=False, render_every_n_steps=1)
+        run_alternating_training(render=True, render_every_n_steps=1)
     except Exception as e:
         print(f"\nFATAL ERROR during training: {e}")
         import traceback

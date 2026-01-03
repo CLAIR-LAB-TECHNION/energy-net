@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from alternating_env import AlternatingISOEnv, ISOPricingWrapper, get_pred_window, run_alternating_training
+from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy  # New strategy class
+from alternating_env import AlternatingISOEnv, get_pred_window, run_alternating_training
 from stable_baselines3 import PPO, SAC
 from energy_net.gym_envs.pcs_env import PCSEnv
 
@@ -64,18 +65,17 @@ class AlternatingEvaluator:
     def __init__(self, iso_model, pcs_model, actual_csv, predicted_csv, config_name="Default"):
         self.iso_model = iso_model
         self.pcs_model = pcs_model
-        # Create a temporary ISOEnv to hold the data and feature logic
         self.iso_env = ISOEnv(actual_csv, predicted_csv)
         self.config_name = config_name
-        self.pricing_wrapper = ISOPricingWrapper(iso_model)
+
+        # 2. Use the new Strategy Class instead of the Wrapper
+        self.pricing_strategy = RLPriceCurveStrategy(iso_model)
 
         self.actual_csv = actual_csv
         self.predicted_csv = predicted_csv
-        self.config_name = config_name
 
         pred_df = pd.read_csv(predicted_csv, parse_dates=['timestamp']).set_index('timestamp').sort_index()
         self.predicted_vals = pred_df['predicted_consumption'].astype(float).to_numpy().flatten()
-        self.pricing_wrapper = ISOPricingWrapper(iso_model)
 
     def run_evaluation(self, num_days=7, start_idx=0):
         pcs_env = PCSEnv(test_data_file=self.actual_csv, predictions_file=self.predicted_csv, prediction_horizon=48)
@@ -84,12 +84,17 @@ class AlternatingEvaluator:
 
         for day in range(num_days):
             current_start = start_idx + (day * steps_per_day)
-            pred_window = get_pred_window(self.iso_env, current_start, steps_per_day).astype(np.float32)
-            price_curve = self.pricing_wrapper.generate_price_curve(pred_window)
 
-            pcs_env.set_price_curve(price_curve)
+            # 3. Get the full observation window (Predictions + Features)
+            pred_window = get_pred_window(self.iso_env, current_start, steps_per_day).astype(np.float32)
+
+            # 4. Generate prices using the Strategy class
+            price_curve = self.pricing_strategy.calculate_price(pred_window)
+
+            # 5. Inject the strategy object into PCSEnv
+            pcs_env.set_price_strategy(self.pricing_strategy)
             pcs_env.set_step_index(current_start)
-            obs, _ = pcs_env.reset()
+            obs, _ = pcs_env.reset(start_date=self.iso_env.base_timestamp + timedelta(minutes=30 * current_start))
 
             day_actual_consumption = []
             day_dispatch = []
@@ -98,8 +103,8 @@ class AlternatingEvaluator:
                 action, _ = self.pcs_model.predict(obs, deterministic=True)
                 next_obs, reward, _, _, info = pcs_env.step(action)
 
-                iso_obs = pred_window.astype(np.float32)
-                iso_action, _ = self.iso_model.predict(iso_obs, deterministic=True)
+                # Query the ISO model for the specific dispatch target
+                iso_action, _ = self.iso_model.predict(pred_window, deterministic=True)
                 dispatch_value = iso_action[steps_per_day + t]
 
                 day_actual_consumption.append(info.get('consumption_units', 0))
@@ -116,13 +121,13 @@ class AlternatingEvaluator:
                 })
                 obs = next_obs
 
+            # Calculate Daily MAE
             day_mae = np.mean(np.abs(np.array(day_actual_consumption) - np.array(day_dispatch)))
             day_start_idx = len(history) - steps_per_day
             for i in range(day_start_idx, len(history)):
                 history[i]['day_mae'] = day_mae
 
         return pd.DataFrame(history)
-
     def plot_results(self, df, output_prefix="evaluation"):
         df['cumulative_pcs_reward'] = df['money'].cumsum()
         df['cumulative_iso_reward'] = -df['money'].cumsum()
@@ -211,16 +216,6 @@ def run_experiment(actual_csv,
     """
     Run the full pipeline (training, convergence plot, evaluation).
     Returns (metrics_dict, results_df).
-
-    NOTE about avg price per iteration:
-    - If `run_alternating_training` returns per-iteration ISO prices as column 'avg_iso_price'
-      in its training_history, this script will use that series directly.
-    - If not available (most common), this script will compute a PROXY series by taking the
-      average predicted consumption for a 48-step window in your predictions file for each
-      training iteration (window start shifted by iteration index). Proxy is clearly labeled.
-      To get *real* ISO price per iteration you need either:
-        (a) run evaluation during training / at each iteration using the ISO model at that iteration, or
-        (b) modify run_alternating_training to record avg ISO prices per iteration.
     """
     run_id = make_run_id(run_id)
     os.makedirs(out_dir, exist_ok=True)
@@ -235,41 +230,28 @@ def run_experiment(actual_csv,
         render=False
     )
 
-    # normalize to DataFrame
-    if not isinstance(training_history, pd.DataFrame):
-        try:
-            training_history = pd.DataFrame(training_history)
-        except Exception:
-            # keep as-is and attempt minimal fallback
-            training_history = pd.DataFrame({
-                "iteration": list(range(len(training_history))) if hasattr(training_history, "__len__") else [0],
-                "avg_money": training_history.get("avg_money", [0]),
-            })
-
-    # FINAL EVALUATION SETUP (unchanged)
+    # 6. Post-Training Evaluation Setup
+    # Note: In a real scenario, you would use the models returned/saved by training.
+    # For this script, we assume they are initialized and then evaluated.
     temp_env = PCSEnv(test_data_file=actual_csv, predictions_file=pred_csv, prediction_horizon=48)
 
-    # NOTE: if you saved models in run_alternating_training, replace these with model.load(...) calls
+    # Dummy initialization for structural evaluation (replace with loaded models if needed)
     pcs_mod = SAC("MlpPolicy", temp_env)
     iso_env_eval = AlternatingISOEnv(actual_csv, pred_csv, temp_env, pcs_mod)
     iso_mod = PPO("MlpPolicy", iso_env_eval)
 
     evaluator = AlternatingEvaluator(
         iso_mod, pcs_mod, actual_csv, pred_csv,
-        config_name=f"{iterations} Iterations / Combined Eval"
+        config_name=f"{iterations} Iterations / RL Strategy Eval"
     )
 
     results_df = evaluator.run_evaluation(num_days=num_days)
     evaluator.plot_results(results_df, output_prefix=output_prefix)
     metrics = evaluator.run_analysis(results_df)
 
-    # PLOT CONVERGENCE: supply avg_price_per_iter if we have one (real or proxy)
-    plot_training_convergence(training_history,
-                              output_prefix=output_prefix)
-    # NOTE: removed saving of metrics/history files per request
+    plot_training_convergence(training_history, output_prefix=output_prefix)
 
     return metrics, results_df
-
 
 if __name__ == "__main__":
     # --- Example: list multiple runs here, edit file paths as needed ---
