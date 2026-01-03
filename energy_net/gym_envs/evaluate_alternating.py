@@ -63,6 +63,27 @@ def plot_training_convergence(history, output_prefix="convergence_results"):
 
 class AlternatingEvaluator:
     def __init__(self, iso_model, pcs_model, actual_csv, predicted_csv, config_name="Default"):
+        """
+        Evaluator for alternating ISO/PCS experiments.
+
+        Parameters
+        ----------
+        iso_model : RL model
+            The ISO agent/model used to generate dispatch decisions.
+        pcs_model : RL model
+            The PCS agent/model used to make charging/discharging actions.
+        actual_csv : str
+            Path to CSV containing actual test data for the PCS environment.
+        predicted_csv : str
+            Path to CSV containing predicted consumption values for the ISO model.
+        config_name : str, optional
+            Human-readable name for this evaluation configuration (default "Default").
+
+        Sets up:
+            - ISOEnv for timestamp/indexing utilities
+            - RLPriceCurveStrategy initialized with the iso_model
+            - loads predicted values into self.predicted_vals for quick access
+        """
         self.iso_model = iso_model
         self.pcs_model = pcs_model
         self.iso_env = ISOEnv(actual_csv, predicted_csv)
@@ -78,6 +99,23 @@ class AlternatingEvaluator:
         self.predicted_vals = pred_df['predicted_consumption'].astype(float).to_numpy().flatten()
 
     def run_evaluation(self, num_days=7, start_idx=0):
+        """
+        Run multi-day evaluation of PCS vs ISO using the provided models.
+
+        Parameters
+        ----------
+        num_days : int
+            Number of days to simulate/evaluate. Each day uses `steps_per_day` steps.
+        start_idx : int
+            Starting step index within the dataset (offset in 30-minute steps).
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame with a history of per-step observations and metrics including:
+                - timestamp, price, action, money, shortage, actual_consumption, dispatch
+                - day_mae for each step of that day
+        """
         pcs_env = PCSEnv(test_data_file=self.actual_csv, predictions_file=self.predicted_csv, prediction_horizon=48)
         steps_per_day = 48
         history = []
@@ -129,6 +167,17 @@ class AlternatingEvaluator:
 
         return pd.DataFrame(history)
     def plot_results(self, df, output_prefix="evaluation"):
+        """
+        Create and save a set of plots summarizing evaluation results.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            DataFrame returned by run_evaluation (or with equivalent columns).
+        output_prefix : str
+            Prefix for saved image files (two PNGs will be created:
+            {output_prefix}_cumulative_sheet.png and {output_prefix}_signals_sheet.png).
+        """
         df['cumulative_pcs_reward'] = df['money'].cumsum()
         df['cumulative_iso_reward'] = -df['money'].cumsum()
         df['cumulative_shortages'] = df['shortage'].cumsum()
@@ -179,6 +228,22 @@ class AlternatingEvaluator:
         print(f"Evaluation sheets saved as '{out1}' and '{out2}'")
 
     def run_analysis(self, df):
+        """
+        Compute and print high-level summary metrics from evaluation DataFrame.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Evaluation history (must include 'money', 'shortage', 'actual_consumption', 'dispatch').
+
+        Returns
+        -------
+        dict
+            Dictionary with keys:
+                - 'pcs_reward' : total PCS money (sum of 'money')
+                - 'total_shortages' : total number of shortage events (int)
+                - 'avg_mae' : average instantaneous MAE across dataset
+        """
         if 'mae_instantaneous' not in df.columns:
             df['mae_instantaneous'] = np.abs(df['actual_consumption'] - df['dispatch'])
 
@@ -200,6 +265,22 @@ class AlternatingEvaluator:
 
 
 def make_run_id(provided_id=None):
+    """
+    Make a run identifier string.
+
+    If provided_id is given, it is returned unchanged. Otherwise a timestamped id
+    with a short UUID suffix is generated in the format YYYYmmdd-HHMMSS-<8hex>.
+
+    Parameters
+    ----------
+    provided_id : str or None
+        Optional user-provided run id.
+
+    Returns
+    -------
+    str
+        The run id string.
+    """
     if provided_id:
         return provided_id
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")

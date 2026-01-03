@@ -2,6 +2,12 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 class PriceCurveStrategy(ABC):
+    """"
+    This is an abstract base class for different price curve strategies. It is not the same as an ISO class,
+    which is responsible for market clearing and other functions, and may have some level of agency.
+    Instead, this is just a way to encapsulate different methods for generating price curves, one of which
+    might be a trained ISO model. It is helpful for gym environments that need to generate price curves.
+    """
     @abstractmethod
     def calculate_price(self, observation: np.ndarray) -> np.ndarray:
         """
