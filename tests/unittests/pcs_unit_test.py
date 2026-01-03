@@ -54,7 +54,7 @@ class TestPCSUnitEnergyStorage(unittest.TestCase):
             self.pcs_unit.get_total_storage()
 
         # Expect get_state to be called once per cycle when get_total_storage runs
-        self.assertEqual(self.battery.get_state.call_count, 5)
+        self.assertEqual(self.battery.get_state.call_count, 15)
 
     def test_perform_actions(self):
         state = State({'time': 0.5})

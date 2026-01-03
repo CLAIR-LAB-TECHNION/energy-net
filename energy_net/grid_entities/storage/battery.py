@@ -45,11 +45,15 @@ class Battery(ElementaryGridEntity):
         self.energy_change: float = 0.0
         self.current_time: float = 0.0
 
+
+        state_config = config.get('state_attributes', {})
         # Initialize internal state using State class
+
         self._state = State({
             'energy_level': self.energy_level,
             'energy_change': self.energy_change,
-            'time': self.current_time
+            'time': self.current_time,
+            **state_config  # Allow users to add custom state attributes
         })
 
         self.logger.info(f"Battery initialized with energy level: {self.energy_level} MWh")

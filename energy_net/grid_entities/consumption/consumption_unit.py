@@ -18,6 +18,10 @@ class ConsumptionUnit(ElementaryGridEntity):
         Args:
             dynamics (EnergyDynamics): The dynamics defining the consumption unit's behavior.
             config (Dict[str, Any]): Configuration parameters for the consumption unit.
+                Required parameters:
+                - consumption_capacity: Maximum consumption capacity in MWh
+                Optional parameters:
+                - state_attributes: Additional custom state attributes to track (dict)
             log_file (str, optional): Path to the ConsumptionUnit log file.
 
         Raises:
@@ -36,15 +40,18 @@ class ConsumptionUnit(ElementaryGridEntity):
         self.current_consumption: float = 0.0
         self.initial_consumption: float = self.current_consumption
 
+        # Get custom state attributes from config
+        state_config = config.get('state_attributes', {})
+
         # Initialize internal state using State class
         self._state = State({
             'consumption': self.current_consumption,
-            'time': 0.0
+            'time': 0.0,
+            **state_config
         })
 
         self.logger.info(
             f"ConsumptionUnit initialized with capacity: {self.consumption_capacity} MWh and initial consumption: {self.current_consumption} MWh")
-
     def perform_action(self, action: Action) -> None:
         """
         Perform an action on the consumption unit.

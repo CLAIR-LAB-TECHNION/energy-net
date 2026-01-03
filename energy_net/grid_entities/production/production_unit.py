@@ -18,6 +18,10 @@ class ProductionUnit(ElementaryGridEntity):
         Args:
             dynamics (EnergyDynamics): The dynamics defining the production unit's behavior.
             config (Dict[str, Any]): Configuration parameters for the production unit.
+                Required parameters:
+                - production_capacity: Maximum production capacity in MWh
+                Optional parameters:
+                - state_attributes: Additional custom state attributes to track (dict)
             log_file (str, optional): Path to the ProductionUnit log file.
 
         Raises:
@@ -36,15 +40,18 @@ class ProductionUnit(ElementaryGridEntity):
         self.current_production: float = 0.0
         self.initial_production: float = self.current_production
 
+        # Get custom state attributes from config
+        state_config = config.get('state_attributes', {})
+
         # Initialize internal state using State class
         self._state = State({
             'production': self.current_production,
-            'time': 0.0
+            'time': 0.0,
+            **state_config
         })
 
         self.logger.info(
             f"ProductionUnit initialized with capacity: {self.production_capacity} MWh and initial production: {self.current_production} MWh")
-
     def perform_action(self, action: Action) -> None:
         """
         Perform an action on the production unit.

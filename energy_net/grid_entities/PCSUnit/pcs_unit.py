@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.production.production_unit import ProductionUnit
@@ -20,6 +20,7 @@ class PCSUnit(CompositeGridEntity):
                  storage_units: Optional[List[Battery]] = None,
                  production_units: Optional[List[ProductionUnit]] = None,
                  consumption_units: Optional[List[ConsumptionUnit]] = None,
+                 state_attributes: Optional[Dict[str, Any]] = None,
                  log_file: Optional[str] = 'logs/pcs_unit.log') -> None:
         """
         Initializes the PCSUnit with the provided components.
@@ -28,6 +29,7 @@ class PCSUnit(CompositeGridEntity):
             storage_units (Optional[List[Battery]]): List of Battery instances.
             production_units (Optional[List[ProductionUnit]]): List of ProductionUnit instances.
             consumption_units (Optional[List[ConsumptionUnit]]): List of ConsumptionUnit instances.
+            state_attributes (Optional[Dict[str, Any]]): Additional custom state attributes to track.
             log_file (Optional[str]): Path to the log file.
         """
         # Handle None inputs by converting to empty lists
@@ -54,15 +56,18 @@ class PCSUnit(CompositeGridEntity):
         self.production_units = production_units
         self.consumption_units = consumption_units
 
+        # Get custom state attributes
+        state_config = state_attributes or {}
+
         # Initialize internal state
         self._state = State({
             'production': 0.0,
             'consumption': 0.0,
             'total_storage': 0.0,
             'energy_change': 0.0,
-            'time': 0.0
+            'time': 0.0,
+            **state_config
         })
-
     def get_production(self) -> float:
         """
         Calculates the total current production of all production units.

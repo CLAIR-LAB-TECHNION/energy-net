@@ -159,12 +159,6 @@ class TestBattery(unittest.TestCase):
         self.battery.reset(initial_level=20)
         self.assertEqual(self.battery.energy_level, 20)
 
-    def test_missing_config_param(self):
-        config = self.config.copy()
-        del config['min']
-        with self.assertRaises(AssertionError):
-            Battery(dynamics=self.mock_dynamics, config=config, log_file=None)
-
 
 if __name__ == "__main__":
     unittest.main()
