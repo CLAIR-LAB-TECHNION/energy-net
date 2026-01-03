@@ -1,4 +1,4 @@
-# alternating_env.py (Enhanced with shortage & MAE tracking + avg ISO price tracking)
+# alternating_env.py (Enhanced with shortage & MAE tracking + avg ISO price tracking + dynamic features)
 from datetime import timedelta
 from typing import Sequence
 
@@ -11,7 +11,7 @@ from iso_env import ISOEnv
 
 class ISOPricingWrapper:
     """Direct bridge between an ISO RL model and the PCS environment.
-    Converts a 48-step predicted consumption window into a realistic
+    Converts predicted consumption + features into a realistic
     price curve (in $/unit) using the ISO policy's first 48 action values.
     """
 
@@ -20,9 +20,18 @@ class ISOPricingWrapper:
         self.base_price = base_price
         self.price_scale = price_scale
 
-    def generate_price_curve(self, predicted_consumption: np.ndarray) -> np.ndarray:
-        # ISO expects a float32 (48,) forecast observation
-        obs = predicted_consumption.astype(np.float32)
+    def generate_price_curve(self, observation: np.ndarray) -> np.ndarray:
+        """
+        Generate price curve from ISO model observation.
+
+        Args:
+            observation: Full ISO observation (predictions + features)
+
+        Returns:
+            48-element price curve
+        """
+        # ISO expects its full observation (predictions + features)
+        obs = observation.astype(np.float32)
 
         # Query the ISO policy deterministically
         action, _ = self.iso_model.predict(obs, deterministic=True)
@@ -49,6 +58,7 @@ class AlternatingISOEnv(ISOEnv):
     - The ISO injects its price curve into the PCS and runs the PCS policy for
       T=48 steps to produce an economic reward which becomes the ISO reward.
     - TRACKS MAE and shortages separately from the money-based reward for comparison.
+    - Automatically handles features from predictions CSV.
     """
 
     def __init__(self, actual_csv, predicted_csv, pcs_env, pcs_model,
@@ -113,7 +123,7 @@ class AlternatingISOEnv(ISOEnv):
         mae = float(np.mean(np.abs(dispatch - realized_array)))
 
         # 5) Advance ISO pointer via super().step()
-        _, _, _, _, iso_info = super().step(action)
+        next_obs, _, _, _, iso_info = super().step(action)
 
         # 6) Update info with all metrics
         iso_info["money_earned"] = day_money
@@ -128,7 +138,7 @@ class AlternatingISOEnv(ISOEnv):
         self._last_step_info["shortages"] = day_shortages
         self._last_reward = day_money
 
-        return self._expected, day_money, True, False, iso_info
+        return next_obs, day_money, True, False, iso_info
 
     def render(self):
         """Enhanced render that shows MAE, money earned, and shortages."""
@@ -161,8 +171,15 @@ class AlternatingISOEnv(ISOEnv):
             f"Shortages This Day:             {shortages}" if isinstance(shortages, int) else f"Shortages: {shortages}")
         print(f"{'=' * 70}")
 
-        print(f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}")
-        print("-" * 70)
+        # Build header dynamically with feature columns
+        header = f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}"
+        if self.num_features > 0:
+            for col in self.feature_columns[:3]:  # Show first 3 features to avoid clutter
+                header += f" | {col:<10}"
+            if self.num_features > 3:
+                header += " | ..."
+        print(header)
+        print("-" * (70 + min(self.num_features, 3) * 13 + (4 if self.num_features > 3 else 0)))
 
         rows = []
         for i in range(0, self.T, 4):
@@ -174,18 +191,35 @@ class AlternatingISOEnv(ISOEnv):
             d = step_info['dispatch'][i]
             pr = step_info['prices'][i]
 
-            print(f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}")
+            row_str = f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}"
 
-            rows.append({
+            row_dict = {
                 "slot_time": slot_time,
                 "row_num": int(row_num),
                 "pred": float(p),
                 "actual": float(a),
                 "dispatch": float(d),
                 "price": float(pr)
-            })
+            }
 
-        print("-" * 70)
+            # Add feature values (show first 3)
+            if self.num_features > 0:
+                feature_start_idx = i * self.num_features
+                feature_end_idx = feature_start_idx + self.num_features
+                feature_values = self._current_features[feature_start_idx:feature_end_idx]
+
+                for j, col in enumerate(self.feature_columns[:3]):
+                    val = feature_values[j]
+                    row_str += f" | {val:<10.4f}"
+                    row_dict[col] = float(val)
+
+                if self.num_features > 3:
+                    row_str += " | ..."
+
+            print(row_str)
+            rows.append(row_dict)
+
+        print("-" * (70 + min(self.num_features, 3) * 13 + (4 if self.num_features > 3 else 0)))
         print(f"Day Complete.\n")
 
         # return a structured record with all metrics
@@ -199,6 +233,7 @@ class AlternatingISOEnv(ISOEnv):
             "reward": float(reward)
         }
         return record
+
 
 class PenalizedAlternatingISOEnv(AlternatingISOEnv):
     """
@@ -242,19 +277,41 @@ class PenalizedAlternatingISOEnv(AlternatingISOEnv):
             print(f"Net Reward (after penalty):     ${net:.2f}\n")
         return record
 
-def get_pred_window(preds: Sequence[float], start: int, length: int) -> np.ndarray:
-    """Return a length-sized window starting at `start` from preds, wrapping if necessary."""
-    n = len(preds)
+
+def get_pred_window(env: ISOEnv, start: int, length: int) -> np.ndarray:
+    """
+    Return a full observation window (predictions + features) starting at `start`.
+
+    Args:
+        env: ISO environment with feature support
+        start: Starting index
+        length: Number of timesteps (should be T=48)
+
+    Returns:
+        Full observation array (predictions + features flattened)
+    """
+    n = len(env.pred_data)
     if n == 0:
         raise ValueError("Predictions array is empty.")
+
     start = int(start) % n
+
+    # Get predictions
     if start + length <= n:
-        return preds[start:start + length]
-    # wrap-around case
-    first = preds[start:]
-    remaining = length - len(first)
-    second = preds[:remaining]
-    return np.concatenate([first, second], axis=0)
+        preds = env.pred_data[start:start + length]
+    else:
+        # wrap-around case
+        first = env.pred_data[start:]
+        remaining = length - len(first)
+        second = env.pred_data[:remaining]
+        preds = np.concatenate([first, second], axis=0)
+
+    # Get features if available
+    if env.num_features > 0:
+        features = env._get_features_for_range(start, length)
+        return np.concatenate([preds, features]).astype(np.float32)
+    else:
+        return preds.astype(np.float32)
 
 
 # -----------------------
@@ -276,7 +333,7 @@ def run_alternating_training(
         render: bool = False,
         render_every_n_steps: int = 1,
 ):
-    """Tandem ISO <-> PCS training loop with convergence tracking."""
+    """Tandem ISO <-> PCS training loop with convergence tracking and feature support."""
 
     if cycle_days < 1:
         raise ValueError("cycle_days must be >= 1")
@@ -316,9 +373,6 @@ def run_alternating_training(
 
     iso_model = iso_algo_cls(iso_policy, iso_env, verbose=verbose, **iso_algo_kwargs)
 
-    pred_df = pd.read_csv('../../tests/gym/data_for_tests/consumption_predictions.csv', parse_dates=['timestamp']).set_index(
-        'timestamp').sort_index()
-    predicted_vals = pred_df['predicted_consumption'].astype(float).to_numpy().flatten()
     pricing = ISOPricingWrapper(iso_model)
 
     # --- NEW: Metric Tracking Initialization ---
@@ -334,14 +388,18 @@ def run_alternating_training(
         day_money_list = []
         iteration_maes = []  # Track MAE for this iteration
         iteration_shortages = 0  # Track Shortages for this iteration
-        day_avg_prices = []  # Track average ISO price per day (true price produced by ISO at this iteration)
+        day_avg_prices = []  # Track average ISO price per day
 
         for day in range(cycle_days):
             start = base_idx + day * steps_per_day
-            pred_window = get_pred_window(predicted_vals, start, steps_per_day).astype(np.float32)
-            price_curve = pricing.generate_price_curve(pred_window)
 
-            # record average price for this day (true price using current iso_model)
+            # Get full observation (predictions + features)
+            obs_window = get_pred_window(iso_env, start, steps_per_day)
+
+            # Generate price curve using full observation
+            price_curve = pricing.generate_price_curve(obs_window)
+
+            # record average price for this day
             try:
                 day_avg_prices.append(float(np.mean(price_curve)))
             except Exception:
@@ -355,7 +413,7 @@ def run_alternating_training(
             day_actuals = []
 
             # Use the dispatch from the ISO's prediction (second half of action)
-            iso_action, _ = iso_model.predict(pred_window, deterministic=True)
+            iso_action, _ = iso_model.predict(obs_window, deterministic=True)
             day_dispatch = iso_action[steps_per_day:]
 
             for step_i in range(steps_per_day):
@@ -380,7 +438,6 @@ def run_alternating_training(
         # --- NEW: Store Metrics for this Iteration ---
         avg_money = float(np.mean(day_money_list))
         avg_mae = float(np.mean(iteration_maes))
-        # average the per-day mean prices to make iteration-level avg ISO price
         avg_iso_price = float(np.mean(day_avg_prices)) if len(day_avg_prices) > 0 else 0.0
 
         history["iteration"].append(iteration)
@@ -389,7 +446,8 @@ def run_alternating_training(
         history["total_shortages"].append(iteration_shortages)
         history["avg_iso_price"].append(avg_iso_price)
 
-        print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
+        print(
+            f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
 
     print("\n--- TRAINING COMPLETE ---")
     return history  # Return the history for plotting

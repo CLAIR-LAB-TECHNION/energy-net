@@ -3,6 +3,9 @@ import uuid
 from datetime import datetime, timedelta
 
 import matplotlib
+
+from energy_net.gym_envs.iso_env import ISOEnv
+
 matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
@@ -61,6 +64,11 @@ class AlternatingEvaluator:
     def __init__(self, iso_model, pcs_model, actual_csv, predicted_csv, config_name="Default"):
         self.iso_model = iso_model
         self.pcs_model = pcs_model
+        # Create a temporary ISOEnv to hold the data and feature logic
+        self.iso_env = ISOEnv(actual_csv, predicted_csv)
+        self.config_name = config_name
+        self.pricing_wrapper = ISOPricingWrapper(iso_model)
+
         self.actual_csv = actual_csv
         self.predicted_csv = predicted_csv
         self.config_name = config_name
@@ -76,7 +84,7 @@ class AlternatingEvaluator:
 
         for day in range(num_days):
             current_start = start_idx + (day * steps_per_day)
-            pred_window = get_pred_window(self.predicted_vals, current_start, steps_per_day).astype(np.float32)
+            pred_window = get_pred_window(self.iso_env, current_start, steps_per_day).astype(np.float32)
             price_curve = self.pricing_wrapper.generate_price_curve(pred_window)
 
             pcs_env.set_price_curve(price_curve)

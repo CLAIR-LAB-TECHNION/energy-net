@@ -6,19 +6,56 @@ from datetime import datetime, timedelta
 
 
 class ISOEnv(gym.Env):
+    """
+    ISO Environment that automatically detects and includes feature columns
+    from the predictions CSV in its observation space.
+    """
+
     def __init__(self, actual_csv, predicted_csv, steps_per_day=48):
         super().__init__()
 
         # 1. Define these BEFORE loading data so they are guaranteed to exist
         self.T = steps_per_day
 
-        # Observation: The 48 predicted consumption values for the day
+        # 2. Load your data
+        self.actual_df = pd.read_csv(actual_csv)
+        self.pred_df = pd.read_csv(predicted_csv)
+
+        # Get the first timestamp from the CSV to use as a clock base
+        self.base_timestamp = pd.to_datetime(self.actual_df.iloc[0]['Datetime'])
+
+        self.actual_data = self.actual_df['Consumption'].values.astype(np.float32)
+        self.pred_data = self.pred_df['predicted_consumption'].values.astype(np.float32)
+
+        # 3. Automatically detect feature columns
+        excluded_cols = {'timestamp', 'predicted_consumption'}
+        self.feature_columns = [col for col in self.pred_df.columns if col not in excluded_cols]
+        self.num_features = len(self.feature_columns)
+
+        print(f"Detected {self.num_features} feature columns: {self.feature_columns}")
+
+        # Cache feature values for fast lookup
+        if self.num_features > 0:
+            self.feature_cache = self.pred_df[self.feature_columns].values.astype(np.float32)
+        else:
+            self.feature_cache = None
+
+        self.total_rows = min(len(self.actual_data), len(self.pred_data))
+
+        # 4. Define observation and action spaces
+        # Observation: predicted consumption (T values) + features per timestep (T * num_features)
+        obs_dim = self.T + (self.T * self.num_features)
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(self.T,),
+            shape=(obs_dim,),
             dtype=np.float32
         )
+
+        print(f"Observation space dimension: {obs_dim}")
+        print(f"  - Predicted consumption per day: {self.T}")
+        print(f"  - Features per timestep: {self.num_features}")
+        print(f"  - Total features per day: {self.T * self.num_features}")
 
         # Action: 48 Prices + 48 Dispatch values (Total 96)
         self.action_space = spaces.Box(
@@ -28,27 +65,35 @@ class ISOEnv(gym.Env):
             dtype=np.float32
         )
 
-        # 2. Load your data
-        self.actual_df = pd.read_csv(actual_csv)
-        self.pred_df = pd.read_csv(predicted_csv)
-
-        # Get the first timestamp from the CSV to use as a clock base
-        # This is required for the Tandem script to sync the PCS clock
-        self.base_timestamp = pd.to_datetime(self.actual_df.iloc[0]['Datetime'])
-
-        self.actual_data = self.actual_df['Consumption'].values.astype(np.float32)
-        self.pred_data = self.pred_df['predicted_consumption'].values.astype(np.float32)
-
-        self.total_rows = min(len(self.actual_data), len(self.pred_data))
-
-        # This is the specific attribute your Tandem script was missing
+        # This is the specific attribute for Tandem script sync
         self._next_start_idx = 0
 
         # ---- bookkeeping for render() ----
-        # stored info from most recent reset() and step(), used by render()
         self._last_reset_info = None
         self._last_step_info = None
         self._last_reward = None
+
+    def _get_features_for_range(self, start_idx, num_steps):
+        """Get feature values for a range of timesteps."""
+        if self.feature_cache is None or self.num_features == 0:
+            return np.array([])
+
+        end_idx = start_idx + num_steps
+
+        if end_idx > len(self.feature_cache):
+            # Handle edge case - pad with last available features
+            available = self.feature_cache[start_idx:]
+            padding_needed = num_steps - len(available)
+            if padding_needed > 0:
+                padding = np.tile(self.feature_cache[-1], (padding_needed, 1))
+                features = np.vstack([available, padding])
+            else:
+                features = available
+        else:
+            features = self.feature_cache[start_idx:end_idx]
+
+        # Flatten: [T, num_features] -> [T * num_features]
+        return features.flatten()
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -63,6 +108,9 @@ class ISOEnv(gym.Env):
         self._expected = self.pred_data[idx: idx + self.T]
         self._realized = self.actual_data[idx: idx + self.T]
 
+        # Get features for this day
+        self._current_features = self._get_features_for_range(idx, self.T)
+
         # Calculate the current timestamp for this day
         current_time = self.base_timestamp + timedelta(minutes=30 * idx)
 
@@ -75,7 +123,10 @@ class ISOEnv(gym.Env):
         # store for render()
         self._last_reset_info = info
 
-        return self._expected, info
+        # Observation: predicted consumption + features
+        obs = np.concatenate([self._expected, self._current_features])
+
+        return obs, info
 
     def step(self, action):
         # 1. EVALUATION (Before moving the pointer)
@@ -109,8 +160,17 @@ class ISOEnv(gym.Env):
             print("!!! REACHED END OF CSV - RESTARTING FROM ROW 0 !!!")
             self._next_start_idx = 0
 
+        # Get the next observation (for the next day)
+        next_idx = self._next_start_idx
+        if next_idx + self.T > self.total_rows:
+            next_idx = 0
+
+        next_expected = self.pred_data[next_idx: next_idx + self.T]
+        next_features = self._get_features_for_range(next_idx, self.T)
+        next_obs = np.concatenate([next_expected, next_features])
+
         # One step = One day. Always terminated=True.
-        return self._expected, -cost, True, False, step_info
+        return next_obs, -cost, True, False, step_info
 
     def render(self):
         """
@@ -135,8 +195,14 @@ class ISOEnv(gym.Env):
         print(f"--- [DAY] ---")
         print(f"CSV Row Range: {start_row} to {end_row}")
         print(f"Calendar Date: {info['timestamp'].strftime('%Y-%m-%d')}")
-        print(f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}")
-        print("-" * 70)
+
+        # Build header dynamically with feature columns
+        header = f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}"
+        if self.num_features > 0:
+            for col in self.feature_columns:
+                header += f" | {col:<10}"
+        print(header)
+        print("-" * (70 + self.num_features * 13))
 
         rows = []
         for i in range(0, self.T, 4):
@@ -148,18 +214,32 @@ class ISOEnv(gym.Env):
             d = step_info['dispatch'][i]
             pr = step_info['prices'][i]
 
-            print(f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}")
+            row_str = f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}"
 
-            rows.append({
+            row_dict = {
                 "slot_time": slot_time,
                 "row_num": int(row_num),
                 "pred": float(p),
                 "actual": float(a),
                 "dispatch": float(d),
                 "price": float(pr)
-            })
+            }
 
-        print("-" * 70)
+            # Add feature values
+            if self.num_features > 0:
+                feature_start_idx = i * self.num_features
+                feature_end_idx = feature_start_idx + self.num_features
+                feature_values = self._current_features[feature_start_idx:feature_end_idx]
+
+                for j, col in enumerate(self.feature_columns):
+                    val = feature_values[j]
+                    row_str += f" | {val:<10.4f}"
+                    row_dict[col] = float(val)
+
+            print(row_str)
+            rows.append(row_dict)
+
+        print("-" * (70 + self.num_features * 13))
         print(f"Day Summary: Avg MAE = {step_info['mae']:.4f}\n")
 
         # return a structured record identical in content to what was printed
@@ -198,8 +278,10 @@ if __name__ == "__main__":
         obs, info = env.reset()
 
         # Dummy Action (Example: 48 prices, 48 dispatch values)
+        # Note: obs now includes features, but we still use just the first 48 values (predictions)
+        predictions_only = obs[:env.T]
         dummy_prices = np.linspace(0.1, 0.5, 48)
-        action = np.concatenate([dummy_prices, obs])
+        action = np.concatenate([dummy_prices, predictions_only])
 
         _, reward, _, _, step_info = env.step(action)
 

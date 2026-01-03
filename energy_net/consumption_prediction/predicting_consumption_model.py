@@ -172,7 +172,7 @@ def predict_consumption(model, feature_cols, feature_engineering_fn, date_str, t
 # =========================
 
 def generate_day_predictions(model, feature_cols, feature_engineering_fn,
-                             start_date, num_days=1, output_csv=None):
+                             start_date, num_days=1, output_csv=None, include_features=False):
     """
     Generate hourly predictions for one or more consecutive days.
 
@@ -183,11 +183,13 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
         start_date: Starting date in format 'YYYY-MM-DD'
         num_days: Number of consecutive days to predict (default 1)
         output_csv: Path to save the predictions CSV file (optional)
+        include_features: If True, include all feature columns in output (default False)
 
     Returns:
-        DataFrame with predictions for every hour
+        DataFrame with predictions (and optionally features)
     """
     predictions = []
+    all_features = [] if include_features else None
     current_date = pd.to_datetime(start_date)
 
     for day in range(num_days):
@@ -210,11 +212,28 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
                 "Predicted_Consumption": round(consumption, 2)
             })
 
+            # Extract features if requested
+            if include_features:
+                dt = pd.to_datetime(f"{date_str} {time_str}")
+                temp_df = pd.DataFrame({"Datetime": [dt]})
+                temp_df = feature_engineering_fn(temp_df)
+                features = temp_df[feature_cols].iloc[0].to_dict()
+                all_features.append(features)
+
     pred_df = pd.DataFrame(predictions)
+
+    # Add feature columns if requested
+    if include_features:
+        features_df = pd.DataFrame(all_features)
+        pred_df = pd.concat([pred_df, features_df], axis=1)
 
     if output_csv:
         pred_df.to_csv(output_csv, index=False)
-        print(f"\nPredictions saved to: {output_csv}")
+        if include_features:
+            print(f"\nPredictions with {len(feature_cols)} features saved to: {output_csv}")
+            print(f"Feature columns: {feature_cols}")
+        else:
+            print(f"\nPredictions saved to: {output_csv}")
 
     print(f"Generated {len(pred_df)} hourly predictions for {num_days} day(s)")
 
@@ -256,6 +275,7 @@ class EnergyPredictor:
         """
         self.target_col = target_col
         self.feature_engineering_fn = feature_engineering_fn or default_time_features
+        self.default_include_features = False  # Default behavior for predict_days
 
         print("=" * 70)
         print("CREATING ENERGY CONSUMPTION PREDICTOR")
@@ -301,7 +321,7 @@ class EnergyPredictor:
             time_str
         )
 
-    def predict_days(self, start_date, num_days=1, output_csv=None):
+    def predict_days(self, start_date, num_days=1, output_csv=None, include_features=None):
         """
         Generate predictions for multiple days.
 
@@ -309,17 +329,24 @@ class EnergyPredictor:
             start_date: Starting date in format 'YYYY-MM-DD'
             num_days: Number of days to predict
             output_csv: Optional path to save results
+            include_features: If True, include all feature columns in output.
+                            If None, uses default_include_features set during creation.
 
         Returns:
-            DataFrame with predictions
+            DataFrame with predictions (and optionally features)
         """
+        # Use default if not explicitly specified
+        if include_features is None:
+            include_features = self.default_include_features
+
         return generate_day_predictions(
             self.model,
             self.feature_cols,
             self.feature_engineering_fn,
             start_date,
             num_days,
-            output_csv
+            output_csv,
+            include_features
         )
 
 
@@ -348,22 +375,27 @@ def advanced_time_features(df):
 
     return df
 
+
 # =========================
 # 9. Main Predictor Function
 # =========================
 
-def create_predictor(csv_path, feature_engineering_fn=None):
+def create_predictor(csv_path, feature_engineering_fn=None, include_features=False):
     """
     Backward compatible function that creates a predictor.
 
     Args:
         csv_path: Path to training data
         feature_engineering_fn: Optional custom feature function
+        include_features: If True, predict_days will include features by default (default False)
 
     Returns:
         EnergyPredictor instance
     """
-    return EnergyPredictor(csv_path, feature_engineering_fn=feature_engineering_fn)
+    predictor = EnergyPredictor(csv_path, feature_engineering_fn=feature_engineering_fn)
+    predictor.default_include_features = include_features
+    return predictor
+
 
 def save_predictions_with_train_test_split(
         data_file,
@@ -373,7 +405,8 @@ def save_predictions_with_train_test_split(
         output_file='consumption_predictions.csv',
         mode='use_index',  # 'use_index' or 'grid'
         feature_engineering_fn=None,
-        target_col="Consumption"
+        target_col="Consumption",
+        include_features=True
 ):
     """
     Generate consumption predictions for the test period and save to CSV.
@@ -387,6 +420,7 @@ def save_predictions_with_train_test_split(
         mode: 'use_index' (use test timestamps) or 'grid' (uniform grid)
         feature_engineering_fn: Custom feature engineering function (optional)
         target_col: Name of the target column (default "Consumption")
+        include_features: If True, include all feature columns in output (default True)
 
     Returns:
         Tuple of (output_file path, test_file path)
@@ -425,7 +459,8 @@ def save_predictions_with_train_test_split(
     print(f"Testing data: {len(test_df)} rows ({test_df.index[0]} to {test_df.index[-1]})")
 
     if len(test_df) == 0:
-        raise ValueError("Test split is empty after rounding to midnight — reduce train_test_split or check data length.")
+        raise ValueError(
+            "Test split is empty after rounding to midnight — reduce train_test_split or check data length.")
 
     test_end_date = test_df.index[-1]
 
@@ -448,35 +483,59 @@ def save_predictions_with_train_test_split(
 
         freq_str = f"{minutes}T"
         timestamps = pd.date_range(start=test_start_date, end=test_end_date, freq=freq_str, inclusive='both')
-        print(f"Using uniform grid from {test_start_date} to {test_end_date} with freq={freq_str} (count={len(timestamps)})")
+        print(
+            f"Using uniform grid from {test_start_date} to {test_end_date} with freq={freq_str} (count={len(timestamps)})")
 
         if len(timestamps) != len(test_df):
             print("NOTE: grid length differs from test_df length. If you want exact match, use mode='use_index'.")
     else:
         raise ValueError("mode must be 'use_index' or 'grid'")
 
-    # Generate predictions for each timestamp
+    # Generate predictions (and optionally features) for each timestamp
     predictions = []
+    all_features = [] if include_features else None
     failures = 0
+
     for i, ts in enumerate(timestamps):
         date_str = ts.strftime("%Y-%m-%d")
         time_str = ts.strftime("%H:%M")
         try:
             pred = predictor.predict(date_str, time_str)
+
+            # Also extract the features if requested
+            if include_features:
+                temp_df = pd.DataFrame({"Datetime": [ts]})
+                temp_df = predictor.feature_engineering_fn(temp_df)
+                features = temp_df[predictor.feature_cols].iloc[0].to_dict()
+                all_features.append(features)
+
         except Exception as e:
             pred = 0.0
+            if include_features:
+                features = {col: 0.0 for col in predictor.feature_cols}
+                all_features.append(features)
             failures += 1
             if failures <= 10:
                 print(f"Warning: Prediction failed for {date_str} {time_str}: {e}")
 
         predictions.append(pred)
 
-    # Save predictions
+    # Create DataFrame with predictions
     predictions_df = pd.DataFrame({
         'timestamp': timestamps,
         'predicted_consumption': predictions
     })
+
+    # Add all feature columns if requested
+    if include_features:
+        features_df = pd.DataFrame(all_features)
+        predictions_df = pd.concat([predictions_df, features_df], axis=1)
+        print(
+            f"Saved {len(predictions)} predictions with {len(predictor.feature_cols)} features to {output_file} (failures={failures})")
+        print(f"Feature columns included: {predictor.feature_cols}")
+    else:
+        print(f"Saved {len(predictions)} predictions to {output_file} (failures={failures})")
+
     predictions_df.to_csv(output_file, index=False)
-    print(f"Saved {len(predictions)} predictions to {output_file} (failures={failures})")
 
     return output_file, test_file

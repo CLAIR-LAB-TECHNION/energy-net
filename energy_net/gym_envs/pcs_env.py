@@ -19,6 +19,7 @@ class PCSEnv(gym.Env):
     - Actions are normalized in [-1, 1] and passed directly to PCS/Battery.
     - No unit conversions to kWh/kW — everything stays in the same internal units.
     - Loads pre-computed predictions from CSV file.
+    - Automatically detects and includes feature columns in observation space.
     """
 
     def __init__(self,
@@ -31,14 +32,13 @@ class PCSEnv(gym.Env):
                  base_price=0.10,
                  price_volatility=0.15,
                  log_path='../../tests/gym/logs',
-                render_mode: str | None = None):  # <--- New optional parameter
+                 render_mode: str | None = None):
 
         super().__init__()
 
         # -------------------------
         # Directory setup
         # -------------------------
-        # Ensure the directory exists so the loggers don't crash
         if not os.path.exists(log_path):
             os.makedirs(log_path)
 
@@ -52,9 +52,10 @@ class PCSEnv(gym.Env):
         self.shortage_penalty = shortage_penalty
         self.base_price = base_price
         self.price_volatility = price_volatility
-        self.log_path = log_path  # Storing it in case it's needed later
+        self.log_path = log_path
         self.render_mode = render_mode
         self.last_action = None
+
         # -------------------------
         # Load test data
         # -------------------------
@@ -68,7 +69,7 @@ class PCSEnv(gym.Env):
         self.test_end_date = self.test_df.index[-1]
 
         # -------------------------
-        # Load predictions
+        # Load predictions and automatically detect features
         # -------------------------
         pred_df = pd.read_csv(
             predictions_file,
@@ -78,7 +79,20 @@ class PCSEnv(gym.Env):
         self.pred_df = pred_df
         self.prediction_cache = pred_df['predicted_consumption'].values
         self.prediction_timestamps = pred_df.index
+
+        # Automatically detect feature columns (everything except timestamp and predicted_consumption)
+        excluded_cols = {'predicted_consumption'}
+        self.feature_columns = [col for col in pred_df.columns if col not in excluded_cols]
+        self.num_features = len(self.feature_columns)
+
         print(f"Loaded {len(self.prediction_cache)} aligned predictions")
+        print(f"Detected {self.num_features} feature columns: {self.feature_columns}")
+
+        # Cache feature values for fast lookup
+        if self.num_features > 0:
+            self.feature_cache = pred_df[self.feature_columns].values
+        else:
+            self.feature_cache = None
 
         # ==============================================================
         # Battery
@@ -89,7 +103,6 @@ class PCSEnv(gym.Env):
             "max": 100.0,
             "init": 0.0
         }
-        # Dynamic pathing using os.path.join for safety
         battery = Battery(
             dynamics=battery_dynamics,
             config=battery_config,
@@ -129,13 +142,20 @@ class PCSEnv(gym.Env):
             dtype=np.float32
         )
 
-        obs_dim = 3 + prediction_horizon
+        # Observation space:
+        # [storage, consumption, price] + [predicted_consumption * horizon] + [features]
+        obs_dim = 3 + prediction_horizon + self.num_features
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
             shape=(obs_dim,),
             dtype=np.float32
         )
+
+        print(f"Observation space dimension: {obs_dim}")
+        print(f"  - Base features (storage, consumption, price): 3")
+        print(f"  - Predicted consumption horizon: {prediction_horizon}")
+        print(f"  - Additional time features: {self.num_features}")
 
         # ==============================================================
         # Episode state
@@ -153,6 +173,7 @@ class PCSEnv(gym.Env):
         # Price curve
         # ==============================================================
         self.price_curve = self._generate_price_curve(self.max_steps)
+
     def get_money(self):
         """Returns the accumulated money made from transactions, ignoring shortage penalties."""
         return self.total_money_earned
@@ -161,11 +182,10 @@ class PCSEnv(gym.Env):
         """Generate a simple price curve with some variation."""
         prices = []
         for i in range(num_steps):
-            # Simple sinusoidal price variation
-            time_of_day = (i * self.dt * 24) % 24  # hour of day
+            time_of_day = (i * self.dt * 24) % 24
             variation = np.sin(2 * np.pi * time_of_day / 24) * self.price_volatility
             price = self.base_price + variation
-            prices.append(max(0.01, price))  # ensure positive
+            prices.append(max(0.01, price))
         return np.array(prices)
 
     def _get_current_price(self):
@@ -186,6 +206,20 @@ class PCSEnv(gym.Env):
 
         return self.prediction_cache[current_idx:end_idx]
 
+    def _get_current_features(self):
+        """Get current feature values from preloaded cache."""
+        if self.feature_cache is None or self.num_features == 0:
+            return np.array([])
+
+        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
+        current_idx = int(days_from_start / self.dt)
+
+        if current_idx >= len(self.feature_cache):
+            # Use last available features if we're beyond the cache
+            return self.feature_cache[-1]
+
+        return self.feature_cache[current_idx]
+
     def set_price_curve(self, prices: np.ndarray):
         """External setter to inject prices from the ISO agent."""
         if len(prices) != self.max_steps:
@@ -193,33 +227,22 @@ class PCSEnv(gym.Env):
         self.price_curve = prices
 
     def reset(self, start_date=None, options=None, seed=None):
-        # 1. Standard Gymnasium seeding
         super().reset(seed=seed)
 
-        # 2. Reset intra-day progress ONLY
         self.current_step = 0
         self.total_reward = 0.0
         self.total_money_earned = 0.0
         self.total_shortage_penalty = 0.0
         self.shortage_count = 0
 
-        # 3. Handle the Calendar
         if start_date is not None:
-            # Manual override (e.g., if you want to jump to a specific day)
             self.current_datetime = start_date
         else:
-            # Check if we are at the end of the dataset
             if self.current_datetime >= self.test_end_date:
                 print("Reached end of dataset. Looping back to start.")
                 self.current_datetime = self.test_start_date
 
-            # LOGIC: If we don't change self.current_datetime here,
-            # it stays at the value it reached at the end of the last episode
-            # (which is 00:00 of the next day).
-
-        # 4. Wipe physical state (battery)
         self.pcs.reset(initial_storage_unit_level=0)
-
         self.last_action = None
 
         return self._get_obs(), {}
@@ -229,48 +252,30 @@ class PCSEnv(gym.Env):
         action: normalized intent in [-10, 10]
         All returned values and checks use the same internal "units".
         """
-
-        # Clip and interpret normalized action
         raw_action = float(action[0])
         self.last_action = raw_action
 
-        # Storage before (internal units, 0..100)
         storage_before = self.pcs.get_total_storage()
-
-        # Battery entity
         battery_entity = self.pcs.storage_units[0]
 
-        # Current timestep state
         current_time = self.current_step * self.dt
         state = State()
         state.set_attribute('time', current_time)
 
-        # Pass normalized intent directly to PCS/Battery
         actions = {"Battery_0": Action({'value': raw_action})}
-
-        # Apply PCS update
         energy_sold_or_bought = self.pcs.update(state, actions)
 
         storage_after = self.pcs.get_total_storage()
-
-        # Total consumption reported by PCS
         consumption_units = float(self.pcs.get_consumption())
 
-        # Available discharge reported by battery
         try:
             available_discharge_units = float(battery_entity.get_available_discharge_capacity())
         except Exception:
             available_discharge_units = getattr(battery_entity, 'available_discharge', 0.0)
 
-        # ----------------------------------------------------------
-        # Split Reward Logic
-        # ----------------------------------------------------------
-
-        # 1. Calculate transaction money (Price * units moved)
-        # Note: -energy_sold_or_bought because negative = selling = revenue
+        # Calculate reward
         step_money = self._get_current_price() * -energy_sold_or_bought
 
-        # 2. Shortage check and penalty
         shortage = consumption_units > available_discharge_units
         step_penalty = 0.0
         if shortage:
@@ -278,14 +283,9 @@ class PCSEnv(gym.Env):
             self.shortage_count += 1
             self.total_shortage_penalty += step_penalty
 
-        # 3. Update trackers
         self.total_money_earned += step_money
-
-        # The step reward for the RL agent includes the shortage penalty
         reward = step_money - step_penalty
         self.total_reward += reward
-
-        # ----------------------------------------------------------
 
         # Advance time
         self.current_step += 1
@@ -312,17 +312,27 @@ class PCSEnv(gym.Env):
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self):
-        # Normalizations in observation
+        """
+        Build observation vector:
+        [storage, consumption, price] + [predicted_consumption...] + [features...]
+        """
+        # Base observations
         current_storage = self.pcs.get_total_storage() / 100.0
         current_consumption = self.pcs.get_consumption() / 10.0
         current_price = self._get_current_price() / self.base_price
 
+        # Predicted consumption
         predicted_consumption = self._get_predicted_consumption(self.prediction_horizon)
         predicted_consumption = predicted_consumption / 10.0
 
+        # Current time features
+        current_features = self._get_current_features()
+
+        # Concatenate all parts
         obs = np.concatenate([
             [current_storage, current_consumption, current_price],
-            predicted_consumption
+            predicted_consumption,
+            current_features
         ])
 
         return obs.astype(np.float32)
@@ -337,17 +347,23 @@ class PCSEnv(gym.Env):
             if self.last_action is not None:
                 print(f"Last Action (Battery intent): {self.last_action:.2f} units")
             print(f"Current Price: {self._get_current_price():.4f} $/unit")
+
+            # Show current features if available
+            if self.num_features > 0:
+                features = self._get_current_features()
+                print(f"Current Features:")
+                for i, col in enumerate(self.feature_columns):
+                    print(f"  {col}: {features[i]:.4f}")
+
             print(f"Total Reward (Net): ${self.total_reward:.2f}")
             print(f"Total Money (Gross): ${self.total_money_earned:.2f}")
             print(f"Total Penalties: ${self.total_shortage_penalty:.2f}")
             print(f"Shortages: {self.shortage_count}")
             print(f"{'=' * 60}")
-    # ---------- new helpers for indexing / sync ----------
+
     def get_step_index(self) -> int:
         """
         Return the global half-hour step index since test_start_date.
-        This uses current_datetime so it reflects where the env currently is
-        in the full dataset (not just intra-day current_step).
         """
         days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
         return int(days_from_start / self.dt)
@@ -355,15 +371,11 @@ class PCSEnv(gym.Env):
     def set_step_index(self, idx: int):
         """
         Set the environment's current_datetime and intra-day current_step
-        from a global half-hour index. Useful to align the PCS env to a
-        desired point in the dataset without 'rewinding' oddities.
+        from a global half-hour index.
         """
         idx = int(idx)
-        # compute datetime (30 minutes per step)
         self.current_datetime = self.test_start_date + timedelta(minutes=30 * idx)
-        # set intra-day index (0..max_steps-1)
         self.current_step = int(idx % self.max_steps)
-
 
 
 if __name__ == "__main__":
@@ -371,11 +383,11 @@ if __name__ == "__main__":
 
     num_days_to_run = 3
     accumulated_reward = 0.0
-    render_every_n_steps = 1  # render once every 6 steps (3 hours)
+    render_every_n_steps = 1
 
     for day in range(num_days_to_run):
         obs, info = env.reset()
-        env.render()  # show initial state
+        env.render()
 
         print(f"\n{'=' * 60}")
         print(f"STARTING DAY {day + 1}  |  Date: {env.current_datetime.strftime('%Y-%m-%d')}")
@@ -389,7 +401,6 @@ if __name__ == "__main__":
 
             obs, reward, terminated, truncated, info = env.step(action)
 
-            # throttled render — change N or set to 1 to render every step
             if env.render_mode == "human" and env.current_step % render_every_n_steps == 0:
                 env.render()
 
