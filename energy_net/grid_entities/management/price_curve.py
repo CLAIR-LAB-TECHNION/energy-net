@@ -1,20 +1,41 @@
 from abc import ABC, abstractmethod
 import numpy as np
 
+
 class PriceCurveStrategy(ABC):
-    """"
-    This is an abstract base class for different price curve strategies. It is not the same as an ISO class,
-    which is responsible for market clearing and other functions, and may have some level of agency.
-    Instead, this is just a way to encapsulate different methods for generating price curves, one of which
-    might be a trained ISO model. It is helpful for gym environments that need to generate price curves.
     """
-    @abstractmethod
-    def calculate_price(self, observation: np.ndarray) -> np.ndarray:
+    Abstract base class for different price curve strategies.
+
+    Subclasses can either:
+    1. Implement calculate_price() for symmetric buy/sell pricing
+    2. Implement calculate_buy_price() AND calculate_sell_price() for asymmetric pricing
+    """
+
+    def calculate_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
-        Takes an observation (predictions + features) and returns
-        a 48-step price curve.
+        Default implementation that returns the same price for buy and sell.
+        Override this for symmetric pricing, OR override both buy/sell methods.
         """
-        pass
+        raise NotImplementedError(
+            "Must implement either calculate_price() or both "
+            "calculate_buy_price() and calculate_sell_price()"
+        )
+
+    def calculate_buy_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Calculate buying price curve. Defaults to calculate_price().
+        Override for asymmetric buy/sell pricing.
+        """
+        return self.calculate_price(observation)
+
+    def calculate_sell_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Calculate selling price curve. Defaults to calculate_price().
+        Override for asymmetric buy/sell pricing.
+        """
+        return self.calculate_price(observation)
+
+
 class RLPriceCurveStrategy(PriceCurveStrategy):
     """
     A strategy that uses a trained ISO RL model to generate price curves.
