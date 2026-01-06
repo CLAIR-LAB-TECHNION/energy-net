@@ -29,7 +29,7 @@ class PCSEnv(gym.Env):
                  dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
                  prediction_horizon=48,
-                 shortage_penalty=100.0,
+                 shortage_penalty=1.0,
                  price_strategy: PriceCurveStrategy = None,
         log_path='../../tests/gym/logs',
                  render_mode: str | None = None):

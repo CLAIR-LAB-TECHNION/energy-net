@@ -10,46 +10,6 @@ import numpy as np
 from iso_env import ISOEnv
 
 
-class ISOPricingWrapper:
-    """Direct bridge between an ISO RL model and the PCS environment.
-    Converts predicted consumption + features into a realistic
-    price curve (in $/unit) using the ISO policy's first 48 action values.
-    """
-
-    def __init__(self, iso_model, base_price=0.10, price_scale=0.20):
-        self.iso_model = iso_model
-        self.base_price = base_price
-        self.price_scale = price_scale
-
-    def generate_price_curve(self, observation: np.ndarray) -> np.ndarray:
-        """
-        Generate price curve from ISO model observation.
-
-        Args:
-            observation: Full ISO observation (predictions + features)
-
-        Returns:
-            48-element price curve
-        """
-        # ISO expects its full observation (predictions + features)
-        obs = observation.astype(np.float32)
-
-        # Query the ISO policy deterministically
-        action, _ = self.iso_model.predict(obs, deterministic=True)
-
-        # First 48 entries represent an unscaled price signal
-        raw_prices = action[:48]
-
-        # Robust min-max normalization
-        min_p, max_p = raw_prices.min(), raw_prices.max()
-        denom = (max_p - min_p) + 1e-8
-        normalized = (raw_prices - min_p) / denom
-
-        # Center and scale into a realistic price range
-        scaled_prices = (self.base_price - self.price_scale / 2) + (normalized * self.price_scale)
-        return scaled_prices.astype(np.float32)
-
-
 class AlternatingISOEnv(ISOEnv):
     """An ISO environment that internally coordinates a PCS environment.
 
