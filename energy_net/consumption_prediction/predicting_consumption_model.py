@@ -406,7 +406,7 @@ def save_predictions_with_train_test_split(
         mode='use_index',  # 'use_index' or 'grid'
         feature_engineering_fn=None,
         target_col="Consumption",
-        include_features=True
+        include_features=False
 ):
     """
     Generate consumption predictions for the test period and save to CSV.

@@ -17,7 +17,7 @@ def main():
     try:
         # Calling the last function with its default parameters
         output_file, test_file = save_predictions_with_train_test_split(data_file ="synthetic_household_consumption.csv",
-                                                                        output_file='consumption_predictions.csv')
+                                                                        output_file='consumption_predictions_without_features.csv')
 
         print("-" * 30)
         print(f"SUCCESS!")
