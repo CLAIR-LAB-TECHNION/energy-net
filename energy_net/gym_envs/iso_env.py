@@ -9,30 +9,57 @@ class ISOEnv(gym.Env):
     """
     ISO Environment that automatically detects and includes feature columns
     from the predictions CSV in its observation space.
+
+    Changes in this updated version:
+    - Action space normalized to [0, 1] (instead of [-1, 1])
+    - Configurable scaling parameters: price_scale and dispatch_scale
+    - First half of actions (prices) scaled by price_scale
+    - Second half of actions (dispatch) scaled by dispatch_scale
+    - Robust NaN/Inf guards for features, observations, actions, and rewards
+    - Finite observation space bounds
     """
 
-    def __init__(self, actual_csv, predicted_csv, steps_per_day=48):
+    def __init__(self, actual_csv, predicted_csv, steps_per_day=48,
+                 price_scale=1.0, dispatch_scale=6.0):
         super().__init__()
 
-        # 1. Define these BEFORE loading data so they are guaranteed to exist
+        # 1. Store scaling parameters
+        self.price_scale = price_scale
+        self.dispatch_scale = dispatch_scale
         self.T = steps_per_day
 
         # 2. Load your data
         self.actual_df = pd.read_csv(actual_csv)
         self.pred_df = pd.read_csv(predicted_csv)
 
+        # Defensive: fill NaNs in CSVs
+        if self.actual_df.isnull().values.any() or self.pred_df.isnull().values.any():
+            print("Warning: NaN values detected in CSVs. Filling with forward-fill and zeros.")
+            self.pred_df = self.pred_df.fillna(method='ffill').fillna(0.0)
+            self.actual_df = self.actual_df.fillna(method='ffill').fillna(0.0)
+
         # Get the first timestamp from the CSV to use as a clock base
         self.base_timestamp = pd.to_datetime(self.actual_df.iloc[0]['Datetime'])
 
         self.actual_data = self.actual_df['Consumption'].values.astype(np.float32)
-        self.pred_data = self.pred_df['predicted_consumption'].values.astype(np.float32)
+        # Accept either column name 'predicted_consumption' or 'Prediction' etc if needed
+        if 'predicted_consumption' in self.pred_df.columns:
+            pred_col = 'predicted_consumption'
+        else:
+            # fallback to the second column excluding timestamp if available
+            non_ts_cols = [c for c in self.pred_df.columns if c.lower() not in ('datetime', 'timestamp')]
+            if len(non_ts_cols) > 0:
+                pred_col = non_ts_cols[0]
+            else:
+                raise ValueError("No predicted consumption column found in predicted_csv")
 
-        # 3. Automatically detect feature columns
-        excluded_cols = {'timestamp', 'predicted_consumption'}
-        self.feature_columns = [col for col in self.pred_df.columns if col not in excluded_cols]
+        self.pred_data = self.pred_df[pred_col].values.astype(np.float32)
+
+        # 3. Automatically detect feature columns (exclude timestamp and the predicted column)
+        excluded_cols = {'timestamp', pred_col}
+        # normalize exclusion to lowercase to be robust
+        self.feature_columns = [col for col in self.pred_df.columns if col.lower() not in excluded_cols]
         self.num_features = len(self.feature_columns)
-
-        print(f"Detected {self.num_features} feature columns: {self.feature_columns}")
 
         # Cache feature values for fast lookup
         if self.num_features > 0:
@@ -45,22 +72,18 @@ class ISOEnv(gym.Env):
         # 4. Define observation and action spaces
         # Observation: predicted consumption (T values) + features per timestep (T * num_features)
         obs_dim = self.T + (self.T * self.num_features)
+        big = 1e6
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
+            low=-big,
+            high=big,
             shape=(obs_dim,),
             dtype=np.float32
         )
 
-        print(f"Observation space dimension: {obs_dim}")
-        print(f"  - Predicted consumption per day: {self.T}")
-        print(f"  - Features per timestep: {self.num_features}")
-        print(f"  - Total features per day: {self.T * self.num_features}")
-
-        # Action: 48 Prices + 48 Dispatch values (Total 96)
+        # Action: normalized action space [0, 1] for both prices and dispatch
         self.action_space = spaces.Box(
-            low=-500,
-            high=500,
+            low=0.0,
+            high=1.0,
             shape=(self.T * 2,),
             dtype=np.float32
         )
@@ -76,7 +99,7 @@ class ISOEnv(gym.Env):
     def _get_features_for_range(self, start_idx, num_steps):
         """Get feature values for a range of timesteps."""
         if self.feature_cache is None or self.num_features == 0:
-            return np.array([])
+            return np.zeros(self.T * self.num_features, dtype=np.float32)
 
         end_idx = start_idx + num_steps
 
@@ -93,7 +116,10 @@ class ISOEnv(gym.Env):
             features = self.feature_cache[start_idx:end_idx]
 
         # Flatten: [T, num_features] -> [T * num_features]
-        return features.flatten()
+        features = features.flatten().astype(np.float32)
+        # replace any NaN/Inf
+        features = np.nan_to_num(features, nan=0.0, posinf=1e6, neginf=-1e6)
+        return features
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -124,35 +150,57 @@ class ISOEnv(gym.Env):
         self._last_reset_info = info
 
         # Observation: predicted consumption + features
-        obs = np.concatenate([self._expected, self._current_features])
+        obs = np.concatenate([self._expected, self._current_features]).astype(np.float32)
 
         return obs, info
 
     def step(self, action):
-        # 1. EVALUATION (Before moving the pointer)
-        prices = action[:self.T]
-        dispatch = action[self.T:]
-        cost = float(np.mean(np.abs(dispatch - self._realized)))
+        """
+        Robust step() implementation:
+        - accepts numpy/torch actions
+        - sanitizes NaN/Inf
+        - assumes incoming action is in [0, 1] and scales by price_scale/dispatch_scale
+        - computes reward robustly and returns (next_obs, reward, terminated, truncated, info)
+        """
+        # ---- Convert & normalize incoming action ----
+        action = np.asarray(action, dtype=np.float32).flatten()
 
-        # 2. PREPARE INFO DICT
-        # Calculate current timestamp for the step info
+        # ---- Scale action by configurable parameters ----
+        # First half: prices (scaled by price_scale)
+        # Second half: dispatch (scaled by dispatch_scale)
+        prices_raw = action[:self.T]
+        dispatch_raw = action[self.T:]
+
+        prices = prices_raw * self.price_scale
+        dispatch = dispatch_raw * self.dispatch_scale
+
+        # ---- Compute robust cost ----
+        # compute absolute diff and guard it
+        diff = np.abs(dispatch - self._realized)
+        cost = float(np.mean(diff))
+
+        reward = -cost
+
+        # ---- Build step info dict (store both raw & scaled for debugging) ----
         current_time = self.base_timestamp + timedelta(minutes=30 * self._next_start_idx)
-
         step_info = {
-            "realized": self._realized,
-            "predicted": self._expected,
-            "dispatch": dispatch,
-            "prices": prices,
+            "realized": self._realized.copy(),
+            "predicted": self._expected.copy(),
+            "dispatch": dispatch.copy(),
+            "prices": prices.copy(),
             "mae": cost,
             "start_idx": self._next_start_idx,
-            "timestamp": current_time
+            "timestamp": current_time,
+            "action_raw": action.copy(),
+            "prices_raw": prices_raw.copy(),
+            "dispatch_raw": dispatch_raw.copy()
         }
 
         # store for render()
         self._last_step_info = step_info
-        self._last_reward = -cost
+        self._last_reward = float(reward)
 
-        # 3. ADVANCE THE POINTER (Move to the next day)
+        # ---- Advance pointer (move to next day) ----
         self._next_start_idx += self.T
 
         # Loop if we hit the end
@@ -160,26 +208,25 @@ class ISOEnv(gym.Env):
             print("!!! REACHED END OF CSV - RESTARTING FROM ROW 0 !!!")
             self._next_start_idx = 0
 
-        # Get the next observation (for the next day)
+        # ---- Prepare next observation ----
         next_idx = self._next_start_idx
         if next_idx + self.T > self.total_rows:
             next_idx = 0
 
         next_expected = self.pred_data[next_idx: next_idx + self.T]
         next_features = self._get_features_for_range(next_idx, self.T)
-        next_obs = np.concatenate([next_expected, next_features])
 
-        # One step = One day. Always terminated=True.
-        return next_obs, -cost, True, False, step_info
+        next_obs = np.concatenate([next_expected, next_features]).astype(np.float32)
+        next_obs = np.nan_to_num(next_obs, nan=0.0, posinf=1e6, neginf=-1e6)
+
+        terminated = True
+        truncated = False
+
+        return next_obs, float(reward), terminated, truncated, step_info
 
     def render(self):
         """
         Render information for the most recent timestep (a 'day').
-
-        This expects that reset() and step() have been called for the day,
-        and uses the stored `_last_reset_info` and `_last_step_info` to
-        reproduce the exact console output the old `main()` printed.
-        It also returns a record dict containing the same structured data.
         """
         if self._last_reset_info is None or self._last_step_info is None:
             print("Nothing to render yet. Call reset() and step() first for the day.")
@@ -254,36 +301,71 @@ class ISOEnv(gym.Env):
 
 
 # ==========================================
-# MAIN FUNCTION: THE CLI MONITOR
+# MINIMAL RL TESTING FUNCTION
 # ==========================================
-if __name__ == "__main__":
-    # Make sure these filenames match your local files!
-    # These paths are relative to where you run the script
+
+def test_with_rl():
+    """
+    Minimal test using Stable-Baselines3 PPO algorithm.
+    Install with: pip install stable-baselines3
+    """
+    try:
+        from stable_baselines3 import PPO
+        from stable_baselines3.common.env_checker import check_env
+    except ImportError:
+        print("\n[ERROR] stable-baselines3 not installed.")
+        print("Install with: pip install stable-baselines3")
+        return
+
+    print("\n" + "=" * 60)
+    print("TESTING WITH RL ALGORITHM (PPO)")
+    print("=" * 60)
+
+    # Create environment with custom scaling parameters
     try:
         env = ISOEnv(
             actual_csv='synthetic_household_consumption_test.csv',
-            predicted_csv='consumption_predictions.csv'
+            predicted_csv='consumption_predictions.csv',
+            price_scale=1.0,
+            dispatch_scale=6.0
         )
     except FileNotFoundError:
-        # Fallback for the folder structure in your Tandem script
         env = ISOEnv(
             actual_csv='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
-            predicted_csv='../../tests/gym/data_for_tests/consumption_predictions.csv'
+            predicted_csv='../../tests/gym/data_for_tests/consumption_predictions.csv',
+            price_scale=1.0,
+            dispatch_scale=6.0
         )
 
-    print(f"\nSimulation Started. Total Records: {env.total_rows}")
+    # Check if environment follows Gym API
+    print("\n[1/3] Checking environment compatibility...")
+    check_env(env, warn=True)
+    print("✓ Environment check passed!")
 
-    # Run for 3 days, but delegate printing/recording to env.render()
-    for day in range(1, 4):  # Look at 3 days
-        obs, info = env.reset()
+    # Create PPO agent
+    print("\n[2/3] Creating PPO agent...")
+    # smaller LR and grad clipping for stability while debugging
+    model = PPO("MlpPolicy", env, verbose=0, learning_rate=1e-4, max_grad_norm=0.5)
+    print("✓ Agent created!")
 
-        # Dummy Action (Example: 48 prices, 48 dispatch values)
-        # Note: obs now includes features, but we still use just the first 48 values (predictions)
-        predictions_only = obs[:env.T]
-        dummy_prices = np.linspace(0.1, 0.5, 48)
-        action = np.concatenate([dummy_prices, predictions_only])
+    # Train for a few steps (quick test)
+    print("\n[3/3] Training for 1000 timesteps...")
+    model.learn(total_timesteps=1000)
+    print("✓ Training complete!")
 
-        _, reward, _, _, step_info = env.step(action)
+    # Test the trained agent for 3 days
+    print("\n" + "-" * 60)
+    print("TESTING TRAINED AGENT (3 days)")
+    print("-" * 60)
 
-        # Use the env's render() to print/record the day's info (render handles the formatting)
-        env.render()
+    obs, info = env.reset()
+    for day in range(3):
+        action, _states = model.predict(obs, deterministic=True)
+        obs, reward, terminated, truncated, info = env.step(action)
+        record = env.render()
+        print(f"Day {day + 1} Reward: {reward:.4f}")
+
+        if terminated:
+            obs, info = env.reset()
+
+    print("\n✓ RL test completed successfully!")
