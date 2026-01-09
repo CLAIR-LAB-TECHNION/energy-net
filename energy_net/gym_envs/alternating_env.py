@@ -389,11 +389,13 @@ def run_alternating_training(
     history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}
 
     for iteration in range(1, total_iterations + 1):
-        print(f"\n[Iteration {iteration}] ISO Learning Phase ({cycle_days} Days)...")
+        if render:
+            print(f"\n[Iteration {iteration}] ISO Learning Phase ({cycle_days} Days)...")
         # ISO learns optimal pricing given current household behavior
         iso_model.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
 
-        print(f"[Iteration {iteration}] PCS Learning Phase...")
+        if render:
+            print(f"[Iteration {iteration}] PCS Learning Phase...")
 
         base_idx = iso_env._next_start_idx
         day_money_list = []
