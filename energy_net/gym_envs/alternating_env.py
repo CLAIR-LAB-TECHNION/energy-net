@@ -458,8 +458,8 @@ def run_alternating_training(
         history["total_shortages"].append(iteration_shortages)
         history["avg_iso_price"].append(avg_iso_price)
 
-        print(
-            f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
+        if render:
+            print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
 
     print("\n--- TRAINING COMPLETE ---")
     return history
