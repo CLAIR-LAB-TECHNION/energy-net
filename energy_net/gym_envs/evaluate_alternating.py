@@ -306,8 +306,8 @@ def run_experiment(actual_csv,
 
     # TRAINING: expect run_alternating_training to return a dict-like history with keys per-iteration
     training_history = run_alternating_training(
-        actual_csv=actual_csv,
-        pred_csv=pred_csv,
+        test_data_file=actual_csv,
+        predictions_file=pred_csv,
         total_iterations=iterations,
         cycle_days=7,
         render=False
