@@ -310,6 +310,8 @@ def run_alternating_training(
         pcs_algo_kwargs: dict | None = None,
         iso_algo_kwargs: dict | None = None,
         pcs_steps_per_day: int | None = None,
+        test_data_file: str = '../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
+        predictions_file: str = '../../tests/gym/data_for_tests/consumption_predictions.csv',
         verbose: int = 0,
         render: bool = False,
         render_every_n_steps: int = 1,
@@ -317,6 +319,22 @@ def run_alternating_training(
     """
     Tandem ISO <-> PCS training loop with convergence tracking and feature support.
     Uses the RLPriceCurveStrategy to bridge the ISO agent's policy into the PCS environment.
+
+    Args:
+        cycle_days: Number of days per training cycle
+        total_iterations: Total number of training iterations
+        pcs_algo_cls: Algorithm class for PCS agent (default: PPO)
+        iso_algo_cls: Algorithm class for ISO agent (default: PPO)
+        pcs_policy: Policy type for PCS agent
+        iso_policy: Policy type for ISO agent
+        pcs_algo_kwargs: Additional kwargs for PCS algorithm
+        iso_algo_kwargs: Additional kwargs for ISO algorithm
+        pcs_steps_per_day: Steps per day for PCS training
+        test_data_file: Path to test data CSV file
+        predictions_file: Path to predictions CSV file
+        verbose: Verbosity level
+        render: Whether to render the environment
+        render_every_n_steps: Render frequency
     """
 
     if cycle_days < 1:
@@ -328,8 +346,8 @@ def run_alternating_training(
 
     # Initialize the base environment for the household/battery agent (PCS)
     temp_env = PCSEnv(
-        test_data_file='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
-        predictions_file='../../tests/gym/data_for_tests/consumption_predictions.csv',
+        test_data_file=test_data_file,
+        predictions_file=predictions_file,
         render_mode="human" if render else None
     )
     steps_per_day = int(pcs_steps_per_day or temp_env.max_steps)
@@ -351,8 +369,8 @@ def run_alternating_training(
     # 2. Create the ISO (Grid) Environment
     # Note: AlternatingISOEnv needs the PCS model to simulate household responses
     iso_env = AlternatingISOEnv(
-        actual_csv='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
-        predicted_csv='../../tests/gym/data_for_tests/consumption_predictions.csv',
+        actual_csv=test_data_file,
+        predicted_csv=predictions_file,
         pcs_env=base_pcs_env,
         pcs_model=pcs_model,
         render_enabled=render,
@@ -438,11 +456,11 @@ def run_alternating_training(
         history["total_shortages"].append(iteration_shortages)
         history["avg_iso_price"].append(avg_iso_price)
 
-        print(f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
+        print(
+            f">>> Iteration {iteration} Avg Money: ${avg_money:.2f} | Avg MAE: {avg_mae:.4f} | Avg ISO Price: ${avg_iso_price:.4f}")
 
     print("\n--- TRAINING COMPLETE ---")
     return history
-
 if __name__ == "__main__":
     try:
         run_alternating_training(render=True, render_every_n_steps=1)
