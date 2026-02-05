@@ -1,7 +1,6 @@
 from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
-from energy_net.common.utils import setup_logger
 from energy_net.foundation.model import State, Action
 
 
@@ -10,7 +9,7 @@ class Battery(ElementaryGridEntity):
     Battery component managing energy storage.
     """
 
-    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any], log_file: Optional[str] = 'logs/storage.log'):
+    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any]):
         """
         Initializes the Battery with dynamics and configuration parameters.
 
@@ -25,13 +24,8 @@ class Battery(ElementaryGridEntity):
                 - charge_efficiency: Charging efficiency (default: 1.0)
                 - discharge_efficiency: Discharging efficiency (default: 1.0)
                 - init: Initial energy level (default: 0.0)
-            log_file (str, optional): Path to the Battery log file.
         """
-        super().__init__(dynamics, log_file)
-
-        # Set up logger
-        self.logger = setup_logger('Battery', log_file)
-        self.logger.info("Initializing Battery component.")
+        super().__init__(dynamics)
 
         # Set parameters with least restrictive defaults
         self.energy_min: float = config.get('min', 0.0)
@@ -56,8 +50,6 @@ class Battery(ElementaryGridEntity):
             **state_config  # Allow users to add custom state attributes
         })
 
-        self.logger.info(f"Battery initialized with energy level: {self.energy_level} MWh")
-
     def perform_action(self, action: Action) -> None:
         """
         Performs charging or discharging based on the action by delegating to the dynamic.
@@ -70,7 +62,6 @@ class Battery(ElementaryGridEntity):
         action_value = action.get_action('value')
         if action_value is None:
             action_value = 0.0
-        self.logger.debug(f"Performing action: {action_value} MW")
 
         # Delegate the calculation to the dynamics
         previous_energy = self.energy_level
@@ -83,7 +74,6 @@ class Battery(ElementaryGridEntity):
             charge_rate_max=self.charge_rate_max,
             discharge_rate_max=self.discharge_rate_max
         )
-        self.logger.info(f"Battery energy level changed from {previous_energy} MWh to {self.energy_level} MWh")
         self.energy_change = self.energy_level - previous_energy
 
         # Update internal state
@@ -119,7 +109,6 @@ class Battery(ElementaryGridEntity):
         Returns:
             float: Current energy level in MWh.
         """
-        self.logger.debug(f"Retrieving battery energy level: {self.energy_level} MWh")
         return self.energy_level
 
     def get_energy_change(self) -> float:
@@ -129,7 +118,6 @@ class Battery(ElementaryGridEntity):
         Returns:
             float: Current energy change in MWh.
         """
-        self.logger.debug(f"Retrieving battery energy change: {self.energy_change} MWh")
         return self.energy_change
 
     def update(self, state: State, action: Optional[Action] = None) -> None:
@@ -144,7 +132,6 @@ class Battery(ElementaryGridEntity):
         # Extract time from State
         time_value = state.get_attribute('time')
         if time_value is None:
-            self.logger.warning("State object missing 'time' attribute, using 0.0")
             time_value = 0.0
 
         # Extract action value from Action object
@@ -160,7 +147,6 @@ class Battery(ElementaryGridEntity):
         self._state.set_attribute('time', self.current_time)
 
         if action_value != 0 and action is not None:
-            self.logger.debug(f"Updating Battery at time: {time_value} with action: {action_value} MW")
             self.perform_action(action)
 
     def reset(self, initial_level: Optional[float] = None) -> None:
@@ -172,10 +158,8 @@ class Battery(ElementaryGridEntity):
         """
         if initial_level is not None:
             self.energy_level = initial_level
-            self.logger.info(f"Reset Battery to specified level: {self.energy_level} MWh")
         else:
             self.energy_level = self.initial_energy
-            self.logger.info(f"Reset Battery to default level: {self.energy_level} MWh")
 
         self.energy_change = 0.0
         self.current_time = 0.0
@@ -184,5 +168,3 @@ class Battery(ElementaryGridEntity):
         self._state.set_attribute('energy_level', self.energy_level)
         self._state.set_attribute('energy_change', self.energy_change)
         self._state.set_attribute('time', self.current_time)
-
-        self.logger.debug(f"Battery reset complete. Current energy level: {self.energy_level} MWh")

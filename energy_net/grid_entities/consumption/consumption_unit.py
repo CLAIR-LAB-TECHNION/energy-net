@@ -1,7 +1,6 @@
 from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
-from energy_net.common.utils import setup_logger
 from energy_net.foundation.model import State, Action
 
 
@@ -10,8 +9,7 @@ class ConsumptionUnit(ElementaryGridEntity):
     Consumption Unit component managing energy consumption.
     """
 
-    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any],
-                 log_file: Optional[str] = 'logs/consumption_unit.log'):
+    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any]):
         """
         Initializes the ConsumptionUnit with dynamics and configuration parameters.
 
@@ -22,16 +20,11 @@ class ConsumptionUnit(ElementaryGridEntity):
                 - consumption_capacity: Maximum consumption capacity in MWh
                 Optional parameters:
                 - state_attributes: Additional custom state attributes to track (dict)
-            log_file (str, optional): Path to the ConsumptionUnit log file.
 
         Raises:
             AssertionError: If required configuration parameters are missing.
         """
-        super().__init__(dynamics, log_file)
-
-        # Set up logger
-        self.logger = setup_logger('ConsumptionUnit', log_file)
-        self.logger.info("Initializing ConsumptionUnit component.")
+        super().__init__(dynamics)
 
         # Ensure that 'consumption_capacity' is provided in the configuration
         assert 'consumption_capacity' in config, "Missing 'consumption_capacity' in ConsumptionUnit configuration."
@@ -50,8 +43,6 @@ class ConsumptionUnit(ElementaryGridEntity):
             **state_config
         })
 
-        self.logger.info(
-            f"ConsumptionUnit initialized with capacity: {self.consumption_capacity} MWh and initial consumption: {self.current_consumption} MWh")
     def perform_action(self, action: Action) -> None:
         """
         Perform an action on the consumption unit.
@@ -69,7 +60,6 @@ class ConsumptionUnit(ElementaryGridEntity):
         Returns:
             float: Current consumption in MWh.
         """
-        self.logger.debug(f"Retrieving current consumption: {self.current_consumption} MWh")
         return self.current_consumption
 
     def update(self, state: State, action: Optional[Action] = None) -> None:
@@ -83,7 +73,6 @@ class ConsumptionUnit(ElementaryGridEntity):
         # Extract time from State
         time_value = state.get_attribute('time')
         if time_value is None:
-            self.logger.warning("State object missing 'time' attribute, using 0.0")
             time_value = 0.0
 
         # Extract action value from Action object
@@ -105,8 +94,6 @@ class ConsumptionUnit(ElementaryGridEntity):
             # Clear the pending action after using it
             self._state.remove_attribute('pending_action')
 
-        self.logger.debug(f"Updating ConsumptionUnit at time: {time_value} with action: {action_value} MW")
-
         # Delegate the consumption calculation to the dynamics
         previous_consumption = self.current_consumption
         self.current_consumption = self.dynamics.get_value(time=time_value, action=action_value)
@@ -115,19 +102,12 @@ class ConsumptionUnit(ElementaryGridEntity):
         self._state.set_attribute('time', time_value)
         self._state.set_attribute('consumption', self.current_consumption)
 
-        self.logger.info(
-            f"ConsumptionUnit consumption changed from {previous_consumption} MWh to {self.current_consumption} MWh")
-
     def reset(self) -> None:
         """
         Resets the consumption unit to its initial consumption level.
         """
-        self.logger.info(
-            f"Resetting ConsumptionUnit from {self.current_consumption} MWh to initial consumption level: {self.initial_consumption} MWh")
         self.current_consumption = self.initial_consumption
 
         # Reset internal state
         self._state.set_attribute('consumption', self.initial_consumption)
         self._state.set_attribute('time', 0.0)
-
-        self.logger.debug(f"ConsumptionUnit reset complete. Current consumption: {self.current_consumption} MWh")

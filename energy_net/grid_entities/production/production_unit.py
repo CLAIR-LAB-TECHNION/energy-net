@@ -1,7 +1,6 @@
 from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
-from energy_net.common.utils import setup_logger
 from energy_net.foundation.model import State, Action
 
 
@@ -10,8 +9,7 @@ class ProductionUnit(ElementaryGridEntity):
     Production Unit component managing energy production.
     """
 
-    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any],
-                 log_file: Optional[str] = 'logs/production_unit.log'):
+    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any]):
         """
         Initializes the ProductionUnit with dynamics and configuration parameters.
 
@@ -22,16 +20,11 @@ class ProductionUnit(ElementaryGridEntity):
                 - production_capacity: Maximum production capacity in MWh
                 Optional parameters:
                 - state_attributes: Additional custom state attributes to track (dict)
-            log_file (str, optional): Path to the ProductionUnit log file.
 
         Raises:
             AssertionError: If required configuration parameters are missing.
         """
-        super().__init__(dynamics, log_file)
-
-        # Set up logger
-        self.logger = setup_logger('ProductionUnit', log_file)
-        self.logger.info("Initializing ProductionUnit component.")
+        super().__init__(dynamics)
 
         # Ensure that 'production_capacity' is provided in the configuration
         assert 'production_capacity' in config, "Missing 'production_capacity' in ProductionUnit configuration."
@@ -50,8 +43,6 @@ class ProductionUnit(ElementaryGridEntity):
             **state_config
         })
 
-        self.logger.info(
-            f"ProductionUnit initialized with capacity: {self.production_capacity} MWh and initial production: {self.current_production} MWh")
     def perform_action(self, action: Action) -> None:
         """
         Perform an action on the production unit.
@@ -68,7 +59,6 @@ class ProductionUnit(ElementaryGridEntity):
         Returns:
             float: Current production in MWh.
         """
-        self.logger.debug(f"Retrieving current production: {self.current_production} MWh")
         return self.current_production
 
     def update(self, state: State, action: Optional[Action] = None) -> None:
@@ -82,7 +72,6 @@ class ProductionUnit(ElementaryGridEntity):
         # Extract time from State
         time_value = state.get_attribute('time')
         if time_value is None:
-            self.logger.warning("State object missing 'time' attribute, using 0.0")
             time_value = 0.0
 
         # Extract action value from Action object
@@ -104,8 +93,6 @@ class ProductionUnit(ElementaryGridEntity):
             # Clear the pending action after using it
             self._state.remove_attribute('pending_action')
 
-        self.logger.debug(f"Updating ProductionUnit at time: {time_value} with action: {action_value} MW")
-
         # Delegate the production calculation to the dynamics
         previous_production = self.current_production
         self.current_production = self.dynamics.get_value(time=time_value, action=action_value)
@@ -114,19 +101,12 @@ class ProductionUnit(ElementaryGridEntity):
         self._state.set_attribute('time', time_value)
         self._state.set_attribute('production', self.current_production)
 
-        self.logger.info(
-            f"ProductionUnit production changed from {previous_production} MWh to {self.current_production} MWh")
-
     def reset(self) -> None:
         """
         Resets the production unit to its initial production level.
         """
-        self.logger.info(
-            f"Resetting ProductionUnit from {self.current_production} MWh to initial production level: {self.initial_production} MWh")
         self.current_production = self.initial_production
 
         # Reset internal state
         self._state.set_attribute('production', self.initial_production)
         self._state.set_attribute('time', 0.0)
-
-        self.logger.debug(f"ProductionUnit reset complete. Current production: {self.current_production} MWh")
