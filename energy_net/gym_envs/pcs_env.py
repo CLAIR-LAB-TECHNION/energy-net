@@ -31,16 +31,9 @@ class PCSEnv(gym.Env):
                  prediction_horizon=48,
                  shortage_penalty=1.0,
                  price_strategy: PriceCurveStrategy = None,
-        log_path='../../tests/gym/logs',
                  render_mode: str | None = None):
 
         super().__init__()
-
-        # -------------------------
-        # Directory setup
-        # -------------------------
-        if not os.path.exists(log_path):
-            os.makedirs(log_path)
 
         # -------------------------
         # Basic parameters
@@ -54,7 +47,6 @@ class PCSEnv(gym.Env):
             self.price_strategy = SineWavePriceStrategy()
         else:
             self.price_strategy = price_strategy
-        self.log_path = log_path
         self.render_mode = render_mode
         self.last_action = None
         self.cached_day_prices = None
@@ -109,8 +101,7 @@ class PCSEnv(gym.Env):
         }
         battery = Battery(
             dynamics=battery_dynamics,
-            config=battery_config,
-            log_file=os.path.join(log_path, "storage.log")
+            config=battery_config
         )
 
         # ==============================================================
@@ -126,14 +117,12 @@ class PCSEnv(gym.Env):
         }
         consumption_unit = ConsumptionUnit(
             dynamics=consumption_dynamics,
-            config=consumption_unit_config,
-            log_file=os.path.join(log_path, "consumption_unit.log")
+            config=consumption_unit_config
         )
 
         self.pcs = PCSUnit(
             storage_units=[battery],
-            consumption_units=[consumption_unit],
-            log_file=os.path.join(log_path, "pcs_unit.log")
+            consumption_units=[consumption_unit]
         )
 
         # ==============================================================

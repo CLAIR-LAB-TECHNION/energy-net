@@ -23,10 +23,7 @@ def make_env():
         dt=0.5 / 24,  # 30 minutes in days
         episode_length_days=1,
         prediction_horizon=48,
-        shortage_penalty=5.0,
-        base_price=0.10,
-        price_volatility=0.15,
-        log_path = 'logs'
+        shortage_penalty=5.0
     )
 
 

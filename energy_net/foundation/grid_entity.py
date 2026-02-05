@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-from energy_net.common.utils import setup_logger
 from energy_net.foundation.model import State, Action
 
 
@@ -15,14 +14,11 @@ class GridEntity(ABC):
     across different components within the smart grid simulation.
     """
 
-    def __init__(self, log_file: str):
+    def __init__(self):
         """
-        Initializes the GridEntity with specified dynamics and sets up logging.
-
-        Args:
-            log_file (str): Path to the log file for the grid entity.
+        Initializes the GridEntity.
         """
-        self.logger = setup_logger(self.__class__.__name__, log_file)
+        pass
 
     @abstractmethod
     def update(self, state: State, action: Optional[Action] = None) -> None:
@@ -43,7 +39,6 @@ class GridEntity(ABC):
 
         Subclasses can override this method to define specific reset behaviors.
         """
-        self.logger.info(f"Resetting {self.__class__.__name__} to initial state.")
         # Default implementation does nothing. Subclasses should override as needed.
         pass
 
@@ -56,17 +51,15 @@ class ElementaryGridEntity(GridEntity):
     across different components within the smart grid simulation.
     """
 
-    def __init__(self, dynamics: Any, log_file: str):
+    def __init__(self, dynamics: Any):
         """
-        Initializes the GridEntity with specified dynamics and sets up logging.
+        Initializes the GridEntity with specified dynamics.
 
         Args:
             dynamics (Any): The dynamics model associated with the grid entity.
-            log_file (str): Path to the log file for the grid entity.
         """
-        super().__init__(log_file)
+        super().__init__()
         self.dynamics = dynamics
-        self.logger.info(f"Initialized {self.__class__.__name__} with dynamics: {self.dynamics}")
 
     @abstractmethod
     def get_state(self) -> State:
@@ -98,14 +91,13 @@ class CompositeGridEntity(GridEntity):
     Manages actions and updates across all sub-entities and aggregates their states.
     """
 
-    def __init__(self, sub_entities: List[GridEntity], log_file: str,
+    def __init__(self, sub_entities: List[GridEntity],
                  entity_names: Optional[Dict[int, str]] = None):
         """
-        Initializes the CompositeGridEntity with specified sub-entities and sets up logging.
+        Initializes the CompositeGridEntity with specified sub-entities.
 
         Args:
             sub_entities (List[GridEntity]): A list of sub-entities composing this composite entity.
-            log_file (str): Path to the log file for the composite grid entity.
             entity_names (Optional[Dict[int, str]]): Optional mapping of sub-entity indices to custom names.
                 If provided, uses custom names for specified entities. Indices not in this dict
                 will use auto-generated names (ClassName_N). If None, all entities use auto-generated names.
@@ -114,15 +106,13 @@ class CompositeGridEntity(GridEntity):
             # Use custom names for first two entities, auto-generate for the rest
             composite = CompositeGridEntity(
                 [battery, solar_panel, inverter],
-                "composite.log",
                 entity_names={0: "main_battery", 1: "rooftop_solar"}
             )
             # Result: sub_entities = {"main_battery": battery, "rooftop_solar": solar_panel, "Inverter_0": inverter}
         """
-        super().__init__(log_file)
+        super().__init__()
         self.sub_entities: Dict[str, GridEntity] = {}
         self._initialize_sub_entities(sub_entities, entity_names)
-        self.logger.info(f"CompositeGridEntity initialized with {len(self.sub_entities)} sub-entities.")
 
         # Initialize internal state
         self._state = State({'time': 0.0})
@@ -174,7 +164,6 @@ class CompositeGridEntity(GridEntity):
 
             used_names.add(identifier)
             self.sub_entities[identifier] = entity
-            self.logger.debug(f"Sub-entity added with ID '{identifier}': {entity}")
 
     def update(self, state: State, actions: Optional[Dict[str, Action]] = None) -> None:
         """
@@ -215,18 +204,12 @@ class CompositeGridEntity(GridEntity):
 
         # Update internal state
         self._state.set_attribute('time', time_value)
-        self.logger.debug(
-            f"Updating CompositeGridEntity at time: {time_value} with actions: {actions}"
-        )
 
         # Update each sub-entity
         for identifier, entity in self.sub_entities.items():
             entity_action = actions.get(identifier) if actions is not None else None
 
             if entity_action is not None:
-                self.logger.info(
-                    f"Updating sub-entity '{identifier}' with Action: {entity_action}"
-                )
                 entity.update(state, entity_action)
             else:
                 # Explicitly no action for this entity
@@ -237,16 +220,12 @@ class CompositeGridEntity(GridEntity):
         Resets all sub-entities to their initial states.
         """
         super().reset()
-        self.logger.info("Resetting all sub-entities to their initial states.")
         for identifier, entity in self.sub_entities.items():
-            self.logger.info(f"Resetting sub-entity '{identifier}'.")
             entity.reset()
 
         # Reset internal state
         self._state.clear_attributes()
         self._state.set_attribute('time', 0.0)
-
-        self.logger.info("All sub-entities have been reset.")
 
     def get_sub_entity(self, identifier: str) -> Optional[GridEntity]:
         """

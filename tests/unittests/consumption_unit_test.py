@@ -83,7 +83,7 @@ class TestConsumptionUnit(unittest.TestCase):
         # Test handling of State without 'time' attribute
         state = State({'other_attribute': 123})
         self.consumption_unit.update(state)
-        # Should default to 0.0 and log warning
+        # Should default to 0.0 
         self.mock_dynamics.get_value.assert_called_with(time=0.0, action=0.0)
 
     def test_multiple_updates_track_state(self):
