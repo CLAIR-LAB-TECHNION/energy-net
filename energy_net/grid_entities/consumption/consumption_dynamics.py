@@ -1,10 +1,11 @@
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Dict, Any
 from energy_net.common import defs
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.common.utils import load_data_from_yaml, interpolate_value
 import pandas as pd
+from datetime import datetime, timedelta
 class ConsumptionDynamics(EnergyDynamics):
     """
     Unified class for defining and handling energy consumption patterns and dynamics.
@@ -224,6 +225,104 @@ def _interpolate_consumption(time_fraction: float, consumption_data: Dict[float,
         Interpolated consumption value.
     """
     return interpolate_value(time_fraction, consumption_data)
+
+class ModelDrivenConsumptionDynamics(ConsumptionDynamics):
+    """
+    Consumption pattern driven by an external predictive model (e.g., gradient boosting).
+    This dynamics class accepts a trained predictor model and queries it in real-time
+    to generate consumption values based on predicted demand patterns.
+    
+    The model should have a predict(date_str, time_str) method that returns consumption values.
+    Examples include the EnergyPredictor class from consumption_prediction module.
+    """
+    
+    def __init__(self, params: Dict[str, Any]):
+        """
+        Initializes the dynamics with a trained predictive model.
+        
+        Args:
+            params (Dict[str, Any]): Configuration dictionary containing:
+                - model: Trained predictor model with predict(date_str, time_str) method (required)
+                - reference_date: Starting date for the simulation in 'YYYY-MM-DD' format (required)
+                - datetime_format: Format string for parsing reference_date (optional, default '%Y-%m-%d')
+        
+        Raises:
+            ValueError: If required parameters are missing or invalid.
+        """
+        super().__init__(params)
+        
+        # Validate required parameters
+        if 'model' not in self.params:
+            raise ValueError("Missing 'model' parameter in ModelDrivenConsumptionDynamics")
+        if 'reference_date' not in self.params:
+            raise ValueError("Missing 'reference_date' parameter in ModelDrivenConsumptionDynamics")
+        
+        self.model = self.params['model']
+        
+        # Validate model has predict method
+        if not hasattr(self.model, 'predict') or not callable(getattr(self.model, 'predict')):
+            raise ValueError("Model must have a callable 'predict' method")
+        
+        # Parse reference date
+        datetime_format = self.params.get('datetime_format', '%Y-%m-%d')
+        try:
+            self.reference_date = datetime.strptime(self.params['reference_date'], datetime_format)
+        except Exception as e:
+            raise ValueError(f"Failed to parse reference_date '{self.params['reference_date']}' with format '{datetime_format}': {e}")
+    
+    def _convert_time_to_datetime(self, time: float) -> tuple:
+        """
+        Converts simulation time (in days as float) to actual date and time strings.
+        
+        Args:
+            time (float): Simulation time where integer part is day number and 
+                         fractional part is time within the day (0.0-1.0)
+        
+        Returns:
+            tuple: (date_str, time_str) formatted for model prediction
+                  e.g., ('2025-01-05', '14:30')
+        """
+        # Extract day offset and time within day
+        day_offset = int(time)
+        time_within_day = time - day_offset
+        
+        # Convert time_within_day to hours and minutes with rounding
+        total_minutes = round(time_within_day * 24 * 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        
+        # Calculate actual datetime
+        actual_datetime = self.reference_date + timedelta(days=day_offset, hours=hours, minutes=minutes)
+        
+        # Format for model prediction
+        date_str = actual_datetime.strftime('%Y-%m-%d')
+        time_str = actual_datetime.strftime('%H:%M')
+        
+        return date_str, time_str
+    
+    def get_value(self, **kwargs) -> float:
+        """
+        Retrieves the consumption value by querying the predictive model.
+        
+        Args:
+            **kwargs:
+                - time (float): Current simulation time as days (e.g., 0.0 = day 0 midnight,
+                               1.5 = day 1 noon, 5.25 = day 5 at 6:00 AM)
+        
+        Returns:
+            float: The predicted consumption value from the model.
+        """
+        time = kwargs.get('time', 0.0)
+        
+        # Convert time to date and time strings
+        date_str, time_str = self._convert_time_to_datetime(time)
+        
+        # Query the model
+        try:
+            consumption = self.model.predict(date_str, time_str)
+            return float(consumption)
+        except Exception as e:
+            raise RuntimeError(f"Model prediction failed for {date_str} {time_str}: {e}")
 
 # Add a new function to get raw consumption data for a file
 def get_raw_consumption_data(data_file: str) -> Dict[float, float]:
