@@ -23,14 +23,23 @@ class AlternatingISOEnv(ISOEnv):
     """
 
     def __init__(self, actual_csv, predicted_csv, pcs_env, pcs_model,
-                 steps_per_day=48, render_enabled: bool = False, render_every_n: int = 1):
+                 steps_per_day=48, render_enabled: bool = False, render_every_n: int = 1,
+                 iso_verbosity: int = 2, pcs_verbosity: int = 0):
         super().__init__(actual_csv, predicted_csv, steps_per_day)
         self.pcs_env = pcs_env
         self.pcs_model = pcs_model
         self.iso_model = None
 
         # Rendering control for ISO-driven PCS runs
-        self.render_enabled = bool(render_enabled)
+        # Keep render_enabled for backward compatibility but map to verbosity
+        if render_enabled:
+            self.iso_verbosity = iso_verbosity if iso_verbosity != 2 else 2
+            self.pcs_verbosity = pcs_verbosity if pcs_verbosity != 0 else 1
+        else:
+            self.iso_verbosity = iso_verbosity
+            self.pcs_verbosity = pcs_verbosity
+        
+        self.render_enabled = bool(render_enabled)  # Keep for backward compatibility
         self.render_every_n = max(1, int(render_every_n))
 
     def sync_to_pcs(self, pcs_step_index: int):
@@ -69,8 +78,9 @@ class AlternatingISOEnv(ISOEnv):
         # Reset the PCS env for the day.
         obs, _ = self.pcs_env.reset(start_date=current_iso_timestamp)
 
-        if self.render_enabled:
-            self.pcs_env.render()
+        # Render PCS start based on verbosity
+        if self.pcs_verbosity > 0:
+            self.pcs_env.render(verbosity=self.pcs_verbosity)
 
         day_money = 0
         day_shortages = 0
@@ -86,8 +96,9 @@ class AlternatingISOEnv(ISOEnv):
             if info.get('shortage', False):
                 day_shortages += 1
 
-            if self.render_enabled and (self.pcs_env.current_step % self.render_every_n == 0):
-                self.pcs_env.render()
+            # Render PCS steps based on verbosity and render_every_n
+            if self.pcs_verbosity >= 2 and (self.pcs_env.current_step % self.render_every_n == 0):
+                self.pcs_env.render(verbosity=self.pcs_verbosity)
 
         # 6) Calculate metrics for ISO reward
         dispatch = action[self.T:]
@@ -112,98 +123,194 @@ class AlternatingISOEnv(ISOEnv):
         self._last_reward = day_money
 
         return next_obs, day_money, True, False, iso_info
-    def render(self):
-        """Enhanced render that shows MAE, money earned, and shortages."""
+    def render(self, verbosity=None):
+        """
+        Render ISO environment with configurable verbosity.
+        
+        Args:
+            verbosity: Override instance iso_verbosity. If None, uses self.iso_verbosity.
+                Level 0: Silent - return data dict only
+                Level 1: Summary - day metrics only (money, MAE, shortages)
+                Level 2: Condensed - summary + sampled timesteps (every 4th) - DEFAULT
+                Level 3: Detailed - summary + all timesteps
+                Level 4: Debug - includes pricing strategy details and dispatch analysis
+        
+        Returns:
+            dict: Structured data containing ISO day information
+        """
         if self._last_reset_info is None or self._last_step_info is None:
-            print("Nothing to render yet. Call reset() and step() first for the day.")
+            if verbosity is None:
+                verbosity = self.iso_verbosity
+            if verbosity > 0:
+                print("Nothing to render yet. Call reset() and step() first for the day.")
             return None
 
+        # Determine verbosity level
+        v = verbosity if verbosity is not None else self.iso_verbosity
+        
         info = self._last_reset_info
         step_info = self._last_step_info
         reward = self._last_reward
-
-        # Print header for the day
+        
+        # Extract metrics
         start_row = info['start_idx'] + 2
         end_row = info['start_idx'] + self.T + 1
-        print(f"\n{'=' * 70}")
-        print(f"--- [ISO DAY SUMMARY] ---")
-        print(f"CSV Row Range: {start_row} to {end_row}")
-        print(f"Calendar Date: {info['timestamp'].strftime('%Y-%m-%d')}")
-        print(f"{'=' * 70}")
-
-        # Show all metrics prominently
-        mae = step_info.get('mae', 'N/A')
-        money = step_info.get('money_earned', 'N/A')
-        shortages = step_info.get('shortages', 'N/A')
-
-        print(f"Money Earned (Primary Reward): ${money:.2f}" if isinstance(money,
-                                                                           (int, float)) else f"Money Earned: {money}")
-        print(f"MAE (Dispatch vs Realized):     {mae:.4f}" if isinstance(mae, (int, float)) else f"MAE: {mae}")
-        print(
-            f"Shortages This Day:             {shortages}" if isinstance(shortages, int) else f"Shortages: {shortages}")
-        print(f"{'=' * 70}")
-
-        # Build header dynamically with feature columns
-        header = f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}"
-        if self.num_features > 0:
-            for col in self.feature_columns[:3]:  # Show first 3 features to avoid clutter
-                header += f" | {col:<10}"
-            if self.num_features > 3:
-                header += " | ..."
-        print(header)
-        print("-" * (70 + min(self.num_features, 3) * 13 + (4 if self.num_features > 3 else 0)))
-
+        mae = step_info.get('mae', None)
+        money = step_info.get('money_earned', None)
+        shortages = step_info.get('shortages', None)
+        
+        # Build timestep rows for data return
         rows = []
-        for i in range(0, self.T, 4):
+        for i in range(self.T):
             slot_time = info['timestamp'] + timedelta(minutes=30 * i)
             row_num = info['start_idx'] + i + 2
-
-            p = step_info['predicted'][i]
-            a = step_info['realized'][i]
-            d = step_info['dispatch'][i]
-            pr = step_info['prices'][i]
-
-            row_str = f"{slot_time.strftime('%H:%M'):<10} | {row_num:<8} | {p:<8.3f} | {a:<8.3f} | {d:<10.3f} | {pr:<6.2f}"
-
+            
             row_dict = {
                 "slot_time": slot_time,
                 "row_num": int(row_num),
-                "pred": float(p),
-                "actual": float(a),
-                "dispatch": float(d),
-                "price": float(pr)
+                "pred": float(step_info['predicted'][i]),
+                "actual": float(step_info['realized'][i]),
+                "dispatch": float(step_info['dispatch'][i]),
+                "price": float(step_info['prices'][i])
             }
-
-            # Add feature values (show first 3)
+            
             if self.num_features > 0:
                 feature_start_idx = i * self.num_features
                 feature_end_idx = feature_start_idx + self.num_features
                 feature_values = self._current_features[feature_start_idx:feature_end_idx]
-
-                for j, col in enumerate(self.feature_columns[:3]):
-                    val = feature_values[j]
-                    row_str += f" | {val:<10.4f}"
-                    row_dict[col] = float(val)
-
-                if self.num_features > 3:
-                    row_str += " | ..."
-
-            print(row_str)
+                for j, col in enumerate(self.feature_columns):
+                    row_dict[col] = float(feature_values[j])
+            
             rows.append(row_dict)
-
-        print("-" * (70 + min(self.num_features, 3) * 13 + (4 if self.num_features > 3 else 0)))
-        print(f"Day Complete.\n")
-
-        # return a structured record with all metrics
+        
+        # Build structured return data
         record = {
             "csv_range": (int(start_row), int(end_row)),
             "calendar_date": info['timestamp'],
             "rows": rows,
-            "mae": float(mae) if isinstance(mae, (int, float)) else None,
-            "money_earned": float(money) if isinstance(money, (int, float)) else None,
-            "shortages": int(shortages) if isinstance(shortages, int) else None,
+            "mae": float(mae) if mae is not None else None,
+            "money_earned": float(money) if money is not None else None,
+            "shortages": int(shortages) if shortages is not None else None,
             "reward": float(reward)
         }
+        
+        # Level 0: Silent - return data only
+        if v == 0:
+            return record
+        
+        # Level 1: Summary only
+        if v == 1:
+            print(f"\n[ISO Day] {info['timestamp'].strftime('%Y-%m-%d')} - Money: ${money:.2f}, MAE: {mae:.4f}, Shortages: {shortages}")
+            return record
+        
+        # Level 2: Condensed (summary + sampled timesteps) - DEFAULT
+        if v == 2:
+            print(f"\n{'=' * 70}")
+            print(f"[ISO DAY SUMMARY] {info['timestamp'].strftime('%Y-%m-%d')}")
+            print(f"{'=' * 70}")
+            print(f"Money Earned:      ${money:.2f}")
+            print(f"MAE:               {mae:.4f}")
+            print(f"Shortages:         {shortages}")
+            print(f"{'=' * 70}")
+            
+            # Show sampled timesteps (every 4th)
+            header = f"{'Time':<10} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}"
+            print(header)
+            print("-" * 55)
+            
+            for i in range(0, self.T, 4):
+                row = rows[i]
+                print(f"{row['slot_time'].strftime('%H:%M'):<10} | {row['pred']:<8.3f} | {row['actual']:<8.3f} | {row['dispatch']:<10.3f} | {row['price']:<6.2f}")
+            
+            print("-" * 55 + "\n")
+            return record
+        
+        # Level 3: Detailed (all timesteps with features)
+        if v == 3:
+            print(f"\n{'=' * 70}")
+            print(f"[ISO DAY DETAILED] {info['timestamp'].strftime('%Y-%m-%d')}")
+            print(f"{'=' * 70}")
+            print(f"CSV Row Range:     {start_row} to {end_row}")
+            print(f"Money Earned:      ${money:.2f}")
+            print(f"MAE:               {mae:.4f}")
+            print(f"Shortages:         {shortages}")
+            print(f"{'=' * 70}")
+            
+            # Build header with first 3 features
+            header = f"{'Time':<10} | {'CSV Row':<8} | {'Pred':<8} | {'Actual':<8} | {'Dispatch':<10} | {'Price':<6}"
+            if self.num_features > 0:
+                for col in self.feature_columns[:3]:
+                    header += f" | {col:<10}"
+                if self.num_features > 3:
+                    header += " | ..."
+            print(header)
+            print("-" * (70 + min(self.num_features, 3) * 13 + (4 if self.num_features > 3 else 0)))
+            
+            # Show every 4th timestep with features
+            for i in range(0, self.T, 4):
+                row = rows[i]
+                row_str = f"{row['slot_time'].strftime('%H:%M'):<10} | {row['row_num']:<8} | {row['pred']:<8.3f} | {row['actual']:<8.3f} | {row['dispatch']:<10.3f} | {row['price']:<6.2f}"
+                
+                if self.num_features > 0:
+                    for col in self.feature_columns[:3]:
+                        row_str += f" | {row[col]:<10.4f}"
+                    if self.num_features > 3:
+                        row_str += " | ..."
+                
+                print(row_str)
+            
+            print("-" * (70 + min(self.num_features, 3) * 13 + (4 if self.num_features > 3 else 0)))
+            print(f"Day Complete.\n")
+            return record
+        
+        # Level 4: Debug (comprehensive analysis)
+        if v >= 4:
+            print(f"\n{'=' * 80}")
+            print(f"[ISO DEBUG MODE] {info['timestamp'].strftime('%Y-%m-%d')}")
+            print(f"{'=' * 80}")
+            print(f"CSV Row Range:     {start_row} to {end_row}")
+            print(f"Start Index:       {info['start_idx']}")
+            
+            print(f"\n--- Financial Metrics ---")
+            print(f"Money Earned:      ${money:.6f}")
+            print(f"Avg Price/Unit:    ${np.mean(step_info['prices']):.6f}")
+            print(f"Price Range:       ${np.min(step_info['prices']):.4f} - ${np.max(step_info['prices']):.4f}")
+            
+            print(f"\n--- Dispatch Performance ---")
+            print(f"MAE:               {mae:.6f}")
+            print(f"RMSE:              {np.sqrt(np.mean((step_info['dispatch'] - step_info['realized'])**2)):.6f}")
+            print(f"Max Error:         {np.max(np.abs(step_info['dispatch'] - step_info['realized'])):.6f}")
+            
+            print(f"\n--- Reliability ---")
+            print(f"Shortages:         {shortages} / {self.T} ({100*shortages/self.T:.1f}%)")
+            
+            # Show pricing strategy
+            print(f"\n--- Pricing Strategy ---")
+            if self.iso_model is not None:
+                print(f"Strategy:          RLPriceCurveStrategy (Active)")
+            else:
+                print(f"Strategy:          SineWavePriceStrategy (Fallback)")
+            
+            # Show all features if available
+            if self.num_features > 0:
+                print(f"\n--- Environmental Features (First Timestep) ---")
+                for col in self.feature_columns:
+                    print(f"  {col:<25}: {rows[0][col]:.6f}")
+            
+            # Show detailed timestep data (every 4th)
+            print(f"\n--- Timestep Details (Sampled) ---")
+            header = f"{'Time':<10} | {'Pred':<10} | {'Actual':<10} | {'Dispatch':<10} | {'Error':<10} | {'Price':<10}"
+            print(header)
+            print("-" * 75)
+            
+            for i in range(0, self.T, 4):
+                row = rows[i]
+                error = abs(row['dispatch'] - row['actual'])
+                print(f"{row['slot_time'].strftime('%H:%M'):<10} | {row['pred']:<10.4f} | {row['actual']:<10.4f} | {row['dispatch']:<10.4f} | {error:<10.4f} | {row['price']:<10.4f}")
+            
+            print(f"{'=' * 80}\n")
+            return record
+        
         return record
 
 
@@ -239,24 +346,47 @@ class PenalizedAlternatingISOEnv(AlternatingISOEnv):
 
         return expected, net_reward, done, truncated, info
 
-    def render(self):
+    def render(self, verbosity=None):
         """
         Extend render to include penalty, net reward, and the strategy name.
+        
+        Args:
+            verbosity: Override instance iso_verbosity. If None, uses self.iso_verbosity.
+        
+        Returns:
+            dict: Structured data containing ISO day information with penalty details
         """
-        record = super().render()
-        if record is not None and self._last_step_info is not None:
+        # Call parent render with verbosity
+        record = super().render(verbosity=verbosity)
+        
+        # Determine verbosity level
+        v = verbosity if verbosity is not None else self.iso_verbosity
+        
+        # Only add penalty info if verbosity > 0 and we have data
+        if v > 0 and record is not None and self._last_step_info is not None:
             # Safely retrieve values from the updated step info
             penalties = self._last_step_info.get("shortage_penalty", 0.0)
             net = self._last_step_info.get("net_reward", self._last_reward)
 
-            # Add a clear indicator of which pricing strategy was active
-            if self.iso_model is not None:
-                print(f"Pricing Logic:                  RLPriceCurveStrategy (Active)")
+            # Add penalty information based on verbosity level
+            if v == 1:
+                # Compact format for summary
+                print(f"Penalty: -${penalties:.2f}, Net: ${net:.2f}")
             else:
-                print(f"Pricing Logic:                  Fallback (SineWave)")
+                # Detailed format for higher verbosity levels
+                # Add a clear indicator of which pricing strategy was active
+                if self.iso_model is not None:
+                    print(f"Pricing Logic:          RLPriceCurveStrategy (Active)")
+                else:
+                    print(f"Pricing Logic:          Fallback (SineWave)")
 
-            print(f"Shortage Penalty Applied:       -${penalties:.2f}")
-            print(f"Net Reward (ISO Profit):        ${net:.2f}\n")
+                print(f"Shortage Penalty:       -${penalties:.2f}")
+                print(f"Net Reward (ISO):       ${net:.2f}\n")
+            
+            # Add penalty info to record
+            if record:
+                record["shortage_penalty"] = float(penalties)
+                record["net_reward"] = float(net)
 
         return record
 

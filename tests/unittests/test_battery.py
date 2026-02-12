@@ -5,8 +5,6 @@ from unittest.mock import MagicMock
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.storage.battery_dynamics import DeterministicBattery
 from energy_net.foundation.model import State, Action
-from energy_net.common.utils import setup_logger
-import os
 
 
 class TestDeterministicBattery(unittest.TestCase):
@@ -31,17 +29,12 @@ class TestDeterministicBattery(unittest.TestCase):
             'init': 50
         }
 
-        # Ensure log directory exists
-        log_dir = 'tests/logs'
-        os.makedirs(log_dir, exist_ok=True)
-
         # ---------------------------
         # Battery instance
         # ---------------------------
         self.battery = Battery(
             dynamics=self.mock_dynamics,
-            config=self.battery_config,
-            log_file=os.path.join(log_dir, 'battery_test.log')  # real log file
+            config=self.battery_config
         )
 
         # ---------------------------
@@ -119,9 +112,7 @@ class TestBattery(unittest.TestCase):
             'init': 50
         }
 
-        # Mock logger to prevent actual logging
-        self.battery = Battery(dynamics=self.mock_dynamics, config=self.config, log_file=None)
-        self.battery.logger = Mock()
+        self.battery = Battery(dynamics=self.mock_dynamics, config=self.config)
 
     def test_initial_state(self):
         self.assertEqual(self.battery.energy_level, 50)

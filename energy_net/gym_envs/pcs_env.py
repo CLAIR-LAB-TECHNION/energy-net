@@ -31,16 +31,10 @@ class PCSEnv(gym.Env):
                  prediction_horizon=48,
                  shortage_penalty=1.0,
                  price_strategy: PriceCurveStrategy = None,
-        log_path='../../tests/gym/logs',
-                 render_mode: str | None = None):
+                 render_mode: str | None = None,
+                 verbosity: int = 2):
 
         super().__init__()
-
-        # -------------------------
-        # Directory setup
-        # -------------------------
-        if not os.path.exists(log_path):
-            os.makedirs(log_path)
 
         # -------------------------
         # Basic parameters
@@ -54,8 +48,16 @@ class PCSEnv(gym.Env):
             self.price_strategy = SineWavePriceStrategy()
         else:
             self.price_strategy = price_strategy
-        self.log_path = log_path
-        self.render_mode = render_mode
+        
+        # Handle backward compatibility: render_mode='human' maps to verbosity=2
+        if render_mode == 'human':
+            self.verbosity = 2
+        elif render_mode is None:
+            self.verbosity = verbosity
+        else:
+            self.verbosity = verbosity
+        
+        self.render_mode = render_mode  # Keep for backward compatibility
         self.last_action = None
         self.cached_day_prices = None
         self.last_price_update_date = None
@@ -109,8 +111,7 @@ class PCSEnv(gym.Env):
         }
         battery = Battery(
             dynamics=battery_dynamics,
-            config=battery_config,
-            log_file=os.path.join(log_path, "storage.log")
+            config=battery_config
         )
 
         # ==============================================================
@@ -126,14 +127,12 @@ class PCSEnv(gym.Env):
         }
         consumption_unit = ConsumptionUnit(
             dynamics=consumption_dynamics,
-            config=consumption_unit_config,
-            log_file=os.path.join(log_path, "consumption_unit.log")
+            config=consumption_unit_config
         )
 
         self.pcs = PCSUnit(
             storage_units=[battery],
-            consumption_units=[consumption_unit],
-            log_file=os.path.join(log_path, "pcs_unit.log")
+            consumption_units=[consumption_unit]
         )
 
         # ==============================================================
@@ -391,59 +390,183 @@ class PCSEnv(gym.Env):
 
         return obs.astype(np.float32)
 
-    def render(self):
+    def render(self, verbosity=None):
         """
-        Renders the current state of the environment to the console.
-        This version retrieves real-time pricing directly from the
-        PriceCurveStrategy and displays simulation metrics.
+        Renders the current state of the environment with configurable verbosity.
+        
+        Args:
+            verbosity: Override instance verbosity level. If None, uses self.verbosity.
+                Level 0: Silent - return data dict only, no output
+                Level 1: Summary - episode totals only
+                Level 2: Condensed - current step with key metrics (default)
+                Level 3: Detailed - all state information for current step
+                Level 4: Debug - includes battery dynamics and internal state
+        
+        Returns:
+            dict: Structured data containing current state information
         """
-        if self.render_mode == 'human':
-            # 1. Access the strategy to get the price for the current time slot.
-            # This calls our class-based lookup instead of an internal array.
-            current_price = self._get_current_price()
-
-            # 2. Identify the active pricing logic for the user.
-            # This helps track if we are using RLPriceCurve, SineWave, or a Manual strategy.
-            strategy_name = self.price_strategy.__class__.__name__
-
+        # Determine which verbosity level to use
+        v = verbosity if verbosity is not None else self.verbosity
+        
+        # Gather current state data
+        current_price = self._get_current_price()
+        strategy_name = self.price_strategy.__class__.__name__
+        current_storage = self.pcs.get_total_storage()
+        current_consumption = self.pcs.get_consumption()
+        current_features = self._get_current_features()
+        
+        # Get battery details for higher verbosity levels
+        battery_entity = self.pcs.storage_units[0] if len(self.pcs.storage_units) > 0 else None
+        
+        # Build structured data dict (returned at all verbosity levels)
+        data = {
+            'step': self.current_step,
+            'max_steps': self.max_steps,
+            'datetime': self.current_datetime,
+            'storage': current_storage,
+            'consumption': current_consumption,
+            'price': current_price,
+            'strategy': strategy_name,
+            'last_action': self.last_action,
+            'total_money': self.total_money_earned,
+            'total_penalty': self.total_shortage_penalty,
+            'total_reward': self.total_reward,
+            'shortage_count': self.shortage_count,
+        }
+        
+        # Add features if available
+        if self.num_features > 0:
+            data['features'] = {col: float(current_features[i]) for i, col in enumerate(self.feature_columns)}
+        
+        # Level 0: Silent - return data only
+        if v == 0:
+            return data
+        
+        # Level 1: Summary only (episode totals)
+        if v == 1:
+            if self.current_step == 0:  # Only print at episode start
+                print(f"\n[PCS Episode Start] Date: {self.current_datetime.strftime('%Y-%m-%d')}")
+            elif self.current_step >= self.max_steps - 1:  # Print at episode end
+                print(f"\n{'=' * 60}")
+                print(f"[PCS Episode Summary] {self.current_datetime.strftime('%Y-%m-%d')}")
+                print(f"{'=' * 60}")
+                print(f"Total Steps:           {self.current_step + 1}")
+                print(f"Money Earned:          ${self.total_money_earned:.2f}")
+                print(f"Shortage Penalties:    ${self.total_shortage_penalty:.2f}")
+                print(f"Net Reward:            ${self.total_reward:.2f}")
+                print(f"Shortage Count:        {self.shortage_count}")
+                print(f"Final Storage:         {current_storage:.2f} units")
+                print(f"Strategy Used:         {strategy_name}")
+                print(f"{'=' * 60}\n")
+            return data
+        
+        # Level 2: Condensed (current step with key metrics) - DEFAULT
+        if v == 2:
             print(f"\n{'=' * 60}")
-            print(f"--- PCS ENVIRONMENT STATE ---")
-
-            # 3. Time and Step info
-            # Shows how far we are into the 48-step day cycle.
-            print(f"Step: {self.current_step}/{self.max_steps}")
-            print(f"Date: {self.current_datetime.strftime('%Y-%m-%d %H:%M')}")
-
-            # 4. Energy Metrics
-            # Shows current battery level (units) and consumption demand for this step.
-            print(f"Storage: {self.pcs.get_total_storage():.2f} units (Capacity: 100.0)")
-            print(f"Consumption (Actual): {self.pcs.get_consumption():.2f} units/step")
-
-            # 5. Pricing info
-            # Displays the price generated by the Strategy class.
-            print(f"Current Price ({strategy_name}): ${current_price:.4f}/unit")
-
-            # 6. Action History
-            # Helpful for debugging what the PCS Agent (SAC/PPO) just did.
-            if self.last_action is not None:
-                print(f"Last Agent Action (Battery Intent): {self.last_action:.2f} units")
-
-            # 7. Additional Context (Features)
-            # If the prediction CSV has extra columns (Temp, Day of Week), they are printed here.
-            if self.num_features > 0:
-                features = self._get_current_features()
-                print(f"Current Environmental Features:")
-                for i, col in enumerate(self.feature_columns):
-                    print(f"  - {col}: {features[i]:.4f}")
-
-            # 8. Financial and Reliability Summary
-            # Tracks accumulated performance across the current simulation run.
-            print(f"--- Performance Summary ---")
-            print(f"Gross Money Earned:    ${self.total_money_earned:.2f}")
-            print(f"Total Shortage Penalty: ${self.total_shortage_penalty:.2f}")
-            print(f"Net Reward (Total):     ${self.total_reward:.2f}")
-            print(f"Shortage Occurrences:   {self.shortage_count}")
+            print(f"[PCS Step {self.current_step}/{self.max_steps}] {self.current_datetime.strftime('%Y-%m-%d %H:%M')}")
             print(f"{'=' * 60}")
+            print(f"Storage:               {current_storage:.2f} / 100.0 units")
+            print(f"Consumption:           {current_consumption:.2f} units/step")
+            print(f"Price ({strategy_name}): ${current_price:.4f}/unit")
+            if self.last_action is not None:
+                print(f"Battery Action:        {self.last_action:.2f} units")
+            print(f"--- Episode Running Totals ---")
+            print(f"Money:     ${self.total_money_earned:.2f}")
+            print(f"Penalties: ${self.total_shortage_penalty:.2f}")
+            print(f"Net:       ${self.total_reward:.2f}")
+            print(f"Shortages: {self.shortage_count}")
+            print(f"{'=' * 60}")
+            return data
+        
+        # Level 3: Detailed (all state information)
+        if v == 3:
+            print(f"\n{'=' * 60}")
+            print(f"[PCS DETAILED] Step {self.current_step}/{self.max_steps}")
+            print(f"{'=' * 60}")
+            print(f"Date/Time:             {self.current_datetime.strftime('%Y-%m-%d %H:%M')}")
+            print(f"Storage Level:         {current_storage:.2f} / 100.0 units ({current_storage:.1f}%)")
+            print(f"Consumption (Actual):  {current_consumption:.2f} units/step")
+            print(f"Price ({strategy_name}): ${current_price:.4f}/unit")
+            
+            if self.last_action is not None:
+                action_type = "Charge" if self.last_action < 0 else "Discharge" if self.last_action > 0 else "Idle"
+                print(f"Battery Action:        {self.last_action:.2f} units ({action_type})")
+            
+            # Show features if available
+            if self.num_features > 0:
+                print(f"\n--- Environmental Features ---")
+                for i, col in enumerate(self.feature_columns):
+                    print(f"  {col:<20}: {current_features[i]:.4f}")
+            
+            print(f"\n--- Episode Cumulative Metrics ---")
+            print(f"Gross Money Earned:    ${self.total_money_earned:.2f}")
+            print(f"Shortage Penalties:    ${self.total_shortage_penalty:.2f}")
+            print(f"Net Reward:            ${self.total_reward:.2f}")
+            print(f"Shortage Occurrences:  {self.shortage_count}")
+            print(f"{'=' * 60}")
+            return data
+        
+        # Level 4: Debug (includes battery dynamics and internal state)
+        if v >= 4:
+            print(f"\n{'=' * 80}")
+            print(f"[PCS DEBUG MODE] Step {self.current_step}/{self.max_steps}")
+            print(f"{'=' * 80}")
+            print(f"Date/Time:             {self.current_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Relative Time:         {self.current_step * self.dt:.4f} days")
+            print(f"\n--- Storage System ---")
+            print(f"Storage Level:         {current_storage:.4f} / 100.0 units ({current_storage:.2f}%)")
+            
+            if battery_entity:
+                try:
+                    avail_charge = float(battery_entity.get_available_charge_capacity())
+                    avail_discharge = float(battery_entity.get_available_discharge_capacity())
+                    data['available_charge'] = avail_charge
+                    data['available_discharge'] = avail_discharge
+                    print(f"Available Charge Cap:  {avail_charge:.4f} units")
+                    print(f"Available Discharge:   {avail_discharge:.4f} units")
+                except Exception as e:
+                    print(f"Battery capacity info unavailable: {e}")
+            
+            print(f"\n--- Consumption & Pricing ---")
+            print(f"Consumption (Actual):  {current_consumption:.4f} units/step")
+            print(f"Pricing Strategy:      {strategy_name}")
+            print(f"Current Price:         ${current_price:.6f}/unit")
+            
+            if self.last_action is not None:
+                action_type = "CHARGE" if self.last_action < 0 else "DISCHARGE" if self.last_action > 0 else "IDLE"
+                print(f"\n--- Agent Action ---")
+                print(f"Raw Action Value:      {self.last_action:.4f} units")
+                print(f"Action Type:           {action_type}")
+                print(f"Action Bounds:         [-10.0, 10.0]")
+            
+            # Show all features in debug mode
+            if self.num_features > 0:
+                print(f"\n--- Environmental Features (All {self.num_features}) ---")
+                for i, col in enumerate(self.feature_columns):
+                    print(f"  {col:<25}: {current_features[i]:.6f}")
+            
+            # Show prediction horizon
+            try:
+                predictions = self._get_predicted_consumption(min(5, self.prediction_horizon))
+                print(f"\n--- Consumption Predictions (Next 5 steps) ---")
+                for i, pred in enumerate(predictions):
+                    print(f"  Step +{i+1}: {pred:.4f} units")
+            except Exception as e:
+                print(f"\nPrediction data unavailable: {e}")
+            
+            print(f"\n--- Financial Metrics (Cumulative) ---")
+            print(f"Gross Money Earned:    ${self.total_money_earned:.6f}")
+            print(f"Shortage Penalties:    ${self.total_shortage_penalty:.6f}")
+            print(f"Net Reward (Total):    ${self.total_reward:.6f}")
+            print(f"Shortage Count:        {self.shortage_count}")
+            if self.current_step > 0:
+                avg_reward = self.total_reward / (self.current_step + 1)
+                print(f"Average Reward/Step:   ${avg_reward:.6f}")
+            
+            print(f"{'=' * 80}")
+            return data
+        
+        return data
     def get_step_index(self) -> int:
         """
         Return the global half-hour step index since test_start_date.
@@ -482,8 +605,8 @@ class PCSEnv(gym.Env):
 if __name__ == "__main__":
     # 1. Initialize the Environment
     # By default, PCSEnv will now use the SineWavePriceStrategy if no strategy is passed.
-    # The render_mode='human' ensures we see the detailed state prints we updated earlier.
-    env = PCSEnv(render_mode='human')
+    # Using verbosity=2 (condensed) to show key metrics per step.
+    env = PCSEnv(verbosity=2)
 
     # 2. Simulation Configuration
     num_days_to_run = 3
@@ -515,8 +638,8 @@ if __name__ == "__main__":
             # calculate the financial reward, and update the battery/consumption state.
             obs, reward, terminated, truncated, info = env.step(action)
 
-            # Optional: Render the console UI for this specific time slot.
-            if env.render_mode == "human" and env.current_step % render_every_n_steps == 0:
+            # Render the console UI for this specific time slot.
+            if env.current_step % render_every_n_steps == 0:
                 env.render()
 
             # Accumulate rewards (Net financial performance).
