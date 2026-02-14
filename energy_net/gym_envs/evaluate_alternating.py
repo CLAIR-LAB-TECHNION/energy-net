@@ -13,7 +13,13 @@ import numpy as np
 import pandas as pd
 
 from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy  # New strategy class
-from alternating_env import AlternatingISOEnv, get_pred_window, run_alternating_training
+from energy_net.gym_envs.alternating_env import (
+    AlternatingISOEnv, 
+    PenalizedAlternatingISOEnv,
+    MultiObjectiveAlternatingISOEnv,
+    get_pred_window, 
+    run_alternating_training
+)
 from stable_baselines3 import PPO, SAC
 from energy_net.gym_envs.pcs_env import PCSEnv
 
@@ -293,73 +299,260 @@ def run_experiment(actual_csv,
                    iterations=30,
                    num_days=7,
                    out_dir="../../tests/gym/results",
-                   run_id=None):
+                   run_id=None,
+                   env_class=AlternatingISOEnv,
+                   env_kwargs=None,
+                   config_name=None):
     """
-    Run the full pipeline (training, convergence plot, evaluation).
-    Returns (metrics_dict, results_df).
+    Run the full pipeline (training, convergence plot, evaluation) with configurable environment.
+    
+    Parameters
+    ----------
+    actual_csv : str
+        Path to actual consumption CSV
+    pred_csv : str
+        Path to predictions CSV  
+    iterations : int
+        Number of training iterations
+    num_days : int
+        Number of days to evaluate
+    out_dir : str
+        Output directory for results
+    run_id : str, optional
+        Run identifier
+    env_class : class, optional
+        Environment class to use (AlternatingISOEnv, PenalizedAlternatingISOEnv, 
+        MultiObjectiveAlternatingISOEnv). Default: AlternatingISOEnv
+    env_kwargs : dict, optional
+        Additional kwargs to pass to env_class constructor (e.g., shortage_weight, mae_weight)
+    config_name : str, optional
+        Human-readable name for this configuration
+    
+    Returns
+    -------
+    tuple
+        (metrics_dict, results_df)
     """
     run_id = make_run_id(run_id)
     os.makedirs(out_dir, exist_ok=True)
     output_prefix = os.path.join(out_dir, f"run_{run_id}")
+    
+    if env_kwargs is None:
+        env_kwargs = {}
+    
+    if config_name is None:
+        config_name = f"{env_class.__name__} - {iterations} Iterations"
 
-    print(f"Starting experiment run_id={run_id}  actual='{actual_csv}'  pred='{pred_csv}'")
+    print(f"\nStarting experiment")
+    print(f"  run_id: {run_id}")
+    print(f"  env_class: {env_class.__name__}")
+    print(f"  env_kwargs: {env_kwargs}")
+    print(f"  actual: '{actual_csv}'")
+    print(f"  pred: '{pred_csv}'")
 
-    # TRAINING: expect run_alternating_training to return a dict-like history with keys per-iteration
-    training_history = run_alternating_training(
-        test_data_file=actual_csv,
-        predictions_file=pred_csv,
-        total_iterations=iterations,
-        cycle_days=7,
-        render=False
+    # TRAINING
+    print("\n[1/4] Training models...")
+    
+    # Extract pcs_env_kwargs if provided
+    pcs_env_kwargs = env_kwargs.pop('pcs_env_kwargs', {})
+    temp_pcs_env = PCSEnv(
+        test_data_file=actual_csv, 
+        predictions_file=pred_csv, 
+        prediction_horizon=48,
+        **pcs_env_kwargs
     )
+    
+    # Create PCS model
+    pcs_mod = PPO("MlpPolicy", temp_pcs_env, verbose=0, n_steps=48, batch_size=48)
+    
+    # Create ISO environment with specified class and kwargs
+    iso_env_train = env_class(
+        actual_csv=actual_csv,
+        predicted_csv=pred_csv,
+        pcs_env=temp_pcs_env,
+        pcs_model=pcs_mod,
+        **env_kwargs
+    )
+    
+    # Create ISO model
+    iso_mod = PPO("MlpPolicy", iso_env_train, verbose=0, n_steps=7, batch_size=7)
+    
+    # Link models
+    iso_env_train.iso_model = iso_mod
+    pricing_strategy = RLPriceCurveStrategy(iso_model=iso_mod)
+    
+    # Training loop (simplified version of run_alternating_training)
+    history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}
+    steps_per_day = 48
+    cycle_days = 7
+    
+    for iteration in range(1, iterations + 1):
+        # ISO learns
+        iso_mod.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
+        
+        # Evaluate and train PCS
+        base_idx = iso_env_train._next_start_idx
+        day_money_list = []
+        iteration_maes = []
+        iteration_shortages = 0
+        day_avg_prices = []
+        
+        for day in range(cycle_days):
+            start = base_idx + day * steps_per_day
+            obs_window = get_pred_window(iso_env_train, start, steps_per_day)
+            price_curve = pricing_strategy.calculate_price(obs_window)
+            day_avg_prices.append(float(np.mean(price_curve)))
+            
+            temp_pcs_env.set_price_strategy(pricing_strategy)
+            temp_pcs_env.set_step_index(start)
+            obs, _ = temp_pcs_env.reset(start_date=iso_env_train._get_iso_timestamp_from_pcs_index(start))
+            
+            eval_day_money = 0.0
+            day_actuals = []
+            iso_action, _ = iso_mod.predict(obs_window, deterministic=True)
+            day_dispatch = iso_action[steps_per_day:]
+            
+            for step_i in range(steps_per_day):
+                pcs_action, _ = pcs_mod.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = temp_pcs_env.step(pcs_action)
+                eval_day_money += info.get('step_money', 0.0)
+                day_actuals.append(info.get('consumption_units', 0.0))
+                if info.get('shortage', False):
+                    iteration_shortages += 1
+            
+            day_money_list.append(eval_day_money)
+            iteration_maes.append(np.mean(np.abs(np.array(day_actuals) - day_dispatch)))
+            
+            # PCS learns
+            temp_pcs_env.set_step_index(start)
+            obs, _ = temp_pcs_env.reset(start_date=iso_env_train._get_iso_timestamp_from_pcs_index(start))
+            pcs_mod.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
+        
+        # Update history
+        final_idx = base_idx + (cycle_days * steps_per_day)
+        iso_env_train.sync_to_pcs(final_idx)
+        
+        avg_money = float(np.mean(day_money_list))
+        avg_mae = float(np.mean(iteration_maes))
+        avg_iso_price = float(np.mean(day_avg_prices))
+        
+        history["iteration"].append(iteration)
+        history["avg_money"].append(avg_money)
+        history["avg_mae"].append(avg_mae)
+        history["total_shortages"].append(iteration_shortages)
+        history["avg_iso_price"].append(avg_iso_price)
+        
+        if iteration % 5 == 0:
+            print(f"  Iteration {iteration}/{iterations}: Money=${avg_money:.2f}, Shortages={iteration_shortages}, MAE={avg_mae:.4f}")
 
-    # 6. Post-Training Evaluation Setup
-    # Note: In a real scenario, you would use the models returned/saved by training.
-    # For this script, we assume they are initialized and then evaluated.
-    temp_env = PCSEnv(test_data_file=actual_csv, predictions_file=pred_csv, prediction_horizon=48)
-
-    # Dummy initialization for structural evaluation (replace with loaded models if needed)
-    pcs_mod = SAC("MlpPolicy", temp_env)
-    iso_env_eval = AlternatingISOEnv(actual_csv, pred_csv, temp_env, pcs_mod)
-    iso_mod = PPO("MlpPolicy", iso_env_eval)
-
+    print("\n[2/4] Evaluating trained models...")
     evaluator = AlternatingEvaluator(
         iso_mod, pcs_mod, actual_csv, pred_csv,
-        config_name=f"{iterations} Iterations / RL Strategy Eval"
+        config_name=config_name
     )
 
     results_df = evaluator.run_evaluation(num_days=num_days)
+    
+    print("\n[3/4] Generating plots...")
     evaluator.plot_results(results_df, output_prefix=output_prefix)
+    
+    print("\n[4/4] Running analysis...")
     metrics = evaluator.run_analysis(results_df)
 
-    plot_training_convergence(training_history, output_prefix=output_prefix)
+    plot_training_convergence(history, output_prefix=output_prefix)
 
     return metrics, results_df
 
 if __name__ == "__main__":
-    # --- Example: list multiple runs here, edit file paths as needed ---
+    # --- Example configurations for different reward structures ---
+    # Each will produce convergence plot + cumulative/signals sheets
+    
+    data_csv = "../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv"
+    pred_csv = "../../tests/gym/data_for_tests/consumption_predictions.csv"
+    
     runs = [
+        # 1. Baseline: Money-only reward
         {
-            "actual_csv": "../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv",
-            "pred_csv": "../../tests/gym/data_for_tests/consumption_predictions.csv",
+            "actual_csv": data_csv,
+            "pred_csv": pred_csv,
             "iterations": 30,
             "num_days": 7,
             "out_dir": "../../tests/gym/results",
-            "run_id": "normal_run",
+            "run_id": "baseline_money_only",
+            "env_class": AlternatingISOEnv,
+            "env_kwargs": {},
+            "config_name": "Baseline (Money Only)"
         },
+        
+        # 2. Penalized: Simple shortage penalty
         {
-            "actual_csv": "../../tests/gym/data_for_tests/zero_consumption.csv",
-            "pred_csv": "../../tests/gym/data_for_tests/zero_consumption_predictions.csv",
+            "actual_csv": data_csv,
+            "pred_csv": pred_csv,
             "iterations": 30,
             "num_days": 7,
             "out_dir": "../../tests/gym/results",
-            "run_id": "zero_consumption_run",
+            "run_id": "penalized_100",
+            "env_class": PenalizedAlternatingISOEnv,
+            "env_kwargs": {"shortage_penalty": 100.0},
+            "config_name": "Penalized ($100/shortage)"
+        },
+        
+        # 3. Multi-Objective: Balanced approach (BEST FROM COMPARISON)
+        {
+            "actual_csv": data_csv,
+            "pred_csv": pred_csv,
+            "iterations": 30,
+            "num_days": 7,
+            "out_dir": "../../tests/gym/results",
+            "run_id": "multi_obj_balanced",
+            "env_class": MultiObjectiveAlternatingISOEnv,
+            "env_kwargs": {
+                "shortage_weight": 10.0,
+                "mae_weight": 5.0,
+                "money_weight": 1.0
+            },
+            "config_name": "Multi-Objective (Balanced: 10/5/1)"
+        },
+        
+        # 4. Multi-Objective: Reliability-focused
+        {
+            "actual_csv": data_csv,
+            "pred_csv": pred_csv,
+            "iterations": 30,
+            "num_days": 7,
+            "out_dir": "../../tests/gym/results",
+            "run_id": "multi_obj_reliability",
+            "env_class": MultiObjectiveAlternatingISOEnv,
+            "env_kwargs": {
+                "shortage_weight": 20.0,
+                "mae_weight": 5.0,
+                "money_weight": 1.0
+            },
+            "config_name": "Multi-Objective (Reliability: 20/5/1)"
         },
     ]
 
-    # Run them sequentially; each will produce files like:
-    # ../../tests/gym/results/run_<run_id>_convergence.png
-    # ../../tests/gym/results/run_<run_id>_cumulative_sheet.png
-    # ../../tests/gym/results/run_<run_id>_signals_sheet.png
-    for r in runs:
+    print("="*80)
+    print("RUNNING VISUAL EVALUATION OF ALTERNATING ENVIRONMENTS")
+    print("="*80)
+    print(f"\nThis will generate visual outputs for {len(runs)} configurations:")
+    for i, r in enumerate(runs, 1):
+        print(f"  {i}. {r['config_name']}")
+    print("\nOutputs will be saved to:", runs[0]['out_dir'])
+    print("="*80)
+
+    # Run them sequentially
+    for idx, r in enumerate(runs, 1):
+        print(f"\n{'='*80}")
+        print(f"RUNNING CONFIGURATION {idx}/{len(runs)}")
+        print(f"{'='*80}")
         run_experiment(**r)
+    
+    print(f"\n{'='*80}")
+    print("ALL EVALUATIONS COMPLETE!")
+    print(f"{'='*80}")
+    print("\nCheck the results directory for:")
+    print("  • *_convergence.png - Training progress over iterations")
+    print("  • *_cumulative_sheet.png - Cumulative performance metrics")
+    print("  • *_signals_sheet.png - ISO prices and PCS actions")
+    print(f"{'='*80}\n")

@@ -30,6 +30,7 @@ class PCSEnv(gym.Env):
                  episode_length_days=1,
                  prediction_horizon=48,
                  shortage_penalty=1.0,
+                 action_scale=1.0,
                  price_strategy: PriceCurveStrategy = None,
                  render_mode: str | None = None,
                  verbosity: int = 2):
@@ -44,6 +45,7 @@ class PCSEnv(gym.Env):
         self.max_steps = int(episode_length_days / dt)
         self.prediction_horizon = prediction_horizon
         self.shortage_penalty = shortage_penalty
+        self.action_scale = action_scale
         if price_strategy is None:
             self.price_strategy = SineWavePriceStrategy()
         else:
@@ -276,7 +278,7 @@ class PCSEnv(gym.Env):
             info: A dictionary containing diagnostic information for the step.
         """
         # 1. Process the Agent's Action
-        raw_action = float(action[0])
+        raw_action = float(action[0]) * self.action_scale
         self.last_action = raw_action
 
         # Record state before update for the info dict
