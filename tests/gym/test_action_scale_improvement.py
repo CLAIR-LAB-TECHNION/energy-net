@@ -50,7 +50,7 @@ metrics1, df1 = run_experiment(
     config_name="Baseline (no action_scale)"
 )
 
-print(f"\n✅ Baseline Results:")
+print(f"\nBaseline Results:")
 print(f"   Avg Shortages: {metrics1.get('avg_shortages', 'N/A')}")
 print(f"   Avg Money: ${metrics1.get('avg_money', 0):.2f}")
 print(f"   Avg MAE: {metrics1.get('avg_mae', 'N/A'):.4f}")
@@ -71,7 +71,7 @@ metrics2, df2 = run_experiment(
     config_name="With action_scale=10.0"
 )
 
-print(f"\n✅ Action Scale Results:")
+print(f"\nAction Scale Results:")
 print(f"   Avg Shortages: {metrics2.get('avg_shortages', 'N/A')}")
 print(f"   Avg Money: ${metrics2.get('avg_money', 0):.2f}")
 print(f"   Avg MAE: {metrics2.get('avg_mae', 'N/A'):.4f}")
@@ -97,7 +97,7 @@ metrics3, df3 = run_experiment(
     config_name="MultiObjective (w/ action_scale)"
 )
 
-print(f"\n✅ Multi-Objective Results:")
+print(f"\nMulti-Objective Results:")
 print(f"   Avg Shortages: {metrics3.get('avg_shortages', 'N/A')}")
 print(f"   Avg Money: ${metrics3.get('avg_money', 0):.2f}")
 print(f"   Avg MAE: {metrics3.get('avg_mae', 'N/A'):.4f}")
@@ -115,13 +115,13 @@ print("-"*80)
 
 # Calculate improvements
 shortage_improvement = metrics1.get('avg_shortages', 0) - metrics2.get('avg_shortages', 0)
-print(f"\n📊 Action Scale Impact:")
+print(f"\nAction Scale Impact:")
 print(f"   Shortage Reduction: {shortage_improvement:.1f} shortages/episode")
 if metrics1.get('avg_shortages', 0) > 0:
     pct = 100 * shortage_improvement / metrics1.get('avg_shortages')
     print(f"   Percent Improvement: {pct:.1f}%")
 
-print(f"\n✅ Results saved to:")
+print(f"\nResults saved to:")
 print(f"   - results/run_baseline_no_action_scale_*")
 print(f"   - results/run_with_action_scale_10x_*")
 print(f"   - results/run_multi_objective_env_*")
