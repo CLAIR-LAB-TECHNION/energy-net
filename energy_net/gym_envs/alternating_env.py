@@ -7,7 +7,7 @@ from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy
 
 from stable_baselines3 import PPO
 import numpy as np
-from iso_env import ISOEnv
+from energy_net.gym_envs.iso_env import ISOEnv
 
 
 class AlternatingISOEnv(ISOEnv):
@@ -346,49 +346,135 @@ class PenalizedAlternatingISOEnv(AlternatingISOEnv):
 
         return expected, net_reward, done, truncated, info
 
-    def render(self, verbosity=None):
+class MultiObjectiveAlternatingISOEnv(AlternatingISOEnv):
+    """
+    ISO environment with multi-objective reward balancing money, shortages, and dispatch accuracy.
+    
+    This addresses the core coordination failure by giving the ISO incentives for:
+    1. Economic efficiency (money earned by PCS)
+    2. Reliability (minimizing shortages)
+    3. Forecast accuracy (minimizing MAE between dispatch and actual consumption)
+    
+    The tunable weights allow experimentation with different objective priorities.
+    """
+
+    def __init__(self, *args, 
+                 shortage_weight: float = 10.0,
+                 mae_weight: float = 5.0,
+                 money_weight: float = 1.0,
+                 **kwargs):
         """
-        Extend render to include penalty, net reward, and the strategy name.
+        Initialize multi-objective ISO environment.
         
         Args:
-            verbosity: Override instance iso_verbosity. If None, uses self.iso_verbosity.
-        
-        Returns:
-            dict: Structured data containing ISO day information with penalty details
+            shortage_weight: Penalty weight per shortage event (higher = prioritize reliability)
+            mae_weight: Penalty weight for dispatch MAE (higher = prioritize forecast accuracy)
+            money_weight: Reward weight for money earned (higher = prioritize economics)
+            *args, **kwargs: Passed to parent AlternatingISOEnv
         """
-        # Call parent render with verbosity
+        super().__init__(*args, **kwargs)
+        self.shortage_weight = shortage_weight
+        self.mae_weight = mae_weight
+        self.money_weight = money_weight
+        self.iso_model = None
+        
+        # Track historical metrics for analysis
+        self.reward_history = {
+            'money': [],
+            'shortage_penalty': [],
+            'mae_penalty': [],
+            'net_reward': []
+        }
+
+    def step(self, action):
+        # 1. Call parent step to get base metrics
+        expected, reward, done, truncated, info = super().step(action)
+        
+        # 2. Extract components
+        money = info.get("money_earned", 0)
+        shortages = info.get("shortages", 0)
+        mae = info.get("mae", 0)
+        
+        # 3. Compute weighted multi-objective reward
+        # Maximize money, minimize shortages and MAE
+        shortage_penalty = self.shortage_weight * shortages
+        mae_penalty = self.mae_weight * mae
+        net_reward = (self.money_weight * money) - shortage_penalty - mae_penalty
+        
+        # 4. Store detailed reward components for analysis
+        info["reward_components"] = {
+            "money": money,
+            "money_contribution": self.money_weight * money,
+            "shortage_penalty": shortage_penalty,
+            "mae_penalty": mae_penalty,
+            "net_reward": net_reward,
+            "weights": {
+                "money": self.money_weight,
+                "shortage": self.shortage_weight,
+                "mae": self.mae_weight
+            }
+        }
+        
+        # 5. Update tracking
+        self._last_reward = net_reward
+        self.reward_history['money'].append(money)
+        self.reward_history['shortage_penalty'].append(shortage_penalty)
+        self.reward_history['mae_penalty'].append(mae_penalty)
+        self.reward_history['net_reward'].append(net_reward)
+        
+        return expected, net_reward, done, truncated, info
+
+    def render(self, verbosity=None):
+        """
+        Extend parent render to show multi-objective reward breakdown.
+        """
         record = super().render(verbosity=verbosity)
         
-        # Determine verbosity level
         v = verbosity if verbosity is not None else self.iso_verbosity
         
-        # Only add penalty info if verbosity > 0 and we have data
+        # Add reward breakdown for verbosity > 0
         if v > 0 and record is not None and self._last_step_info is not None:
-            # Safely retrieve values from the updated step info
-            penalties = self._last_step_info.get("shortage_penalty", 0.0)
-            net = self._last_step_info.get("net_reward", self._last_reward)
-
-            # Add penalty information based on verbosity level
-            if v == 1:
-                # Compact format for summary
-                print(f"Penalty: -${penalties:.2f}, Net: ${net:.2f}")
-            else:
-                # Detailed format for higher verbosity levels
-                # Add a clear indicator of which pricing strategy was active
-                if self.iso_model is not None:
-                    print(f"Pricing Logic:          RLPriceCurveStrategy (Active)")
-                else:
-                    print(f"Pricing Logic:          Fallback (SineWave)")
-
-                print(f"Shortage Penalty:       -${penalties:.2f}")
-                print(f"Net Reward (ISO):       ${net:.2f}\n")
+            components = self._last_step_info.get("reward_components", {})
             
-            # Add penalty info to record
+            if components:
+                if v == 1:
+                    # Compact format
+                    print(f"Reward: Money=${components['money']:.2f}, "
+                          f"Shortage=-${components['shortage_penalty']:.2f}, "
+                          f"MAE=-${components['mae_penalty']:.2f}, "
+                          f"Net=${components['net_reward']:.2f}")
+                else:
+                    # Detailed format
+                    print(f"\n--- Multi-Objective Reward Breakdown ---")
+                    print(f"Money Earned (PCS):    ${components['money']:.2f} × {components['weights']['money']:.1f} = ${components['money_contribution']:.2f}")
+                    print(f"Shortage Penalty:      -{components['shortage_penalty']:.2f}")
+                    print(f"MAE Penalty:           -{components['mae_penalty']:.2f}")
+                    print(f"Net ISO Reward:        ${components['net_reward']:.2f}")
+                    print(f"{'=' * 45}\n")
+            
+            # Add components to return record
             if record:
-                record["shortage_penalty"] = float(penalties)
-                record["net_reward"] = float(net)
-
+                record["reward_components"] = components
+        
         return record
+
+    def get_reward_statistics(self):
+        """
+        Get summary statistics of reward components across all episodes.
+        
+        Returns:
+            dict: Statistics for each reward component
+        """
+        if not self.reward_history['net_reward']:
+            return None
+            
+        return {
+            'mean_money': np.mean(self.reward_history['money']),
+            'mean_shortage_penalty': np.mean(self.reward_history['shortage_penalty']),
+            'mean_mae_penalty': np.mean(self.reward_history['mae_penalty']),
+            'mean_net_reward': np.mean(self.reward_history['net_reward']),
+            'total_episodes': len(self.reward_history['net_reward'])
+        }
 
 def get_pred_window(env: ISOEnv, start: int, length: int) -> np.ndarray:
     """
