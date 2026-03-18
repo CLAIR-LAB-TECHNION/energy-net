@@ -36,8 +36,8 @@ class ISOEnv(gym.Env):
         # Defensive: fill NaNs in CSVs
         if self.actual_df.isnull().values.any() or self.pred_df.isnull().values.any():
             print("Warning: NaN values detected in CSVs. Filling with forward-fill and zeros.")
-            self.pred_df = self.pred_df.fillna(method='ffill').fillna(0.0)
-            self.actual_df = self.actual_df.fillna(method='ffill').fillna(0.0)
+            self.pred_df = self.pred_df.ffill().fillna(0.0)
+            self.actual_df = self.actual_df.ffill().fillna(0.0)
 
         # Get the first timestamp from the CSV to use as a clock base
         self.base_timestamp = pd.to_datetime(self.actual_df.iloc[0]['Datetime'])

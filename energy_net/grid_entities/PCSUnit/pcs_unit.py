@@ -139,13 +139,10 @@ class PCSUnit(CompositeGridEntity):
         """
         if not self.storage_units:
             return 0.0
+        
+        total_energy_change = self._state.get_attribute('energy_change')
+        return total_energy_change if total_energy_change is not None else 0.0
 
-        total_energy_change = sum(battery.get_energy_change() for battery in self.storage_units)
-
-        # Update internal state
-        self._state.set_attribute('energy_change', total_energy_change)
-
-        return total_energy_change
 
     def get_state(self) -> Dict[str, float]:
         """
@@ -197,33 +194,32 @@ class PCSUnit(CompositeGridEntity):
         affected by the production/consumption deficit).
         """
 
-        # --- Step 1: Compute totals ---
+        current_time = state.get_attribute('time') or 0.0
+        self._state.set_attribute('time', current_time)
+
+        # --- Step 1: Apply user actions  ---
+        storage_before = self.get_total_storage()  # total storage before applying actions
+        super().update(state, actions)  # applies the battery actions
+        storage_after_action = self.get_total_storage()  # total storage after applying actions and the distribution
+        # Compute actual energy change caused by the action
+        action_energy_change = storage_after_action - storage_before
+
+        #--- Step 2: Compute totals ---
         total_production = self.get_production()
         total_consumption = self.get_consumption()
         energy_diff = total_production - total_consumption  # positive = surplus, negative = deficit
 
-        current_time = state.get_attribute('time') or 0.0
-        self._state.set_attribute('time', current_time)
-
-        # --- Step 2: Apply PCS energy distribution ---
+        # --- Step 3: Apply PCS energy distribution ---
         if self.storage_units and energy_diff != 0:
             if energy_diff > 0:
                 self._distribute_surplus(energy_diff)
             else:
                 self._distribute_deficit(abs(energy_diff))
+        absolute_energy_change = self.get_total_storage() - storage_before  # total change after distribution
+        self._state.set_attribute('energy_change', absolute_energy_change)
 
-        # --- Step 3: Apply user actions and measure effect ---
-        storage_before = self.get_total_storage()  # total storage before applying actions
 
-        super().update(state, actions)  # applies the battery actions
-
-        storage_after = self.get_total_storage()  # total storage after applying actions
-
-        # Compute actual energy change caused by the action
-        action_energy_change = storage_after - storage_before
-        self._state.set_attribute('energy_change', action_energy_change)
-
-        # Return it if needed for reward
+        # Return action energy change if needed for reward
         return action_energy_change
 
     def _distribute_surplus(self, surplus: float) -> None:

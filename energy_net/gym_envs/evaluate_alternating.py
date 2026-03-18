@@ -467,8 +467,10 @@ if __name__ == "__main__":
     # --- Example configurations for different reward structures ---
     # Each will produce convergence plot + cumulative/signals sheets
     
-    data_csv = "../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv"
-    pred_csv = "../../tests/gym/data_for_tests/consumption_predictions.csv"
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    data_csv = os.path.join(project_root, "tests/gym/data_for_tests/synthetic_household_consumption_test.csv")
+    pred_csv = os.path.join(project_root, "tests/gym/data_for_tests/consumption_predictions.csv")
+    out_dir = os.path.join(project_root, "tests/gym/results")
     
     runs = [
         # 1. Baseline: Money-only reward
@@ -477,7 +479,7 @@ if __name__ == "__main__":
             "pred_csv": pred_csv,
             "iterations": 30,
             "num_days": 7,
-            "out_dir": "../../tests/gym/results",
+            "out_dir": out_dir,
             "run_id": "baseline_money_only",
             "env_class": AlternatingISOEnv,
             "env_kwargs": {},
@@ -490,7 +492,7 @@ if __name__ == "__main__":
             "pred_csv": pred_csv,
             "iterations": 30,
             "num_days": 7,
-            "out_dir": "../../tests/gym/results",
+            "out_dir": out_dir,
             "run_id": "penalized_100",
             "env_class": PenalizedAlternatingISOEnv,
             "env_kwargs": {"shortage_penalty": 100.0},
@@ -503,7 +505,7 @@ if __name__ == "__main__":
             "pred_csv": pred_csv,
             "iterations": 30,
             "num_days": 7,
-            "out_dir": "../../tests/gym/results",
+            "out_dir": out_dir,
             "run_id": "multi_obj_balanced",
             "env_class": MultiObjectiveAlternatingISOEnv,
             "env_kwargs": {
@@ -520,7 +522,7 @@ if __name__ == "__main__":
             "pred_csv": pred_csv,
             "iterations": 30,
             "num_days": 7,
-            "out_dir": "../../tests/gym/results",
+            "out_dir": out_dir,
             "run_id": "multi_obj_reliability",
             "env_class": MultiObjectiveAlternatingISOEnv,
             "env_kwargs": {
