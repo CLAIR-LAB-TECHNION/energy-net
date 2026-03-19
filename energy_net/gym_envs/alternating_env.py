@@ -526,8 +526,8 @@ def run_alternating_training(
         pcs_algo_kwargs: dict | None = None,
         iso_algo_kwargs: dict | None = None,
         pcs_steps_per_day: int | None = None,
-        test_data_file: str = '../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
-        predictions_file: str = '../../tests/gym/data_for_tests/consumption_predictions.csv',
+        test_data_file: str = None,
+        predictions_file: str = None,
         verbose: int = 0,
         render: bool = False,
         render_every_n_steps: int = 1,
@@ -557,6 +557,15 @@ def run_alternating_training(
         raise ValueError("cycle_days must be >= 1")
     if total_iterations < 1:
         raise ValueError("total_iterations must be >= 1")
+
+    # Set default file paths using absolute paths
+    import os
+    if test_data_file is None:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        test_data_file = os.path.join(project_root, 'tests/gym/data_for_tests/synthetic_household_consumption_test.csv')
+    if predictions_file is None:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        predictions_file = os.path.join(project_root, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
     pcs_algo_kwargs = {} if pcs_algo_kwargs is None else dict(pcs_algo_kwargs)
 

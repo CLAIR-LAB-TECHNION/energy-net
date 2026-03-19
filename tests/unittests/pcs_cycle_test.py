@@ -34,11 +34,11 @@ class TestPCSUnitSimulation(unittest.TestCase):
 
         # --- Initialize consumption unit ---
         consumption_dynamics_config = {
-            "peak_consumption1": 1000.0,
-            "peak_time1": 0.3,
+            "peak_production1": 1200.0,
+            "peak_time1": 0.25,
             "width1": 0.05,
-            "peak_consumption2": 1500.0,
-            "peak_time2": 0.8,
+            "peak_production2": 1500.0,
+            "peak_time2": 0.75,
             "width2": 0.1
         }
         consumption_dynamics = GMMConsumptionDynamics(params=consumption_dynamics_config)
@@ -75,6 +75,13 @@ class TestPCSUnitSimulation(unittest.TestCase):
         """Run the PCSUnit simulation for 24 hours and ensure no exceptions occur."""
         time_step = 1.0 / 24  # 1 hour as fraction of a day
 
+        # Initialize production/consumption at timestep 0 without applying actions
+        initial_state = State({"time": 0.0})
+        
+        # Reset energy_change after initialization since this was just setup
+        # Energy change should only track changes from actual timestep actions
+        self.pcs_unit._state.set_attribute('energy_change', 0.0)
+
         for hour in range(24):
             current_time = hour * time_step
 
@@ -86,30 +93,25 @@ class TestPCSUnitSimulation(unittest.TestCase):
 
                 # ---- ONLY Battery Action ----
                 battery_action = Action({
-                    "value": 20.0  # example charging
+                    "value": (hour+1) * 10  # example charging
                 })
 
                 actions = {
                     "Battery_0": battery_action
                 }
 
-                try:
-                    self.pcs_unit.update(state=state, actions=actions)
-                except Exception as e:
-                    self.fail(f"PCS unit simulation crashed at hour {hour + 1}: {e}")
-
-                # ---- Log the state for inspection ----
+                # ---- Log the state BEFORE applying action ----
                 total_battery = self.pcs_unit.get_total_storage()
                 total_production = self.pcs_unit.get_production()
                 total_consumption = self.pcs_unit.get_consumption()
                 energy_change = self.pcs_unit.get_energy_change()
 
-                print(f"Hour {hour + 1}:")
+                print(f"Hour {hour + 1}:") # just so it's 1-24, not 0-23
                 print(f"  Total Storage: {total_battery} MWh")
                 print(f"  Total Production: {total_production} MW")
                 print(f"  Total Consumption: {total_consumption} MW")
-                print(
-                    f"  Energy Change: {energy_change:.3f} MWh (from hour {hour} to hour {hour + 1})")
+                print(f"  Action: {battery_action.get_action('value')} MWh change")
+                print(f"  Energy Change (from previous timestep): {energy_change:.3f} MWh")
                 print("-" * 40)
 
                 # ---- Minimal Assertions ----
@@ -117,6 +119,12 @@ class TestPCSUnitSimulation(unittest.TestCase):
                 self.assertTrue(total_production >= 0)
                 self.assertTrue(total_consumption >= 0)
                 self.assertIsInstance(energy_change, float)
+
+                # ---- Apply action via update (effects will show in next timestep) ----
+                try:
+                    self.pcs_unit.update(state=state, actions=actions)
+                except Exception as e:
+                    self.fail(f"PCS unit simulation crashed at hour {hour + 1}: {e}")
 
 
 if __name__ == "__main__":

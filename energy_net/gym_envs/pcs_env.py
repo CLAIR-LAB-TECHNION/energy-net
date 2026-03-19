@@ -24,8 +24,8 @@ class PCSEnv(gym.Env):
     """
 
     def __init__(self,
-                 test_data_file='../../tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
-                 predictions_file='../../tests/gym/data_for_tests/consumption_predictions.csv',
+                 test_data_file=None,
+                 predictions_file=None,
                  dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
                  prediction_horizon=48,
@@ -36,6 +36,15 @@ class PCSEnv(gym.Env):
                  verbosity: int = 2):
 
         super().__init__()
+
+        # Calculate project root for absolute paths
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        # Set default file paths if not provided
+        if test_data_file is None:
+            test_data_file = os.path.join(project_root, 'tests/gym/data_for_tests/synthetic_household_consumption_test.csv')
+        if predictions_file is None:
+            predictions_file = os.path.join(project_root, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
         # -------------------------
         # Basic parameters
@@ -259,7 +268,12 @@ class PCSEnv(gym.Env):
         self.pcs.reset(initial_storage_unit_level=0)
         self.last_action = None
 
-        # 5. Return Initial Observation
+        # 5. Initialize consumption at timestep 0 without applying actions
+        # This ensures consumption values are calculated before returning initial observation
+        initial_state = State({"time": 0.0})
+        self.pcs.update(state=initial_state, actions=None)
+
+        # 6. Return Initial Observation
         # Note: _get_obs() will internally query the price_strategy for the starting price.
         return self._get_obs(), {}
 
@@ -392,11 +406,13 @@ class PCSEnv(gym.Env):
 
         return obs.astype(np.float32)
 
-    def render(self, verbosity=None):
+    def render(self, action=None, verbosity=None):
         """
         Renders the current state of the environment with configurable verbosity.
         
         Args:
+            action: Optional action array that will be applied. If provided, displays the action
+                   that is about to be applied. If None, shows self.last_action (for backward compatibility).
             verbosity: Override instance verbosity level. If None, uses self.verbosity.
                 Level 0: Silent - return data dict only, no output
                 Level 1: Summary - episode totals only
@@ -409,6 +425,12 @@ class PCSEnv(gym.Env):
         """
         # Determine which verbosity level to use
         v = verbosity if verbosity is not None else self.verbosity
+        
+        # Determine which action to display
+        if action is not None:
+            display_action = float(action[0]) * self.action_scale
+        else:
+            display_action = self.last_action
         
         # Gather current state data
         current_price = self._get_current_price()
@@ -470,8 +492,8 @@ class PCSEnv(gym.Env):
             print(f"Storage:               {current_storage:.2f} / 100.0 units")
             print(f"Consumption:           {current_consumption:.2f} units/step")
             print(f"Price ({strategy_name}): ${current_price:.4f}/unit")
-            if self.last_action is not None:
-                print(f"Battery Action:        {self.last_action:.2f} units")
+            if display_action is not None:
+                print(f"Battery Action:        {display_action:.2f} units")
             print(f"--- Episode Running Totals ---")
             print(f"Money:     ${self.total_money_earned:.2f}")
             print(f"Penalties: ${self.total_shortage_penalty:.2f}")
@@ -620,7 +642,6 @@ if __name__ == "__main__":
         # Reset at the start of each day.
         # This clears financial metrics and ensures the strategy starts fresh for the date.
         obs, info = env.reset()
-        env.render()
 
         print(f"\n{'=' * 60}")
         print(f"STARTING DAY {day + 1}  |  Date: {env.current_datetime.strftime('%Y-%m-%d')}")
@@ -635,14 +656,14 @@ if __name__ == "__main__":
             action_value = float(np.random.uniform(-10.0, 10.0))
             action = np.array([action_value], dtype=np.float32)
 
+            # Render BEFORE stepping to show current state + action that will be applied
+            if env.current_step % render_every_n_steps == 0:
+                env.render(action=action)
+
             # Step the simulation.
             # The env will internally query the PriceCurveStrategy for the current price,
             # calculate the financial reward, and update the battery/consumption state.
             obs, reward, terminated, truncated, info = env.step(action)
-
-            # Render the console UI for this specific time slot.
-            if env.current_step % render_every_n_steps == 0:
-                env.render()
 
             # Accumulate rewards (Net financial performance).
             day_reward += reward

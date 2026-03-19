@@ -10,6 +10,7 @@ Results are labeled differently for comparison.
 """
 
 import sys
+import os
 sys.path.insert(0, '../../')
 
 from energy_net.gym_envs.evaluate_alternating import run_experiment
@@ -18,12 +19,14 @@ from energy_net.gym_envs.alternating_env import (
     MultiObjectiveAlternatingISOEnv
 )
 
-# Common parameters
-ACTUAL_CSV = 'data_for_tests/synthetic_household_consumption_test.csv'
-PRED_CSV = 'data_for_tests/consumption_predictions.csv'
+# Common parameters - use absolute paths
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(script_dir))
+ACTUAL_CSV = os.path.join(script_dir, 'data_for_tests/synthetic_household_consumption_test.csv')
+PRED_CSV = os.path.join(script_dir, 'data_for_tests/consumption_predictions.csv')
+OUT_DIR = os.path.join(script_dir, 'results')
 ITERATIONS = 30
 NUM_DAYS = 7
-OUT_DIR = 'results'
 
 print("="*80)
 print("TESTING ACTION SCALE IMPROVEMENT")
