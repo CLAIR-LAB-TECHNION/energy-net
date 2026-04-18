@@ -363,7 +363,7 @@ def run_experiment(actual_csv,
     )
     
     # Create PCS model
-    pcs_mod = PPO("MlpPolicy", temp_pcs_env, verbose=0, n_steps=48, batch_size=48)
+    pcs_mod = SAC("MlpPolicy", temp_pcs_env, verbose=0)
     
     # Create ISO environment with specified class and kwargs
     iso_env_train = env_class(
