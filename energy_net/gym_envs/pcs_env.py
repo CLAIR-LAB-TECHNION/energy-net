@@ -28,13 +28,18 @@ class PCSEnv(gym.Env):
                  predictions_file=None,
                  dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
-                 prediction_horizon=48,
+                 prediction_horizon=1,
                  shortage_penalty=1.0,
                  action_scale=1.0,
                  price_strategy: PriceCurveStrategy = None,
                  render_mode: str | None = None,
                  verbosity: int = 2):
-
+        """
+        Initialize PCS environment.
+        
+        Note: Predictions are encoded with zero-padding after episode end
+        plus a validity mask (masked_adaptive encoding) for optimal performance.
+        """
         super().__init__()
 
         # Calculate project root for absolute paths
@@ -156,9 +161,13 @@ class PCSEnv(gym.Env):
             dtype=np.float32
         )
 
+        # Observation space uses masked_adaptive encoding:
+        # zero-padded predictions + validity mask + battery capacity constraints
+        encoded_prediction_dim = prediction_horizon * 2
+        
         # Observation space:
-        # [storage, consumption, price] + [predicted_consumption * horizon] + [features]
-        obs_dim = 3 + prediction_horizon + self.num_features
+        # [storage, consumption, price] + [zero-padded predictions + mask] + [battery capacities] + [features]
+        obs_dim = 3 + encoded_prediction_dim + 2 + self.num_features
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -168,7 +177,8 @@ class PCSEnv(gym.Env):
 
         print(f"Observation space dimension: {obs_dim}")
         print(f"  - Base features (storage, consumption, price): 3")
-        print(f"  - Predicted consumption horizon: {prediction_horizon}")
+        print(f"  - Zero-padded predictions + validity mask: {encoded_prediction_dim}")
+        print(f"  - Battery capacity constraints: 2")
         print(f"  - Additional time features: {self.num_features}")
 
         # ==============================================================
@@ -388,19 +398,57 @@ class PCSEnv(gym.Env):
         return features.flatten()
 
     def _get_obs(self):
+        """
+        Build observation vector using masked_adaptive encoding:
+        - Zero-pad predictions after episode end
+        - Include validity mask showing which predictions are valid
+        - Include battery capacity constraints (available charge/discharge)
+        """
         # Base PCS observations
         current_storage = self.pcs.get_total_storage() / 100.0
         current_consumption = self.pcs.get_consumption() / 10.0
-        current_price = self._get_current_price()  # This now correctly uses the 384-length window
+        current_price = self._get_current_price()
 
-        # Standard PCS data (Predictions + current single-step features)
-        predicted_consumption = self._get_predicted_consumption(self.prediction_horizon)  # 48
-        current_features = self._get_current_features()  # 7
+        # Get raw predictions and normalize
+        predicted_consumption = self._get_predicted_consumption(self.prediction_horizon) / 10.0
+        
+        # Apply masked_adaptive encoding
+        steps_remaining = self.max_steps - self.current_step
+        num_valid = min(len(predicted_consumption), steps_remaining)
+        
+        # Zero-pad predictions after episode end
+        zero_padded = predicted_consumption.copy()
+        zero_padded[num_valid:] = 0.0
+        
+        # Create validity mask (1 for valid within episode, 0 for beyond episode)
+        mask = np.zeros(len(predicted_consumption))
+        mask[:num_valid] = 1.0
+        
+        # Get battery capacity constraints
+        battery_entity = self.pcs.storage_units[0] if len(self.pcs.storage_units) > 0 else None
+        
+        if battery_entity:
+            try:
+                # Get available capacities (normalized by same scale as actions)
+                available_charge = float(battery_entity.get_available_charge_capacity()) / 10.0
+                available_discharge = float(battery_entity.get_available_discharge_capacity()) / 10.0
+            except Exception:
+                # Fallback if methods don't exist
+                available_charge = (100.0 - current_storage * 100.0) / 10.0  # space left
+                available_discharge = (current_storage * 100.0) / 10.0  # current storage
+        else:
+            available_charge = 0.0
+            available_discharge = 0.0
+        
+        # Get current time features
+        current_features = self._get_current_features()
 
-        # Concatenate into the PCS Agent's observation (Length: 3 + 48 + 7 = 58)
+        # Concatenate: [storage, consumption, price] + [zero-padded] + [mask] + [capacities] + [features]
         obs = np.concatenate([
             [current_storage, current_consumption, current_price],
-            predicted_consumption / 10.0,
+            zero_padded,
+            mask,
+            [available_charge, available_discharge],
             current_features
         ])
 
