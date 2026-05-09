@@ -9,6 +9,7 @@ For now, it shows the structure and verbosity system.
 import numpy as np
 import sys
 import os
+import pytest
 
 # Add the project root to the path to import energy_net
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -55,6 +56,13 @@ def create_test_environment(iso_verbosity=2, pcs_verbosity=0):
     
     return iso_env
 
+@pytest.mark.parametrize("level,description", [
+    (0, "SILENT (data only, no console output)"),
+    (1, "SUMMARY (day metrics only)"),
+    (2, "CONDENSED (summary + sampled timesteps) - DEFAULT"),
+    (3, "DETAILED (all timesteps with features)"),
+    (4, "DEBUG (comprehensive analysis)")
+])
 def test_iso_verbosity_level(level, description):
     """Test a specific ISO verbosity level."""
     print("\n" + "=" * 80)

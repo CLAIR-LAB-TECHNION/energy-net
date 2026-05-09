@@ -6,6 +6,7 @@ Test script to demonstrate all verbosity levels in PCSEnv.
 import numpy as np
 import sys
 import os
+import pytest
 from energy_net.gym_envs.pcs_env import PCSEnv
 
 
@@ -15,6 +16,13 @@ sys.path.insert(0, PROJECT_ROOT)
 TEST_DATA_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/synthetic_household_consumption_test.csv')
 PREDICTIONS_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
+@pytest.mark.parametrize("level,description", [
+    (0, "SILENT (data only, no console output)"),
+    (1, "SUMMARY (episode start/end only)"),
+    (2, "CONDENSED (key metrics per step) - DEFAULT"),
+    (3, "DETAILED (all state info per step)"),
+    (4, "DEBUG (includes battery dynamics)")
+])
 def test_verbosity_level(level, description):
     """Test a specific verbosity level."""
     print("\n" + "=" * 80)

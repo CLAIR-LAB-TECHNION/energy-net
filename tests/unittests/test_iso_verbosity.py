@@ -6,6 +6,7 @@ Test script to demonstrate all verbosity levels in ISOEnv.
 import numpy as np
 import sys
 import os
+import pytest
 
 # Add the project root to the path to import energy_net
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -17,6 +18,13 @@ from energy_net.gym_envs.iso_env import ISOEnv
 TEST_DATA_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/synthetic_household_consumption_test.csv')
 PREDICTIONS_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
+@pytest.mark.parametrize("level,description", [
+    (0, "SILENT (data only, no console output)"),
+    (1, "SUMMARY (single line per day)"),
+    (2, "CONDENSED (summary + sampled timesteps) - DEFAULT"),
+    (3, "DETAILED (all timesteps with features)"),
+    (4, "DEBUG (comprehensive analysis)")
+])
 def test_verbosity_level(level, description):
     """Test a specific verbosity level."""
     print("\n" + "=" * 80)
