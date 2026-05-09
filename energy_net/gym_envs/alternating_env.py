@@ -570,12 +570,24 @@ def run_alternating_training(
     pcs_algo_kwargs = {} if pcs_algo_kwargs is None else dict(pcs_algo_kwargs)
 
     # Initialize the base environment for the household/battery agent (PCS)
+    # First create a temporary env to determine steps_per_day if not provided
+    if pcs_steps_per_day is None:
+        temp_check_env = PCSEnv(
+            test_data_file=test_data_file,
+            predictions_file=predictions_file,
+            verbosity=0
+        )
+        steps_per_day = temp_check_env.max_steps
+    else:
+        steps_per_day = int(pcs_steps_per_day)
+    
+    # Now create the actual PCS environment with correct prediction_horizon
     temp_env = PCSEnv(
         test_data_file=test_data_file,
         predictions_file=predictions_file,
-        render_mode="human" if render else None
+        prediction_horizon=steps_per_day,
+        verbosity=0
     )
-    steps_per_day = int(pcs_steps_per_day or temp_env.max_steps)
 
     pcs_algo_kwargs.setdefault('n_steps', steps_per_day)
     pcs_algo_kwargs.setdefault('batch_size', steps_per_day)
@@ -676,7 +688,6 @@ def run_alternating_training(
         avg_money = float(np.mean(day_money_list))
         avg_mae = float(np.mean(iteration_maes))
         avg_iso_price = float(np.mean(day_avg_prices)) if len(day_avg_prices) > 0 else 0.0
-
         history["iteration"].append(iteration)
         history["avg_money"].append(avg_money)
         history["avg_mae"].append(avg_mae)

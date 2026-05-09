@@ -28,7 +28,7 @@ class PCSEnv(gym.Env):
                  predictions_file=None,
                  dt=0.5 / 24,  # 30 minutes in days
                  episode_length_days=1,
-                 prediction_horizon=1,
+                 prediction_horizon=None,
                  shortage_penalty=1.0,
                  action_scale=1.0,
                  price_strategy: PriceCurveStrategy = None,
@@ -39,6 +39,10 @@ class PCSEnv(gym.Env):
         
         Note: Predictions are encoded with zero-padding after episode end
         plus a validity mask (masked_adaptive encoding) for optimal performance.
+        
+        Args:
+            prediction_horizon: Number of future timesteps to include in observation.
+                If None, defaults to max_steps (full day visibility).
         """
         super().__init__()
 
@@ -57,6 +61,10 @@ class PCSEnv(gym.Env):
         self.dt = dt
         self.episode_length_days = episode_length_days
         self.max_steps = int(episode_length_days / dt)
+        
+        # Default prediction_horizon to full day if not specified
+        if prediction_horizon is None:
+            prediction_horizon = self.max_steps
         self.prediction_horizon = prediction_horizon
         self.shortage_penalty = shortage_penalty
         self.action_scale = action_scale
@@ -200,8 +208,10 @@ class PCSEnv(gym.Env):
     def _get_current_price(self) -> float:
         # Only calculate the full day curve if the date has changed
         if self.cached_day_prices is None or self.current_datetime.date() != self.last_price_update_date:
-            predicted_consumption = self._get_predicted_consumption(self.prediction_horizon)
-            day_features = self._get_feature_window(self.prediction_horizon)  # The 336 values
+            # ISO model always expects 48 timesteps (full day), regardless of PCS prediction_horizon
+            iso_horizon = 48
+            predicted_consumption = self._get_predicted_consumption(iso_horizon)
+            day_features = self._get_feature_window(iso_horizon)  # The 336 values (48 * 7)
             iso_input = np.concatenate([predicted_consumption / 10.0, day_features])
 
             # Call the ISO brain ONLY ONCE per day
