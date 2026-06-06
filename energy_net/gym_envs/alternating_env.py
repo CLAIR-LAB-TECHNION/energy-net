@@ -2,7 +2,11 @@
 from datetime import timedelta
 
 from energy_net.gym_envs.pcs_env import PCSEnv
-from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy,SineWavePriceStrategy
+from energy_net.grid_entities.management.price_curve import (
+    ActionBasedPriceStrategy,
+    RLPriceCurveStrategy,
+    SineWavePriceStrategy
+)
 
 
 from stable_baselines3 import PPO
@@ -52,24 +56,40 @@ class AlternatingISOEnv(ISOEnv):
     def step(self, action):
         """
         ISO environment step.
-        Uses RLPriceCurveStrategy to bridge the ISO brain to the PCS environment.
+        Uses ActionBasedPriceStrategy to use the action directly (fixes training bug).
+        
+        CRITICAL FIX: Previously used RLPriceCurveStrategy which re-queried iso_model,
+        bypassing the exploratory action and breaking RL training. Now uses the action
+        parameter directly via ActionBasedPriceStrategy.
         """
         # 1) Anchor the index to the ISO's current position
         current_idx = self._next_start_idx
         current_iso_timestamp = self._get_iso_timestamp_from_pcs_index(current_idx)
 
-        # 2) Get the observation window needed for the Strategy
+        # 2) Get the observation window needed for info/rendering
         # This is the (384,) vector: 48 predictions + 336 features
         iso_obs = get_pred_window(self, current_idx, self.T)
 
-        # 3) Setup the RL Price Strategy
-        if self.iso_model is not None:
-            strategy = RLPriceCurveStrategy(iso_model=self.iso_model)
-            # Capture the ACTUAL scaled prices for the render/info dictionary
-            actual_scaled_prices = strategy.calculate_price(iso_obs)
+        # 3) Setup the Price Strategy using the ACTION directly
+        # Determine if we're using asymmetric pricing
+        use_asymmetric = (hasattr(self, 'iso_model') and 
+                         self.iso_model is not None and
+                         hasattr(self.iso_model, 'action_space') and
+                         self.iso_model.action_space.shape[0] >= 96)
+        
+        # Use ActionBasedPriceStrategy to apply the action's prices directly
+        strategy = ActionBasedPriceStrategy(
+            action=action,
+            price_min=0.0,
+            price_max=0.20,
+            use_asymmetric_pricing=use_asymmetric
+        )
+        
+        # Capture the ACTUAL scaled prices for the render/info dictionary
+        if use_asymmetric:
+            actual_scaled_prices = strategy.calculate_sell_price(iso_obs)
         else:
-            strategy = SineWavePriceStrategy()
-            actual_scaled_prices = strategy.calculate_price()
+            actual_scaled_prices = strategy.calculate_price(iso_obs)
 
         # 4) Inject strategy into PCS and sync time
         self.pcs_env.set_price_strategy(strategy)
@@ -108,10 +128,16 @@ class AlternatingISOEnv(ISOEnv):
         # 7) Advance ISO state via parent class
         next_obs, _, _, _, iso_info = super().step(action)
 
-        # 8) Enrich info dict with ACTUAL prices for the render function
+        # 8) Convert PCS money to ISO perspective
+        # step_money is from PCS perspective (negative when buying, positive when selling)
+        # ISO perspective is opposite: positive when PCS buys (ISO sells), negative when PCS sells (ISO buys)
+        iso_money = -day_money
+
+        # 9) Enrich info dict with ACTUAL prices for the render function
         iso_info.update({
             "prices": actual_scaled_prices,  # Now render() shows real $ prices
-            "money_earned": day_money,
+            "pcs_money": day_money,  # Keep PCS perspective for reference
+            "money_earned": iso_money,  # ISO's earnings (corrected perspective)
             "mae": mae,
             "shortages": day_shortages,
             "realized_consumption": realized_array,
@@ -120,9 +146,9 @@ class AlternatingISOEnv(ISOEnv):
 
         # Update render bookkeeping
         self._last_step_info.update(iso_info)
-        self._last_reward = day_money
+        self._last_reward = iso_money
 
-        return next_obs, day_money, True, False, iso_info
+        return next_obs, iso_money, True, False, iso_info
     def render(self, verbosity=None):
         """
         Render ISO environment with configurable verbosity.
@@ -672,7 +698,8 @@ def run_alternating_training(
                 if info.get('shortage', False):
                     iteration_shortages += 1
 
-            day_money_list.append(eval_day_money)
+            # Convert PCS money to ISO perspective (negate)
+            day_money_list.append(-eval_day_money)
             iteration_maes.append(np.mean(np.abs(np.array(day_actuals) - day_dispatch)))
 
             # PCS agent learns from the rewards earned today

@@ -205,8 +205,18 @@ class PCSEnv(gym.Env):
         """Returns the accumulated money made from transactions, ignoring shortage penalties."""
         return self.total_money_earned
 
-    def _get_current_price(self) -> float:
-        # Only calculate the full day curve if the date has changed
+    def _get_current_price(self, energy_flow_direction=None) -> float:
+        """
+        Get the current price, optionally using asymmetric buy/sell pricing.
+        
+        Args:
+            energy_flow_direction: If provided, 'buy' means PCS is buying (charging),
+                'sell' means PCS is selling (discharging). If None, uses symmetric pricing.
+        
+        Returns:
+            float: The price for the current timestep
+        """
+        # Only calculate the full day curves if the date has changed
         if self.cached_day_prices is None or self.current_datetime.date() != self.last_price_update_date:
             # ISO model always expects 48 timesteps (full day), regardless of PCS prediction_horizon
             iso_horizon = 48
@@ -214,11 +224,34 @@ class PCSEnv(gym.Env):
             day_features = self._get_feature_window(iso_horizon)  # The 336 values (48 * 7)
             iso_input = np.concatenate([predicted_consumption / 10.0, day_features])
 
-            # Call the ISO brain ONLY ONCE per day
-            self.cached_day_prices = self.price_strategy.calculate_price(iso_input)
+            # Call the ISO brain ONLY ONCE per day for all price curves
+            # Check if strategy supports asymmetric pricing
+            if hasattr(self.price_strategy, 'use_asymmetric_pricing') and self.price_strategy.use_asymmetric_pricing:
+                # Cache both buy and sell prices
+                self.cached_buy_prices = self.price_strategy.calculate_buy_price(iso_input)
+                self.cached_sell_prices = self.price_strategy.calculate_sell_price(iso_input)
+                # Also cache base prices for compatibility
+                self.cached_day_prices = self.price_strategy.calculate_price(iso_input)
+            else:
+                # Symmetric pricing - same price for buy and sell
+                self.cached_day_prices = self.price_strategy.calculate_price(iso_input)
+                self.cached_buy_prices = None
+                self.cached_sell_prices = None
+            
             self.last_price_update_date = self.current_datetime.date()
 
         intra_day_step = self.current_step % self.max_steps
+        
+        # Return appropriate price based on direction if asymmetric pricing is enabled
+        if energy_flow_direction and self.cached_buy_prices is not None and self.cached_sell_prices is not None:
+            if energy_flow_direction == 'buy':
+                # PCS is buying (charging) - use sell price (ISO is selling to PCS)
+                return float(self.cached_sell_prices[intra_day_step])
+            elif energy_flow_direction == 'sell':
+                # PCS is selling (discharging) - use buy price (ISO is buying from PCS)
+                return float(self.cached_buy_prices[intra_day_step])
+        
+        # Default: return symmetric price
         return float(self.cached_day_prices[intra_day_step])
     def set_price_strategy(self, strategy: PriceCurveStrategy):
         """
@@ -340,8 +373,19 @@ class PCSEnv(gym.Env):
             available_discharge_units = getattr(battery_entity, 'available_discharge', 0.0)
 
         # 3. Calculate Financials using the Price Strategy
-        # Fetch the price for this specific slot from the strategy class
-        current_price = self._get_current_price()
+        # Determine energy flow direction for asymmetric pricing
+        if energy_sold_or_bought > 0:
+            # Positive means battery charged (PCS bought energy from ISO)
+            energy_flow = 'buy'
+        elif energy_sold_or_bought < 0:
+            # Negative means battery discharged (PCS sold energy to ISO)
+            energy_flow = 'sell'
+        else:
+            # No energy flow
+            energy_flow = None
+        
+        # Fetch the appropriate price based on energy flow direction
+        current_price = self._get_current_price(energy_flow_direction=energy_flow)
 
         # Money earned: (Price * Energy Sold). If energy is bought, this is negative.
         step_money = current_price * -energy_sold_or_bought

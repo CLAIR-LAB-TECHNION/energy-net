@@ -36,22 +36,109 @@ class PriceCurveStrategy(ABC):
         return self.calculate_price(observation)
 
 
+class ActionBasedPriceStrategy(PriceCurveStrategy):
+    """
+    A strategy that uses a pre-computed action (from RL agent) to generate price curves.
+    This fixes the training issue where RLPriceCurveStrategy re-queried the model,
+    bypassing the exploratory action that the RL agent was trying to learn from.
+    
+    Use this during training when you have the action available.
+    Use RLPriceCurveStrategy for evaluation when you need to query the model.
+    """
+
+    def __init__(self, action, price_min=0.0, price_max=0.20, 
+                 use_asymmetric_pricing=False):
+        """
+        Args:
+            action: The RL agent's action (already in [0, 1] range).
+                - For symmetric pricing: action should have 48+ values
+                - For asymmetric pricing: action should have 96+ values (48 buy, 48 sell)
+            price_min (float): The minimum price in $/unit (when action=0).
+            price_max (float): The maximum price in $/unit (when action=1).
+            use_asymmetric_pricing (bool): If True, uses separate buy and sell prices.
+        """
+        self.action = np.asarray(action, dtype=np.float32)
+        self.price_min = price_min
+        self.price_max = price_max
+        self.use_asymmetric_pricing = use_asymmetric_pricing
+
+    def calculate_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Generates a 48-step price curve from the action.
+        For symmetric pricing, uses first 48 values of action.
+        """
+        # Extract first 48 values (price signals in [0, 1])
+        raw_prices = self.action[:48]
+        
+        # Scale from [0, 1] to [price_min, price_max]
+        scaled_prices = self.price_min + (raw_prices * (self.price_max - self.price_min))
+        
+        return scaled_prices.astype(np.float32)
+    
+    def calculate_buy_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Calculate the price at which ISO buys energy from PCS.
+        
+        If asymmetric pricing is disabled, returns the same as calculate_price().
+        If enabled, uses the first 48 action values as buy prices.
+        """
+        if not self.use_asymmetric_pricing:
+            return self.calculate_price(observation)
+        
+        # Extract buy prices from first 48 action values
+        raw_buy_prices = self.action[:48]
+        
+        # Scale from [0, 1] to [price_min, price_max]
+        buy_prices = self.price_min + (raw_buy_prices * (self.price_max - self.price_min))
+        
+        return buy_prices.astype(np.float32)
+    
+    def calculate_sell_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Calculate the price at which ISO sells energy to PCS.
+        
+        If asymmetric pricing is disabled, returns the same as calculate_price().
+        If enabled, uses the second 48 action values as sell prices.
+        """
+        if not self.use_asymmetric_pricing:
+            return self.calculate_price(observation)
+        
+        # Extract sell prices from second 48 action values
+        raw_sell_prices = self.action[48:96]
+        
+        # Scale from [0, 1] to [price_min, price_max]
+        sell_prices = self.price_min + (raw_sell_prices * (self.price_max - self.price_min))
+        
+        return sell_prices.astype(np.float32)
+
+
 class RLPriceCurveStrategy(PriceCurveStrategy):
     """
     A strategy that uses a trained ISO RL model to generate price curves.
     This replaces the old ISOPricingWrapper logic.
+    
+    Supports both symmetric (same buy/sell price) and asymmetric (separate buy/sell prices).
+    
+    NOTE: This should be used for EVALUATION only, not during training.
+    During training, use ActionBasedPriceStrategy to avoid re-querying the model.
     """
 
-    def __init__(self, iso_model, base_price=0.10, price_scale=0.20):
+    def __init__(self, iso_model, price_min=0.0, price_max=0.20, 
+                 use_asymmetric_pricing=False):
         """
         Args:
             iso_model: The trained RL agent (e.g., PPO/SAC) representing the ISO.
-            base_price (float): The center point of the generated prices.
-            price_scale (float): The total range (max - min) of the prices.
+            price_min (float): The minimum price in $/unit (when agent outputs 0).
+            price_max (float): The maximum price in $/unit (when agent outputs 1).
+            use_asymmetric_pricing (bool): If True, ISO learns separate buy and sell prices.
+                - When False: ISO outputs 48 values used for both buy and sell (symmetric)
+                - When True: ISO outputs 96 values - first 48 for buy prices, second 48 for sell prices
+                Default is False for backward compatibility.
         """
         self.iso_model = iso_model
-        self.base_price = base_price
-        self.price_scale = price_scale
+        self.price_min = price_min
+        self.price_max = price_max
+        self.use_asymmetric_pricing = use_asymmetric_pricing
 
     def calculate_price(self, observation: np.ndarray) -> np.ndarray:
         """
@@ -68,21 +155,73 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
 
         # 2. Query the ISO policy deterministically to get the action
         # The ISO action contains [48 prices + 48 dispatch values]
+        # ISO action space is [0, 1], so raw_prices will be in that range
         action, _ = self.iso_model.predict(obs, deterministic=True)
 
-        # 3. Extract the first 48 entries (raw price signals)
+        # 3. Extract the first 48 entries (price signals already in [0, 1])
         raw_prices = action[:48]
 
-        # 4. Perform Min-Max Normalization to scale raw signals to [0, 1]
-        p_min, p_max = raw_prices.min(), raw_prices.max()
-        denom = (p_max - p_min) + 1e-8  # Prevent division by zero
-        normalized = (raw_prices - p_min) / denom
-
-        # 5. Rescale to the realistic price range defined in __init__
-        # Range will be [base - scale/2, base + scale/2]
-        scaled_prices = (self.base_price - self.price_scale / 2) + (normalized * self.price_scale)
+        # 4. Direct linear scaling from [0, 1] to [price_min, price_max]
+        # No min-max normalization - agent learns to output appropriate values
+        scaled_prices = self.price_min + (raw_prices * (self.price_max - self.price_min))
 
         return scaled_prices.astype(np.float32)
+    
+    def calculate_buy_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Calculate the price at which ISO buys energy from PCS.
+        
+        If asymmetric pricing is disabled, returns the same as calculate_price().
+        If enabled, uses the first 48 action outputs as independent buy prices.
+        
+        Args:
+            observation: The ISO's observation vector.
+            
+        Returns:
+            np.ndarray: A 48-element array of buy prices in $/unit.
+        """
+        if not self.use_asymmetric_pricing:
+            return self.calculate_price(observation)
+        
+        # When asymmetric: ISO learns separate buy prices (first 48 of 96 total outputs)
+        obs = observation.astype(np.float32)
+        action, _ = self.iso_model.predict(obs, deterministic=True)
+        
+        # Extract buy prices from first 48 action values
+        raw_buy_prices = action[:48]
+        
+        # Scale from [0, 1] to [price_min, price_max]
+        buy_prices = self.price_min + (raw_buy_prices * (self.price_max - self.price_min))
+        
+        return buy_prices.astype(np.float32)
+    
+    def calculate_sell_price(self, observation: np.ndarray = None) -> np.ndarray:
+        """
+        Calculate the price at which ISO sells energy to PCS.
+        
+        If asymmetric pricing is disabled, returns the same as calculate_price().
+        If enabled, uses the second 48 action outputs as independent sell prices.
+        
+        Args:
+            observation: The ISO's observation vector.
+            
+        Returns:
+            np.ndarray: A 48-element array of sell prices in $/unit.
+        """
+        if not self.use_asymmetric_pricing:
+            return self.calculate_price(observation)
+        
+        # When asymmetric: ISO learns separate sell prices (second 48 of 96 total outputs)
+        obs = observation.astype(np.float32)
+        action, _ = self.iso_model.predict(obs, deterministic=True)
+        
+        # Extract sell prices from second 48 action values
+        raw_sell_prices = action[48:96]
+        
+        # Scale from [0, 1] to [price_min, price_max]
+        sell_prices = self.price_min + (raw_sell_prices * (self.price_max - self.price_min))
+        
+        return sell_prices.astype(np.float32)
 class SineWavePriceStrategy(PriceCurveStrategy):
     """
     Reproduces the original sine-wave pricing logic from PCSEnv.

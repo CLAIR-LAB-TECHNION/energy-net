@@ -35,7 +35,6 @@ class ISOEnv(gym.Env):
 
         # Defensive: fill NaNs in CSVs
         if self.actual_df.isnull().values.any() or self.pred_df.isnull().values.any():
-            print("Warning: NaN values detected in CSVs. Filling with forward-fill and zeros.")
             self.pred_df = self.pred_df.ffill().fillna(0.0)
             self.actual_df = self.actual_df.ffill().fillna(0.0)
 
@@ -206,7 +205,6 @@ class ISOEnv(gym.Env):
 
         # Loop if we hit the end
         if self._next_start_idx + self.T > self.total_rows:
-            print("!!! REACHED END OF CSV - RESTARTING FROM ROW 0 !!!")
             self._next_start_idx = 0
 
         # ---- Prepare next observation ----
