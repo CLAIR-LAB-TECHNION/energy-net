@@ -132,11 +132,11 @@ The tutorial is designed to run in Google Colab for easy experimentation without
 
 ```
 EnergyNetClean/
+├── prediction/                    # Consumption forecasting models
 ├── energy_net/                    # Core package
 │   ├── gym_envs/                  # Gym environments (PCS, ISO, Alternating)
 │   ├── grid_entities/             # Grid components (batteries, consumption units, etc.)
-│   ├── foundation/                # Base classes and dynamics
-│   └── consumption_prediction/    # Consumption forecasting models
+│   └── foundation/                # Base classes and dynamics
 ├── tests/                         # Test suite and example scripts
 │   ├── gym/                       # RL training examples
 │   └── unittests/                 # Unit tests

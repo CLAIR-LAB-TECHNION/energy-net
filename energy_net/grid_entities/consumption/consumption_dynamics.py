@@ -233,7 +233,7 @@ class ModelDrivenConsumptionDynamics(ConsumptionDynamics):
     to generate consumption values based on predicted demand patterns.
     
     The model should have a predict(date_str, time_str) method that returns consumption values.
-    Examples include the EnergyPredictor class from consumption_prediction module.
+    Examples include the EnergyPredictor class from the prediction package.
     """
     
     def __init__(self, params: Dict[str, Any]):

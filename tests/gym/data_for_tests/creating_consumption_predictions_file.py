@@ -1,5 +1,5 @@
 import os
-from energy_net.consumption_prediction.predicting_consumption_model import save_predictions_with_train_test_split
+from prediction.predicting_consumption_model import save_predictions_with_train_test_split
 
 #THIS IS HERE JUST TO SEE HOW CONSUMPTION_PREDICTIONS.CSV GOT CREATED - NOT NECESSARY TO
 #RUN SINCE FILE HAS ALREADY BEEN CREATED

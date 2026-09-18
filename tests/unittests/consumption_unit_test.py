@@ -4,7 +4,7 @@ from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUni
 from energy_net.grid_entities.consumption.consumption_dynamics import ModelDrivenConsumptionDynamics
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.foundation.model import State, Action
-from energy_net.consumption_prediction.predicting_consumption_model import EnergyPredictor
+from prediction.predicting_consumption_model import EnergyPredictor
 import os
 
 
