@@ -1,11 +1,12 @@
-from prediction.predicting_consumption_model import (
-    create_predictor
+from prediction.energy_predictor import (
+    create_energy_predictor,
+    prediction_column_name,
 )
 
 
 def main():
     print("=" * 70)
-    print("ENERGY CONSUMPTION FORECASTING - DEMO")
+    print("ENERGY TARGET FORECASTING - DEMO")
     print("=" * 70)
 
     # =========================
@@ -13,7 +14,9 @@ def main():
     # =========================
     # This handles everything: loading data, feature engineering, and training
     csv_path = "../gym/data_for_tests/synthetic_household_consumption.csv"
-    predictor = create_predictor(csv_path)
+    target_col = "Consumption"
+    predictor = create_energy_predictor(csv_path, target_col=target_col)
+    output_col = prediction_column_name(target_col)
 
     # =========================
     # STEP 2: MAKE PREDICTIONS
@@ -25,7 +28,7 @@ def main():
     # Example 1: Single prediction for a specific date and time
     print("\n--- Example 1: Single Prediction ---")
     single_prediction = predictor.predict("2025-12-15", "14:00")
-    print(f"Predicted consumption for 2025-12-15 at 14:00: {single_prediction:.2f}")
+    print(f"Predicted {target_col} for 2025-12-15 at 14:00: {single_prediction:.2f}")
 
     # Example 2: Generate predictions for one day (without saving to CSV)
     print("\n--- Example 2: One Day of Predictions (no CSV) ---")
@@ -48,9 +51,9 @@ def main():
     # Display summary statistics
     print("\nSummary Statistics:")
     print(f"  Total predictions: {len(month_df)}")
-    print(f"  Average predicted consumption: {month_df['Predicted_Consumption'].mean():.2f}")
-    print(f"  Minimum predicted consumption: {month_df['Predicted_Consumption'].min():.2f}")
-    print(f"  Maximum predicted consumption: {month_df['Predicted_Consumption'].max():.2f}")
+    print(f"  Average predicted {target_col}: {month_df[output_col].mean():.2f}")
+    print(f"  Minimum predicted {target_col}: {month_df[output_col].min():.2f}")
+    print(f"  Maximum predicted {target_col}: {month_df[output_col].max():.2f}")
 
     # =========================
     # SUMMARY
@@ -59,8 +62,8 @@ def main():
     print("DEMO COMPLETE")
     print("=" * 70)
     print("\nSimple 3-step usage:")
-    print("  1. predictor = create_predictor('your_data.csv')")
-    print("  2. consumption = predictor.predict('2025-12-15', '14:00')")
+    print("  1. predictor = create_energy_predictor('your_data.csv', target_col='Consumption')")
+    print("  2. energy = predictor.predict('2025-12-15', '14:00')")
     print("  3. predictions = predictor.predict_days('2025-12-01', num_days=7)")
     print("\nCSV files created:")
     print("  • energy_predictions_january.csv")

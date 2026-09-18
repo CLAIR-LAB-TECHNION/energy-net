@@ -4,7 +4,7 @@ from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUni
 from energy_net.grid_entities.consumption.consumption_dynamics import ModelDrivenConsumptionDynamics
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.foundation.model import State, Action
-from prediction.predicting_consumption_model import EnergyPredictor
+from prediction.energy_predictor import EnergyPredictor
 import os
 
 
@@ -122,7 +122,10 @@ class TestModelDrivenConsumptionDynamics(unittest.TestCase):
         
         # Train a simple predictor on the test data
         print("\nTraining test predictor model...")
-        cls.predictor = EnergyPredictor(cls.test_data_path)
+        cls.predictor = EnergyPredictor(
+            cls.test_data_path,
+            target_col="Consumption",
+        )
         print("Test predictor ready!")
     
     def setUp(self):
