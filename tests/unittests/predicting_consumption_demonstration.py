@@ -1,4 +1,4 @@
-from energy_net.consumption_prediction.predicting_consumption_model import (
+from prediction.predicting_consumption_model import (
     create_predictor
 )
 
