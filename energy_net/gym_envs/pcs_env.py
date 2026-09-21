@@ -115,8 +115,9 @@ class PCSEnv(gym.Env):
         self.feature_columns = [col for col in pred_df.columns if col not in excluded_cols]
         self.num_features = len(self.feature_columns)
 
-        print(f"Loaded {len(self.prediction_cache)} aligned predictions")
-        print(f"Detected {self.num_features} feature columns: {self.feature_columns}")
+        if self.verbosity > 0:
+            print(f"Loaded {len(self.prediction_cache)} aligned predictions")
+            print(f"Detected {self.num_features} feature columns: {self.feature_columns}")
 
         # Cache feature values for fast lookup
         if self.num_features > 0:
@@ -141,7 +142,8 @@ class PCSEnv(gym.Env):
         # ==============================================================
         # Consumption unit (test data)
         # ==============================================================
-        print("Creating consumption unit on testing data...")
+        if self.verbosity > 0:
+            print("Creating consumption unit on testing data...")
         consumption_dynamics = CSV_DataConsumptionDynamics(
             params={'data_file': test_data_file}
         )
@@ -183,11 +185,12 @@ class PCSEnv(gym.Env):
             dtype=np.float32
         )
 
-        print(f"Observation space dimension: {obs_dim}")
-        print(f"  - Base features (storage, consumption, price): 3")
-        print(f"  - Zero-padded predictions + validity mask: {encoded_prediction_dim}")
-        print(f"  - Battery capacity constraints: 2")
-        print(f"  - Additional time features: {self.num_features}")
+        if self.verbosity > 0:
+            print(f"Observation space dimension: {obs_dim}")
+            print("  - Base features (storage, consumption, price): 3")
+            print(f"  - Zero-padded predictions + validity mask: {encoded_prediction_dim}")
+            print("  - Battery capacity constraints: 2")
+            print(f"  - Additional time features: {self.num_features}")
 
         # ==============================================================
         # Episode state
@@ -708,25 +711,6 @@ class PCSEnv(gym.Env):
         idx = int(idx)
         self.current_datetime = self.test_start_date + timedelta(minutes=30 * idx)
         self.current_step = int(idx % self.max_steps)
-
-    def _get_feature_window(self, num_steps):
-        """Get feature values for a range of timesteps starting from current."""
-        if self.feature_cache is None or self.num_features == 0:
-            return np.array([])
-
-        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
-        current_idx = int(days_from_start / self.dt)
-        end_idx = current_idx + num_steps
-
-        if end_idx > len(self.feature_cache):
-            available = self.feature_cache[current_idx:]
-            padding_needed = num_steps - len(available)
-            padding = np.tile(self.feature_cache[-1], (padding_needed, 1))
-            features = np.vstack([available, padding])
-        else:
-            features = self.feature_cache[current_idx:end_idx]
-
-        return features.flatten()  # Flattens to (T * num_features)
 
 if __name__ == "__main__":
     # 1. Initialize the Environment

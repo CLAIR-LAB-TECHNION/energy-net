@@ -16,6 +16,24 @@ sys.path.insert(0, PROJECT_ROOT)
 TEST_DATA_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/synthetic_household_consumption_test.csv')
 PREDICTIONS_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
+
+def test_verbosity_zero_is_silent(capsys):
+    """Construction, reset, step, and render stay silent at verbosity zero."""
+    env = PCSEnv(
+        test_data_file=TEST_DATA_FILE,
+        predictions_file=PREDICTIONS_FILE,
+        verbosity=0,
+    )
+    env.reset()
+    env.step(np.array([0.0], dtype=np.float32))
+    data = env.render()
+
+    assert data["step"] == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 @pytest.mark.parametrize("level,description", [
     (0, "SILENT (data only, no console output)"),
     (1, "SUMMARY (episode start/end only)"),
