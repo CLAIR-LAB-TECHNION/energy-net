@@ -22,7 +22,7 @@ EnergyNet is designed for flexibility and extensibility, making it suitable for 
 - **Three OpenAI Gym Environments**
   - `PCSEnv`: Battery storage management with price arbitrage
   - `ISOEnv`: Grid operator pricing and dispatch optimization
-  - `AlternatingEnv`: Multi-agent training with ISO-PCS interaction
+  - `AlternatingISOEnv`: Multi-agent training with ISO-PCS interaction
 
 - **Realistic Grid Simulation**
   - Configurable consumption patterns (constant, sinusoidal, data-driven)
@@ -48,13 +48,16 @@ EnergyNet is designed for flexibility and extensibility, making it suitable for 
 
 ```bash
 # Clone the repository
-git clone https://github.com/CLAIR-LAB-TECHNION/EnergyNetClean.git
-cd EnergyNetClean
+git clone https://github.com/CLAIR-LAB-TECHNION/energy-net.git
+cd energy-net
 
 # Install the package
 pip install -e .
 
-# For testing and RL training capabilities
+# For RL training capabilities
+pip install -e .[rl]
+
+# For development and testing
 pip install -e .[test]
 ```
 
@@ -105,7 +108,7 @@ Simulates a grid operator managing:
 
 **Agent Goal**: Maximize revenue while maintaining grid stability and minimizing forecast errors.
 
-### AlternatingEnv (Multi-Agent)
+### AlternatingISOEnv (Multi-Agent)
 
 Coordinates ISO and PCS agents in an alternating training framework:
 - ISO sets prices → PCS responds → ISO adapts → PCS adapts
@@ -116,31 +119,56 @@ Coordinates ISO and PCS agents in an alternating training framework:
 
 ## Documentation
 
+### Energy prediction
+
+Select the target explicitly when creating a predictor. Demand, generation, net load, and other energy series use the same API, and tabular outputs are named for the selected target.
+
+```python
+from prediction.energy_predictor import create_energy_predictor
+
+predictor = create_energy_predictor(
+    "generation.csv",
+    target_col="Production",
+)
+forecast = predictor.predict("2025-06-15", "12:00")
+daily_forecasts = predictor.predict_days("2025-06-15")
+```
+
+Consumption-named callables and the former module import path remain available only as deprecated compatibility interfaces.
+
 For detailed tutorials, examples, and advanced usage, see:
 
-📓 **[Full Tutorial Notebook](Energy_Net_Tutorial-full.ipynb)** - Comprehensive guide covering:
+📓 **[EnergyNet Tutorial](Energy_Net_Tutorial.ipynb)** - Comprehensive guide covering:
 - Environment setup and configuration
 - Training agents with different algorithms
 - Visualization and analysis
 - Multi-agent coordination scenarios
 
-The tutorial is designed to run in Google Colab for easy experimentation without local setup.
+📈 **[Prediction Tutorial](Prediction_Tutorial.ipynb)** - Target-neutral forecasting for explicitly selected demand, generation, or other energy series.
+
+Run the standalone prediction example from the repository root:
+
+```bash
+python tests/unittests/energy_prediction_demonstration.py
+```
 
 ---
 
 ## Project Structure
 
 ```
-EnergyNetClean/
+energy-net/
+├── prediction/                    # Target-neutral energy forecasting
+│   └── energy_predictor.py        # Primary prediction API
 ├── energy_net/                    # Core package
 │   ├── gym_envs/                  # Gym environments (PCS, ISO, Alternating)
 │   ├── grid_entities/             # Grid components (batteries, consumption units, etc.)
-│   ├── foundation/                # Base classes and dynamics
-│   └── consumption_prediction/    # Consumption forecasting models
-├── tests/                         # Test suite and example scripts
-│   ├── gym/                       # RL training examples
-│   └── unittests/                 # Unit tests
-├── Energy_Net_Tutorial-full.ipynb # Comprehensive tutorial
+│   └── foundation/                # Base classes and dynamics
+├── tests/                         # Test suite and test data
+│   ├── gym/                       # Environment test data and generators
+│   └── unittests/                 # Unit tests and prediction demonstration
+├── Energy_Net_Tutorial.ipynb      # Comprehensive environment tutorial
+├── Prediction_Tutorial.ipynb      # Energy-target prediction tutorial
 └── README.md                      # This file
 ```
 
@@ -153,6 +181,7 @@ EnergyNetClean/
 - numpy, scipy, pandas
 - gymnasium
 - pyyaml
+- scikit-learn
 
 **For RL Training:**
 - stable-baselines3
@@ -161,7 +190,12 @@ EnergyNetClean/
 - matplotlib
 - tensorboard
 
-Install all dependencies with: `pip install -e .[test]`
+Install RL dependencies with: `pip install -e .[rl]`
+
+Install development and testing dependencies with: `pip install -e .[test]`
+
+Install Excel import support for `process_consumption_file` with:
+`pip install -e .[excel]`
 
 ---
 

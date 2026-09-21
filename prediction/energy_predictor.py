@@ -1,31 +1,64 @@
-import pandas as pd
+"""Train and use target-neutral energy forecasting models."""
+
+import re
+import warnings
+from math import pi
+
 import numpy as np
-from math import sin, cos, pi
+import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
+
+
+def _resolve_target_col(target_col, caller):
+    if target_col is not None:
+        return target_col
+
+    warnings.warn(
+        f"{caller}() without target_col is deprecated; pass the energy target "
+        "column explicitly.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return "Consumption"
+
+
+def _target_slug(target_col):
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", target_col.strip()).strip("_")
+    if not slug:
+        raise ValueError("target_col must contain at least one letter or number")
+    return slug
+
+
+def prediction_column_name(target_col):
+    """Return the standard output column name for an energy target."""
+    return f"Predicted_{_target_slug(target_col)}"
 
 
 # =========================
 # 1. LOAD AND CLEAN DATA
 # =========================
 
-def load_data(csv_path):
+def load_data(csv_path, target_col=None):
     """
-    Load energy consumption data from CSV file.
+    Load an observed energy series from a CSV file.
 
-    This function reads the CSV, converts the Datetime and Consumption columns
+    This function reads the CSV, converts the Datetime and target columns
     to appropriate data types, removes any rows with missing values, and sorts
-    the data chronologically.
+    the data chronologically. The target may contain demand or generation data.
 
     Args:
-        csv_path: Path to the CSV file containing energy consumption data
+        csv_path: Path to the CSV file containing the energy series
+        target_col: Name of the energy target column. Pass this explicitly;
+            omitting it uses deprecated compatibility behavior.
 
     Returns:
-        DataFrame with cleaned and sorted energy consumption data
+        DataFrame with the cleaned and sorted energy series
     """
+    target_col = _resolve_target_col(target_col, "load_data")
     df = pd.read_csv(csv_path)
     df["Datetime"] = pd.to_datetime(df["Datetime"], errors="coerce")
-    df["Consumption"] = pd.to_numeric(df["Consumption"], errors="coerce")
-    df = df.dropna(subset=["Datetime", "Consumption"])
+    df[target_col] = pd.to_numeric(df[target_col], errors="coerce")
+    df = df.dropna(subset=["Datetime", target_col])
     df = df.sort_values("Datetime").reset_index(drop=True)
     return df
 
@@ -74,7 +107,7 @@ def default_time_features(df):
 # 3. FEATURE DETECTOR
 # =========================
 
-def detect_features(df, target_col="Consumption", exclude_cols=None):
+def detect_features(df, target_col=None, exclude_cols=None):
     """
     Automatically detect which columns should be used as features.
 
@@ -83,12 +116,14 @@ def detect_features(df, target_col="Consumption", exclude_cols=None):
 
     Args:
         df: DataFrame to analyze
-        target_col: Name of the target column to exclude
+        target_col: Name of the target column to exclude. Pass this explicitly;
+            omitting it uses deprecated compatibility behavior.
         exclude_cols: Additional columns to exclude (list)
 
     Returns:
         List of column names to use as features
     """
+    target_col = _resolve_target_col(target_col, "detect_features")
     if exclude_cols is None:
         exclude_cols = []
 
@@ -108,18 +143,20 @@ def detect_features(df, target_col="Consumption", exclude_cols=None):
 # 4. TRAIN GRADIENT BOOSTING MODEL
 # =========================
 
-def train_gradient_boosting(df, feature_cols, target_col="Consumption"):
+def train_gradient_boosting(df, feature_cols, target_col=None):
     """
     Train a Gradient Boosting model on the entire dataset.
 
     Args:
         df: DataFrame with features and target variable
         feature_cols: List of column names to use as features
-        target_col: Name of the target column to predict
+        target_col: Name of the target column to predict. Pass this explicitly;
+            omitting it uses deprecated compatibility behavior.
 
     Returns:
         Trained Gradient Boosting model
     """
+    target_col = _resolve_target_col(target_col, "train_gradient_boosting")
     X = df[feature_cols]
     y = df[target_col]
 
@@ -141,9 +178,9 @@ def train_gradient_boosting(df, feature_cols, target_col="Consumption"):
 # 5. PREDICTION FUNCTION
 # =========================
 
-def predict_consumption(model, feature_cols, feature_engineering_fn, date_str, time_str):
+def predict_energy(model, feature_cols, feature_engineering_fn, date_str, time_str):
     """
-    Predict energy consumption for a specific date and time.
+    Predict an energy target for a specific date and time.
 
     Args:
         model: Trained model to use for prediction
@@ -153,7 +190,7 @@ def predict_consumption(model, feature_cols, feature_engineering_fn, date_str, t
         time_str: Time in format 'HH:MM' (e.g., '14:30')
 
     Returns:
-        Predicted energy consumption value
+        Predicted target value
     """
     dt = pd.to_datetime(f"{date_str} {time_str}")
     temp_df = pd.DataFrame({"Datetime": [dt]})
@@ -167,12 +204,29 @@ def predict_consumption(model, feature_cols, feature_engineering_fn, date_str, t
     return prediction
 
 
+def predict_consumption(model, feature_cols, feature_engineering_fn, date_str, time_str):
+    """Deprecated compatibility wrapper for :func:`predict_energy`."""
+    warnings.warn(
+        "predict_consumption() is deprecated; use predict_energy().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return predict_energy(
+        model,
+        feature_cols,
+        feature_engineering_fn,
+        date_str,
+        time_str,
+    )
+
+
 # =========================
 # 6. GENERATE PREDICTIONS FOR FULL DAYS
 # =========================
 
 def generate_day_predictions(model, feature_cols, feature_engineering_fn,
-                             start_date, num_days=1, output_csv=None, include_features=False):
+                             start_date, num_days=1, output_csv=None,
+                             include_features=False, target_col=None):
     """
     Generate hourly predictions for one or more consecutive days.
 
@@ -184,10 +238,15 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
         num_days: Number of consecutive days to predict (default 1)
         output_csv: Path to save the predictions CSV file (optional)
         include_features: If True, include all feature columns in output (default False)
+        target_col: Name of the predicted energy target. Pass this explicitly;
+            omitting it uses deprecated compatibility behavior.
 
     Returns:
-        DataFrame with predictions (and optionally features)
+        DataFrame with predictions (and optionally features). The prediction
+        column is derived from ``target_col``.
     """
+    target_col = _resolve_target_col(target_col, "generate_day_predictions")
+    output_col = prediction_column_name(target_col)
     predictions = []
     all_features = [] if include_features else None
     current_date = pd.to_datetime(start_date)
@@ -198,7 +257,7 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
 
         for hour in range(24):
             time_str = f"{hour:02d}:00"
-            consumption = predict_consumption(
+            prediction_value = predict_energy(
                 model, feature_cols, feature_engineering_fn,
                 date_str, time_str
             )
@@ -209,7 +268,7 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
                 "Day_of_Week": date.strftime('%A'),
                 "Day_of_Year": date.dayofyear,
                 "Hour": hour,
-                "Predicted_Consumption": round(consumption, 2)
+                output_col: round(prediction_value, 2)
             })
 
             # Extract features if requested
@@ -246,11 +305,14 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
 
 class EnergyPredictor:
     """
-    A flexible energy consumption predictor that allows custom feature engineering.
+    A flexible energy predictor that allows custom feature engineering.
+
+    The target series can represent consumption/demand or
+    production/generation. Set ``target_col`` to the corresponding CSV column.
 
     Example:
         # Using default features
-        predictor = EnergyPredictor("energy_data.csv")
+        predictor = EnergyPredictor("energy_data.csv", target_col="Demand")
 
         # Using custom features
         def my_features(df):
@@ -258,32 +320,37 @@ class EnergyPredictor:
             df["month"] = df["Datetime"].dt.month
             return df
 
-        predictor = EnergyPredictor("energy_data.csv", feature_engineering_fn=my_features)
+        predictor = EnergyPredictor(
+            "energy_data.csv",
+            target_col="Generation",
+            feature_engineering_fn=my_features,
+        )
 
         # Make predictions
-        consumption = predictor.predict("2025-12-15", "14:00")
+        predicted_value = predictor.predict("2025-12-15", "14:00")
     """
 
-    def __init__(self, csv_path, feature_engineering_fn=None, target_col="Consumption"):
+    def __init__(self, csv_path, feature_engineering_fn=None, target_col=None):
         """
         Initialize and train the predictor.
 
         Args:
             csv_path: Path to training data CSV
             feature_engineering_fn: Custom feature engineering function (optional)
-            target_col: Name of the target column
+            target_col: Name of the energy target column. Pass this explicitly;
+                omitting it uses deprecated compatibility behavior.
         """
-        self.target_col = target_col
+        self.target_col = _resolve_target_col(target_col, "EnergyPredictor")
         self.feature_engineering_fn = feature_engineering_fn or default_time_features
         self.default_include_features = False  # Default behavior for predict_days
 
         print("=" * 70)
-        print("CREATING ENERGY CONSUMPTION PREDICTOR")
+        print("CREATING ENERGY PREDICTOR")
         print("=" * 70)
 
         # Load data
         print("\n[1/3] Loading data...")
-        df = load_data(csv_path)
+        df = load_data(csv_path, target_col=self.target_col)
         print(f"      Loaded {len(df)} records from {df['Datetime'].min()} to {df['Datetime'].max()}")
 
         # Apply feature engineering
@@ -304,16 +371,16 @@ class EnergyPredictor:
 
     def predict(self, date_str, time_str):
         """
-        Predict consumption for a specific date and time.
+        Predict the configured energy target for a specific date and time.
 
         Args:
             date_str: Date in format 'YYYY-MM-DD'
             time_str: Time in format 'HH:MM'
 
         Returns:
-            Predicted consumption value
+            Predicted target value
         """
-        return predict_consumption(
+        return predict_energy(
             self.model,
             self.feature_cols,
             self.feature_engineering_fn,
@@ -346,7 +413,8 @@ class EnergyPredictor:
             start_date,
             num_days,
             output_csv,
-            include_features
+            include_features,
+            target_col=self.target_col,
         )
 
 
@@ -377,54 +445,161 @@ def advanced_time_features(df):
 
 
 # =========================
-# 9. Main Predictor Function
+# 9. Predictor Factories
 # =========================
 
-def create_predictor(csv_path, feature_engineering_fn=None, include_features=False):
+def create_energy_predictor(
+        csv_path,
+        *,
+        target_col,
+        feature_engineering_fn=None,
+        include_features=False,
+):
     """
-    Backward compatible function that creates a predictor.
+    Create and train a predictor for an explicitly selected energy target.
+
+    Args:
+        csv_path: Path to training data
+        target_col: Name of the energy target column
+        feature_engineering_fn: Optional custom feature function
+        include_features: If True, predict_days includes features by default
+
+    Returns:
+        EnergyPredictor instance
+    """
+    predictor = EnergyPredictor(
+        csv_path,
+        feature_engineering_fn=feature_engineering_fn,
+        target_col=target_col,
+    )
+    predictor.default_include_features = include_features
+    return predictor
+
+
+def create_predictor(
+        csv_path,
+        feature_engineering_fn=None,
+        include_features=False,
+        target_col="Consumption"
+):
+    """
+    Deprecated compatibility factory.
 
     Args:
         csv_path: Path to training data
         feature_engineering_fn: Optional custom feature function
         include_features: If True, predict_days will include features by default (default False)
+        target_col: Name of the energy target column
 
     Returns:
         EnergyPredictor instance
     """
-    predictor = EnergyPredictor(csv_path, feature_engineering_fn=feature_engineering_fn)
-    predictor.default_include_features = include_features
-    return predictor
+    warnings.warn(
+        "create_predictor() is deprecated; use create_energy_predictor() and "
+        "pass target_col explicitly.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return create_energy_predictor(
+        csv_path,
+        feature_engineering_fn=feature_engineering_fn,
+        include_features=include_features,
+        target_col=target_col,
+    )
+
+
+def save_energy_predictions_with_train_test_split(
+        data_file,
+        *,
+        target_col,
+        train_test_split=0.8,
+        dt=0.5 / 24,  # 30 minutes in days
+        prediction_horizon=48,
+        output_file=None,
+        mode='use_index',  # 'use_index' or 'grid'
+        feature_engineering_fn=None,
+        include_features=False
+):
+    """
+    Generate energy predictions for the test period and save to CSV.
+
+    Args:
+        data_file: Path to the data CSV file
+        target_col: Name of the energy target column
+        train_test_split: Fraction of data to use for training (default 0.8)
+        dt: Time step in days for grid mode (default 0.5/24 = 30 minutes)
+        prediction_horizon: Not currently used, kept for compatibility
+        output_file: Path to save predictions CSV. Defaults to a name based on
+            the selected target.
+        mode: 'use_index' (use test timestamps) or 'grid' (uniform grid)
+        feature_engineering_fn: Custom feature engineering function (optional)
+        include_features: If True, include all feature columns in output
+
+    Returns:
+        Tuple of (output_file path, test_file path)
+    """
+    target_slug = _target_slug(target_col)
+    if output_file is None:
+        output_file = f"{target_slug.lower()}_predictions.csv"
+    return _save_predictions_with_train_test_split(
+        data_file=data_file,
+        target_col=target_col,
+        prediction_column=f"predicted_{target_slug.lower()}",
+        train_test_split=train_test_split,
+        dt=dt,
+        prediction_horizon=prediction_horizon,
+        output_file=output_file,
+        mode=mode,
+        feature_engineering_fn=feature_engineering_fn,
+        include_features=include_features,
+    )
 
 
 def save_predictions_with_train_test_split(
         data_file,
         train_test_split=0.8,
-        dt=0.5 / 24,  # 30 minutes in days
+        dt=0.5 / 24,
         prediction_horizon=48,
         output_file='consumption_predictions.csv',
-        mode='use_index',  # 'use_index' or 'grid'
+        mode='use_index',
         feature_engineering_fn=None,
         target_col="Consumption",
         include_features=False
 ):
-    """
-    Generate consumption predictions for the test period and save to CSV.
+    """Deprecated compatibility wrapper retaining consumption output names."""
+    warnings.warn(
+        "save_predictions_with_train_test_split() is deprecated; use "
+        "save_energy_predictions_with_train_test_split().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _save_predictions_with_train_test_split(
+        data_file=data_file,
+        target_col=target_col,
+        prediction_column="predicted_consumption",
+        train_test_split=train_test_split,
+        dt=dt,
+        prediction_horizon=prediction_horizon,
+        output_file=output_file,
+        mode=mode,
+        feature_engineering_fn=feature_engineering_fn,
+        include_features=include_features,
+    )
 
-    Args:
-        data_file: Path to the data CSV file
-        train_test_split: Fraction of data to use for training (default 0.8)
-        dt: Time step in days for grid mode (default 0.5/24 = 30 minutes)
-        prediction_horizon: Not currently used, kept for compatibility
-        output_file: Path to save predictions CSV
-        mode: 'use_index' (use test timestamps) or 'grid' (uniform grid)
-        feature_engineering_fn: Custom feature engineering function (optional)
-        target_col: Name of the target column (default "Consumption")
-        include_features: If True, include all feature columns in output (default True)
 
-    Returns:
-        Tuple of (output_file path, test_file path)
-    """
+def _save_predictions_with_train_test_split(
+        data_file,
+        target_col,
+        prediction_column,
+        train_test_split,
+        dt,
+        prediction_horizon,
+        output_file,
+        mode,
+        feature_engineering_fn,
+        include_features,
+):
+    """Shared implementation for neutral and compatibility save APIs."""
 
     print("Loading data and splitting into train/test sets...")
     df = pd.read_csv(data_file, index_col=0, parse_dates=True)
@@ -465,7 +640,7 @@ def save_predictions_with_train_test_split(
     test_end_date = test_df.index[-1]
 
     # Create predictor on training data only using the flexible interface
-    print("Creating consumption predictor on training data...")
+    print("Creating energy predictor on training data...")
     predictor = EnergyPredictor(
         train_file,
         feature_engineering_fn=feature_engineering_fn,
@@ -520,10 +695,9 @@ def save_predictions_with_train_test_split(
 
         predictions.append(pred)
 
-    # Create DataFrame with predictions
     predictions_df = pd.DataFrame({
         'timestamp': timestamps,
-        'predicted_consumption': predictions
+        prediction_column: predictions
     })
 
     # Add all feature columns if requested
