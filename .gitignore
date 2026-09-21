@@ -152,5 +152,5 @@ checklink/cookies.txt
 *.out.*
 
 # Generated example and tutorial outputs
-examples/output/
+tests/unittests/logs/
 results/

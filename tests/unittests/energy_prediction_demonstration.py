@@ -6,7 +6,7 @@ from prediction.energy_predictor import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DATA_FILE = (
     REPOSITORY_ROOT
     / "tests"
@@ -14,7 +14,7 @@ DATA_FILE = (
     / "data_for_tests"
     / "synthetic_household_consumption.csv"
 )
-OUTPUT_DIR = Path(__file__).resolve().parent / "output"
+OUTPUT_DIR = Path(__file__).resolve().parent / "logs"
 
 
 def main():

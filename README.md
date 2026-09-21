@@ -149,7 +149,7 @@ For detailed tutorials, examples, and advanced usage, see:
 Run the standalone prediction example from the repository root:
 
 ```bash
-python examples/prediction_demo.py
+python tests/unittests/energy_prediction_demonstration.py
 ```
 
 ---
@@ -158,8 +158,6 @@ python examples/prediction_demo.py
 
 ```
 energy-net/
-├── examples/                      # Standalone runnable demonstrations
-│   └── prediction_demo.py         # Energy forecasting example
 ├── prediction/                    # Target-neutral energy forecasting
 │   └── energy_predictor.py        # Primary prediction API
 ├── energy_net/                    # Core package
@@ -168,7 +166,7 @@ energy-net/
 │   └── foundation/                # Base classes and dynamics
 ├── tests/                         # Test suite and test data
 │   ├── gym/                       # Environment test data and generators
-│   └── unittests/                 # Unit tests
+│   └── unittests/                 # Unit tests and prediction demonstration
 ├── Energy_Net_Tutorial.ipynb      # Comprehensive environment tutorial
 ├── Prediction_Tutorial.ipynb      # Energy-target prediction tutorial
 └── README.md                      # This file
