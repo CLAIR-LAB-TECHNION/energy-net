@@ -28,8 +28,14 @@ class AlternatingISOEnv(ISOEnv):
 
     def __init__(self, actual_csv, predicted_csv, pcs_env, pcs_model,
                  steps_per_day=48, render_enabled: bool = False, render_every_n: int = 1,
-                 iso_verbosity: int = 2, pcs_verbosity: int = 0):
-        super().__init__(actual_csv, predicted_csv, steps_per_day)
+                 iso_verbosity: int = 2, pcs_verbosity: int = 0,
+                 use_asymmetric_pricing: bool = False):
+        super().__init__(
+            actual_csv,
+            predicted_csv,
+            steps_per_day,
+            use_asymmetric_pricing=use_asymmetric_pricing,
+        )
         self.pcs_env = pcs_env
         self.pcs_model = pcs_model
         self.iso_model = None
@@ -62,6 +68,8 @@ class AlternatingISOEnv(ISOEnv):
         bypassing the exploratory action and breaking RL training. Now uses the action
         parameter directly via ActionBasedPriceStrategy.
         """
+        action, _, dispatch = self._split_action(action)
+
         # 1) Anchor the index to the ISO's current position
         current_idx = self._next_start_idx
         current_iso_timestamp = self._get_iso_timestamp_from_pcs_index(current_idx)
@@ -71,22 +79,17 @@ class AlternatingISOEnv(ISOEnv):
         iso_obs = get_pred_window(self, current_idx, self.T)
 
         # 3) Setup the Price Strategy using the ACTION directly
-        # Determine if we're using asymmetric pricing
-        use_asymmetric = (hasattr(self, 'iso_model') and 
-                         self.iso_model is not None and
-                         hasattr(self.iso_model, 'action_space') and
-                         self.iso_model.action_space.shape[0] >= 96)
-        
         # Use ActionBasedPriceStrategy to apply the action's prices directly
         strategy = ActionBasedPriceStrategy(
             action=action,
             price_min=0.0,
             price_max=0.20,
-            use_asymmetric_pricing=use_asymmetric
+            use_asymmetric_pricing=self.use_asymmetric_pricing,
+            steps_per_day=self.T,
         )
         
         # Capture the ACTUAL scaled prices for the render/info dictionary
-        if use_asymmetric:
+        if self.use_asymmetric_pricing:
             actual_scaled_prices = strategy.calculate_sell_price(iso_obs)
         else:
             actual_scaled_prices = strategy.calculate_price(iso_obs)
@@ -121,7 +124,6 @@ class AlternatingISOEnv(ISOEnv):
                 self.pcs_env.render(verbosity=self.pcs_verbosity)
 
         # 6) Calculate metrics for ISO reward
-        dispatch = action[self.T:]
         realized_array = np.array(realized_consumption, dtype=np.float32)
         mae = float(np.mean(np.abs(dispatch - realized_array)))
 
@@ -557,6 +559,7 @@ def run_alternating_training(
         verbose: int = 0,
         render: bool = False,
         render_every_n_steps: int = 1,
+        use_asymmetric_pricing: bool = False,
 ):
     """
     Tandem ISO <-> PCS training loop with convergence tracking and feature support.
@@ -577,6 +580,7 @@ def run_alternating_training(
         verbose: Verbosity level
         render: Whether to render the environment
         render_every_n_steps: Render frequency
+        use_asymmetric_pricing: Whether the ISO uses separate buy and sell price blocks
     """
 
     if cycle_days < 1:
@@ -637,7 +641,8 @@ def run_alternating_training(
         pcs_env=base_pcs_env,
         pcs_model=pcs_model,
         render_enabled=render,
-        render_every_n=max(1, int(render_every_n_steps))
+        render_every_n=max(1, int(render_every_n_steps)),
+        use_asymmetric_pricing=use_asymmetric_pricing,
     )
 
     # 3. Create the ISO (Grid) Model
@@ -646,7 +651,11 @@ def run_alternating_training(
     # 4. LINK MODELS: Crucial step to avoid shape mismatch errors
     # Inject the ISO model back into the env so it can use RLPriceCurveStrategy internally
     iso_env.iso_model = iso_model
-    pricing_strategy = RLPriceCurveStrategy(iso_model=iso_model)
+    pricing_strategy = RLPriceCurveStrategy(
+        iso_model=iso_model,
+        use_asymmetric_pricing=iso_env.use_asymmetric_pricing,
+        steps_per_day=iso_env.T,
+    )
 
     # Metric Tracking Initialization
     history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}
@@ -684,9 +693,8 @@ def run_alternating_training(
             eval_day_money = 0.0
             day_actuals = []
 
-            # Extract the ISO's target dispatch values (second half of action)
             iso_action, _ = iso_model.predict(obs_window, deterministic=True)
-            day_dispatch = iso_action[steps_per_day:]
+            _, _, day_dispatch = iso_env._split_action(iso_action)
 
             for step_i in range(steps_per_day):
                 # PCS Agent acts based on the current ISO-generated price
