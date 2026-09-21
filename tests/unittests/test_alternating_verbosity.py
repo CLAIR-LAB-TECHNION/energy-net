@@ -97,6 +97,7 @@ def test_iso_verbosity_level(level, description):
         print(f"\n[ERROR] Test failed with exception: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 def test_pcs_verbosity_levels():
     """Test PCS verbosity during ISO episodes."""
@@ -133,6 +134,7 @@ def test_pcs_verbosity_levels():
         print(f"\n[ERROR] Test failed with exception: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 def test_verbosity_override():
     """Test that verbosity can be overridden in render() call."""
@@ -165,6 +167,7 @@ def test_verbosity_override():
         print(f"\n[ERROR] Test failed with exception: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 def test_backward_compatibility():
     """Test backward compatibility with render_enabled."""
@@ -208,6 +211,7 @@ def test_backward_compatibility():
         print(f"\n[ERROR] Test failed with exception: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 if __name__ == "__main__":
     print("\n" + "#" * 80)

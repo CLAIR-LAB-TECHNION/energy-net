@@ -68,7 +68,16 @@ def plot_training_convergence(history, output_prefix="convergence_results"):
 
 
 class AlternatingEvaluator:
-    def __init__(self, iso_model, pcs_model, actual_csv, predicted_csv, config_name="Default"):
+    def __init__(
+        self,
+        iso_model,
+        pcs_model,
+        actual_csv,
+        predicted_csv,
+        config_name="Default",
+        use_asymmetric_pricing=False,
+        steps_per_day=48,
+    ):
         """
         Evaluator for alternating ISO/PCS experiments.
 
@@ -84,6 +93,10 @@ class AlternatingEvaluator:
             Path to CSV containing predicted consumption values for the ISO model.
         config_name : str, optional
             Human-readable name for this evaluation configuration (default "Default").
+        use_asymmetric_pricing : bool, optional
+            Whether ISO actions contain separate buy and sell price blocks.
+        steps_per_day : int, optional
+            Number of values in each price or dispatch block.
 
         Sets up:
             - ISOEnv for timestamp/indexing utilities
@@ -92,11 +105,20 @@ class AlternatingEvaluator:
         """
         self.iso_model = iso_model
         self.pcs_model = pcs_model
-        self.iso_env = ISOEnv(actual_csv, predicted_csv)
+        self.iso_env = ISOEnv(
+            actual_csv,
+            predicted_csv,
+            steps_per_day=steps_per_day,
+            use_asymmetric_pricing=use_asymmetric_pricing,
+        )
         self.config_name = config_name
 
         # 2. Use the new Strategy Class instead of the Wrapper
-        self.pricing_strategy = RLPriceCurveStrategy(iso_model)
+        self.pricing_strategy = RLPriceCurveStrategy(
+            iso_model,
+            use_asymmetric_pricing=use_asymmetric_pricing,
+            steps_per_day=steps_per_day,
+        )
 
         self.actual_csv = actual_csv
         self.predicted_csv = predicted_csv
@@ -122,8 +144,12 @@ class AlternatingEvaluator:
                 - timestamp, price, action, money, shortage, actual_consumption, dispatch
                 - day_mae for each step of that day
         """
-        pcs_env = PCSEnv(test_data_file=self.actual_csv, predictions_file=self.predicted_csv, prediction_horizon=48)
-        steps_per_day = 48
+        steps_per_day = self.iso_env.T
+        pcs_env = PCSEnv(
+            test_data_file=self.actual_csv,
+            predictions_file=self.predicted_csv,
+            prediction_horizon=steps_per_day,
+        )
         history = []
 
         for day in range(num_days):
@@ -134,6 +160,8 @@ class AlternatingEvaluator:
 
             # 4. Generate prices using the Strategy class
             price_curve = self.pricing_strategy.calculate_price(pred_window)
+            iso_action, _ = self.iso_model.predict(pred_window, deterministic=True)
+            _, _, iso_dispatch = self.iso_env._split_action(iso_action)
 
             # 5. Inject the strategy object into PCSEnv
             pcs_env.set_price_strategy(self.pricing_strategy)
@@ -147,9 +175,7 @@ class AlternatingEvaluator:
                 action, _ = self.pcs_model.predict(obs, deterministic=True)
                 next_obs, reward, _, _, info = pcs_env.step(action)
 
-                # Query the ISO model for the specific dispatch target
-                iso_action, _ = self.iso_model.predict(pred_window, deterministic=True)
-                dispatch_value = iso_action[steps_per_day + t]
+                dispatch_value = iso_dispatch[t]
 
                 day_actual_consumption.append(info.get('consumption_units', 0))
                 day_dispatch.append(dispatch_value)
@@ -379,11 +405,15 @@ def run_experiment(actual_csv,
     
     # Link models
     iso_env_train.iso_model = iso_mod
-    pricing_strategy = RLPriceCurveStrategy(iso_model=iso_mod)
+    pricing_strategy = RLPriceCurveStrategy(
+        iso_model=iso_mod,
+        use_asymmetric_pricing=iso_env_train.use_asymmetric_pricing,
+        steps_per_day=iso_env_train.T,
+    )
     
     # Training loop (simplified version of run_alternating_training)
     history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}
-    steps_per_day = 48
+    steps_per_day = iso_env_train.T
     cycle_days = 7
     
     for iteration in range(1, iterations + 1):
@@ -410,7 +440,7 @@ def run_experiment(actual_csv,
             eval_day_money = 0.0
             day_actuals = []
             iso_action, _ = iso_mod.predict(obs_window, deterministic=True)
-            day_dispatch = iso_action[steps_per_day:]
+            _, _, day_dispatch = iso_env_train._split_action(iso_action)
             
             for step_i in range(steps_per_day):
                 pcs_action, _ = pcs_mod.predict(obs, deterministic=True)

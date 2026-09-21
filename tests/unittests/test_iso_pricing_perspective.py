@@ -75,6 +75,13 @@ class TestISOPricingPerspective(unittest.TestCase):
             iso_verbosity=0,
             pcs_verbosity=0
         )
+        iso_env.iso_model = PPO(
+            "MlpPolicy",
+            iso_env,
+            verbose=0,
+            n_steps=2,
+            batch_size=2
+        )
         
         # Take one step in ISO environment
         obs, _ = iso_env.reset()
@@ -92,6 +99,7 @@ class TestISOPricingPerspective(unittest.TestCase):
         
         # Step the environment
         next_obs, iso_reward, done, truncated, info = iso_env.step(action)
+        self.assertFalse(iso_env.pcs_env.price_strategy.use_asymmetric_pricing)
         
         pcs_money = info.get('pcs_money', 0)
         iso_money = info.get('money_earned', 0)

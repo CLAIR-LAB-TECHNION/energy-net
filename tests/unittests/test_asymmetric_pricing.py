@@ -10,11 +10,38 @@ This test validates that when asymmetric pricing is enabled:
 import unittest
 import numpy as np
 from energy_net.gym_envs.pcs_env import PCSEnv
-from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy
+from energy_net.grid_entities.management.price_curve import (
+    ActionBasedPriceStrategy,
+    RLPriceCurveStrategy,
+)
 from unittest.mock import Mock
 
 class TestAsymmetricPricing(unittest.TestCase):
     """Test suite to verify asymmetric buy/sell pricing."""
+
+    def test_action_based_strategy_uses_configured_horizon(self):
+        steps_per_day = 4
+        action = np.concatenate([
+            np.full(steps_per_day, 0.1, dtype=np.float32),
+            np.full(steps_per_day, 0.4, dtype=np.float32),
+            np.full(steps_per_day, 0.9, dtype=np.float32),
+        ])
+        strategy = ActionBasedPriceStrategy(
+            action=action,
+            price_min=0.0,
+            price_max=0.20,
+            use_asymmetric_pricing=True,
+            steps_per_day=steps_per_day,
+        )
+
+        np.testing.assert_allclose(
+            strategy.calculate_buy_price(),
+            np.full(steps_per_day, 0.02, dtype=np.float32),
+        )
+        np.testing.assert_allclose(
+            strategy.calculate_sell_price(),
+            np.full(steps_per_day, 0.08, dtype=np.float32),
+        )
     
     def test_asymmetric_separate_prices(self):
         """

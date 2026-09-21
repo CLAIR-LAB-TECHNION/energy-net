@@ -13,14 +13,15 @@ class ISOEnv(gym.Env):
     Changes in this updated version:
     - Action space normalized to [0, 1] (instead of [-1, 1])
     - Configurable scaling parameters: price_scale and dispatch_scale
-    - First half of actions (prices) scaled by price_scale
-    - Second half of actions (dispatch) scaled by dispatch_scale
+    - Symmetric actions use T prices followed by T dispatch targets
+    - Asymmetric actions use T buy prices, T sell prices, then T dispatch targets
     - Robust NaN/Inf guards for features, observations, actions, and rewards
     - Finite observation space bounds
     """
 
     def __init__(self, actual_csv, predicted_csv, steps_per_day=48,
-                 price_scale=1.0, dispatch_scale=6.0, verbosity=2):
+                 price_scale=1.0, dispatch_scale=6.0, verbosity=2,
+                 use_asymmetric_pricing=False):
         super().__init__()
 
         # 1. Store scaling parameters
@@ -28,6 +29,7 @@ class ISOEnv(gym.Env):
         self.dispatch_scale = dispatch_scale
         self.T = steps_per_day
         self.verbosity = verbosity
+        self.use_asymmetric_pricing = bool(use_asymmetric_pricing)
 
         # 2. Load your data
         self.actual_df = pd.read_csv(actual_csv)
@@ -80,11 +82,11 @@ class ISOEnv(gym.Env):
             dtype=np.float32
         )
 
-        # Action: normalized action space [0, 1] for both prices and dispatch
+        price_action_blocks = 2 if self.use_asymmetric_pricing else 1
         self.action_space = spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(self.T * 2,),
+            shape=(self.T * (price_action_blocks + 1),),
             dtype=np.float32
         )
 
@@ -95,6 +97,26 @@ class ISOEnv(gym.Env):
         self._last_reset_info = None
         self._last_step_info = None
         self._last_reward = None
+
+    def _split_action(self, action):
+        """Validate and split the configured price and dispatch action blocks."""
+        action = np.asarray(action, dtype=np.float32).flatten()
+        price_action_blocks = 2 if self.use_asymmetric_pricing else 1
+        expected_length = self.T * (price_action_blocks + 1)
+
+        if action.size != expected_length:
+            layout = (
+                "T buy prices + T sell prices + T dispatch targets"
+                if self.use_asymmetric_pricing
+                else "T prices + T dispatch targets"
+            )
+            raise ValueError(
+                f"Expected action length {expected_length} for {layout}; "
+                f"got {action.size}."
+            )
+
+        dispatch_start = self.T * price_action_blocks
+        return action, action[:dispatch_start], action[dispatch_start:]
 
     def _get_features_for_range(self, start_idx, num_steps):
         """Get feature values for a range of timesteps."""
@@ -162,14 +184,11 @@ class ISOEnv(gym.Env):
         - assumes incoming action is in [0, 1] and scales by price_scale/dispatch_scale
         - computes reward robustly and returns (next_obs, reward, terminated, truncated, info)
         """
-        # ---- Convert & normalize incoming action ----
-        action = np.asarray(action, dtype=np.float32).flatten()
+        action, pricing_raw, dispatch_raw = self._split_action(action)
 
         # ---- Scale action by configurable parameters ----
-        # First half: prices (scaled by price_scale)
-        # Second half: dispatch (scaled by dispatch_scale)
-        prices_raw = action[:self.T]
-        dispatch_raw = action[self.T:]
+        # The first price block remains the canonical render/info price series.
+        prices_raw = pricing_raw[:self.T]
 
         prices = prices_raw * self.price_scale
         dispatch = dispatch_raw * self.dispatch_scale
