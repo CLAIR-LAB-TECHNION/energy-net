@@ -116,50 +116,31 @@ Coordinates ISO and PCS agents in an alternating training framework:
 
 ## Documentation
 
-### Energy prediction
-
-Select the target explicitly when creating a predictor. Demand, generation, net load, and other energy series use the same API, and tabular outputs are named for the selected target.
-
-```python
-from prediction.energy_predictor import create_energy_predictor
-
-predictor = create_energy_predictor(
-    "generation.csv",
-    target_col="Production",
-)
-forecast = predictor.predict("2025-06-15", "12:00")
-daily_forecasts = predictor.predict_days("2025-06-15")
-```
-
-Consumption-named callables and the former module import path remain available only as deprecated compatibility interfaces.
-
 For detailed tutorials, examples, and advanced usage, see:
 
-📓 **[EnergyNet Tutorial](Energy_Net_Tutorial.ipynb)** - Comprehensive guide covering:
+📓 **[Full Tutorial Notebook](Energy_Net_Tutorial-full.ipynb)** - Comprehensive guide covering:
 - Environment setup and configuration
 - Training agents with different algorithms
 - Visualization and analysis
 - Multi-agent coordination scenarios
 
-📈 **[Prediction Tutorial](Prediction_Tutorial.ipynb)** - Target-neutral forecasting for explicitly selected demand, generation, or other energy series.
+The tutorial is designed to run in Google Colab for easy experimentation without local setup.
 
 ---
 
 ## Project Structure
 
 ```
-energy-net/
-├── prediction/                    # Target-neutral energy forecasting
-│   └── energy_predictor.py        # Primary prediction API
+EnergyNetClean/
 ├── energy_net/                    # Core package
 │   ├── gym_envs/                  # Gym environments (PCS, ISO, Alternating)
 │   ├── grid_entities/             # Grid components (batteries, consumption units, etc.)
-│   └── foundation/                # Base classes and dynamics
+│   ├── foundation/                # Base classes and dynamics
+│   └── consumption_prediction/    # Consumption forecasting models
 ├── tests/                         # Test suite and example scripts
 │   ├── gym/                       # RL training examples
 │   └── unittests/                 # Unit tests
-├── Energy_Net_Tutorial.ipynb      # Comprehensive environment tutorial
-├── Prediction_Tutorial.ipynb      # Energy-target prediction tutorial
+├── Energy_Net_Tutorial-full.ipynb # Comprehensive tutorial
 └── README.md                      # This file
 ```
 

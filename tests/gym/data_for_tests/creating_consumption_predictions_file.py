@@ -1,5 +1,5 @@
 import os
-from prediction.energy_predictor import save_energy_predictions_with_train_test_split
+from energy_net.consumption_prediction.predicting_consumption_model import save_predictions_with_train_test_split
 
 #THIS IS HERE JUST TO SEE HOW CONSUMPTION_PREDICTIONS.CSV GOT CREATED - NOT NECESSARY TO
 #RUN SINCE FILE HAS ALREADY BEEN CREATED
@@ -16,11 +16,8 @@ def main():
 
     try:
         # Calling the last function with its default parameters
-        output_file, test_file = save_energy_predictions_with_train_test_split(
-            data_file="synthetic_household_consumption.csv",
-            target_col="Consumption",
-            output_file="consumption_predictions_without_features.csv",
-        )
+        output_file, test_file = save_predictions_with_train_test_split(data_file ="synthetic_household_consumption.csv",
+                                                                        output_file='consumption_predictions_without_features.csv')
 
         print("-" * 30)
         print(f"SUCCESS!")
