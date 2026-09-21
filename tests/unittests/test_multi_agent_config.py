@@ -1,6 +1,6 @@
 # test_multi_agent_config.py
 """
-Unit tests for the AgentConfig class in multi_agent_env.py
+Unit tests for the AgentConfig class in agent_config.py.
 """
 
 import pytest

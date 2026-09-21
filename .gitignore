@@ -150,3 +150,7 @@ checklink/cookies.txt
 
 #tests logs
 *.out.*
+
+# Generated example and tutorial outputs
+examples/output/
+results/
