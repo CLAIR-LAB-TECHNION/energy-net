@@ -13,6 +13,9 @@ import numpy as np
 import os
 
 
+ENERGY_FLOW_TOLERANCE = 0.000001
+
+
 class PCSEnv(gym.Env):
     """
     Simplified unit-less Gym environment for PCSUnit.
@@ -20,6 +23,8 @@ class PCSEnv(gym.Env):
     - Actions are normalized in [-1, 1] and passed directly to PCS/Battery.
     - No unit conversions to kWh/kW — everything stays in the same internal units.
     - Loads pre-computed predictions from CSV file.
+    - Queries actual CSV demand using the same calendar date as the predictions.
+    - Penalizes only demand not covered by local production and battery discharge.
     - Automatically detects and includes feature columns in observation space.
     """
 
@@ -324,9 +329,10 @@ class PCSEnv(gym.Env):
         self.pcs.reset(initial_storage_unit_level=0)
         self.last_action = None
 
-        # 5. Initialize consumption at timestep 0 without applying actions
+        # 5. Initialize consumption at the selected calendar time without applying actions
         # This ensures consumption values are calculated before returning initial observation
-        initial_state = State({"time": 0.0})
+        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
+        initial_state = State({"time": days_from_start})
         self.pcs.update(state=initial_state, actions=None)
 
         # 6. Return Initial Observation
@@ -356,8 +362,8 @@ class PCSEnv(gym.Env):
         battery_entity = self.pcs.storage_units[0]
 
         # 2. Update the Physical Simulation
-        # Convert step count to a relative time for the PCS logic
-        current_time_relative = self.current_step * self.dt
+        # PCS time is measured in days from the start of the consumption dataset.
+        current_time_relative = (self.current_datetime - self.test_start_date).total_seconds() / 86400
         state = State()
         state.set_attribute('time', current_time_relative)
 
@@ -369,7 +375,6 @@ class PCSEnv(gym.Env):
         storage_after = self.pcs.get_total_storage()
         consumption_units = float(self.pcs.get_consumption())
 
-        # Determine if a shortage occurred (demand exceeded available discharge)
         try:
             available_discharge_units = float(battery_entity.get_available_discharge_capacity())
         except Exception:
@@ -394,7 +399,17 @@ class PCSEnv(gym.Env):
         step_money = current_price * -energy_sold_or_bought
 
         # 4. Handle Penalties
-        shortage = consumption_units > available_discharge_units
+        # PCSUnit returns action-only battery flow, excluding discharge to serve demand.
+        battery_energy_used_for_consumption = max(
+            storage_before + energy_sold_or_bought - storage_after, 0.0
+        )
+        uncovered_consumption_units = max(
+            consumption_units
+            - float(self.pcs.get_production())
+            - battery_energy_used_for_consumption,
+            0.0,
+        )
+        shortage = uncovered_consumption_units > ENERGY_FLOW_TOLERANCE
         step_penalty = 0.0
         if shortage:
             step_penalty = self.shortage_penalty
@@ -422,6 +437,8 @@ class PCSEnv(gym.Env):
             'storage_after_units': storage_after,
             'energy_sold_or_bought_units': energy_sold_or_bought,
             'consumption_units': consumption_units,
+            'battery_energy_used_for_consumption_units': battery_energy_used_for_consumption,
+            'uncovered_consumption_units': uncovered_consumption_units,
             'available_discharge_units': available_discharge_units,
             'shortage': shortage,
             'battery_action': raw_action,
