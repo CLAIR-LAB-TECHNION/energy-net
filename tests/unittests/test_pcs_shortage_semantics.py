@@ -43,8 +43,9 @@ def _make_env(tmp_path, demand):
         pytest.param(0.0, 3.0, 2.0, 1.0, id="charging-leaves-shortfall"),
         pytest.param(8.0, 3.0, -4.0, 0.0, id="selling-leaves-enough"),
         pytest.param(5.0, 3.0, -4.0, 2.0, id="selling-creates-shortfall"),
-        pytest.param(0.5, 0.3, 0.0, 0.0, id="floating-point-residual"),
+        pytest.param(0.5, 0.3, 0.0, 0.0, id="fractional-demand-fully-served"),
         pytest.param(2.999, 3.0, 0.0, 0.001, id="small-real-shortfall"),
+        pytest.param(0.0, 0.00000001, 0.0, 0.00000001, id="any-positive-shortfall"),
     ],
 )
 def test_shortage_penalizes_only_uncovered_consumption(

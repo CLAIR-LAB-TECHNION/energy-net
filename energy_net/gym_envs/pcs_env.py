@@ -13,9 +13,6 @@ import numpy as np
 import os
 
 
-ENERGY_FLOW_TOLERANCE = 0.000001
-
-
 class PCSEnv(gym.Env):
     """
     Simplified unit-less Gym environment for PCSUnit.
@@ -409,7 +406,7 @@ class PCSEnv(gym.Env):
             - battery_energy_used_for_consumption,
             0.0,
         )
-        shortage = uncovered_consumption_units > ENERGY_FLOW_TOLERANCE
+        shortage = uncovered_consumption_units > 0.0
         step_penalty = 0.0
         if shortage:
             step_penalty = self.shortage_penalty
