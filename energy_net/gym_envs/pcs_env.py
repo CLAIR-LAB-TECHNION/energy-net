@@ -406,7 +406,9 @@ class PCSEnv(gym.Env):
             - battery_energy_used_for_consumption,
             0.0,
         )
-        shortage = uncovered_consumption_units > 0.0
+        # Ignore floating-point roundoff when detecting uncovered demand.
+        SHORTAGE_TOLERANCE = 1e-12
+        shortage = uncovered_consumption_units > SHORTAGE_TOLERANCE
         step_penalty = 0.0
         if shortage:
             step_penalty = self.shortage_penalty
