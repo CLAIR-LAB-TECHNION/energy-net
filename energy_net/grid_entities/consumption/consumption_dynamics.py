@@ -147,6 +147,8 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
     """
     Consumption pattern based on external data loaded from a CSV file with Datetime and Consumption columns.
     Allows querying consumption at specific date/time values.
+    Missing and infinite readings are interpolated in time at load time;
+    leading and trailing gaps use the nearest valid reading.
     """
     def __init__(self, params: Dict[str, str]):
         """
@@ -179,6 +181,13 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
             if 'Datetime' not in df.columns or 'Consumption' not in df.columns:
                 raise ValueError("CSV file must contain 'Datetime' and 'Consumption' columns")
             df.set_index('Datetime', inplace=True)
+            df['Consumption'] = (
+                df['Consumption']
+                .replace([np.inf, -np.inf], np.nan)
+                .interpolate(method='time', limit_direction='both')
+            )
+            if df['Consumption'].isna().any():
+                raise ValueError("Consumption data must contain at least one finite reading to interpolate")
 
             # Calculate the day number and time fraction
             df['DayNumber'] = (df.index - df.index[0]).days
