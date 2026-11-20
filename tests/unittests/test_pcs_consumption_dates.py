@@ -175,3 +175,50 @@ def test_rejected_reset_preserves_episode_state(dated_pcs_env):
     )
 
     assert after == before
+
+
+def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
+    timestamps = pd.date_range(
+        "2025-01-01 00:30",
+        periods=3 * 48,
+        freq="30min",
+    )
+    demand = 1.0 + np.arange(len(timestamps)) * 0.01
+
+    consumption_file = tmp_path / "consumption.csv"
+    predictions_file = tmp_path / "predictions.csv"
+
+    pd.DataFrame({
+        "Datetime": timestamps,
+        "Consumption": demand,
+    }).to_csv(consumption_file, index=False)
+
+    pd.DataFrame({
+        "timestamp": timestamps,
+        "predicted_consumption": demand,
+    }).to_csv(predictions_file, index=False)
+
+    env = PCSEnv(
+        test_data_file=str(consumption_file),
+        predictions_file=str(predictions_file),
+        verbosity=0,
+    )
+
+    try:
+        env.reset(start_date=timestamps[0])
+
+        assert env.pcs.get_consumption() == pytest.approx(demand[0])
+
+        for i in range(env.max_steps):
+            _, _, terminated, _, info = env.step(
+                np.array([0.0], dtype=np.float32)
+            )
+
+            assert info["consumption_units"] == pytest.approx(
+                demand[i]
+            ), f"Consumption mismatch at {timestamps[i]}"
+
+        assert terminated
+
+    finally:
+        env.close()

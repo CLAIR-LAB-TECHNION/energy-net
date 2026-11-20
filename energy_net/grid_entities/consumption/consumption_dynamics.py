@@ -190,9 +190,10 @@ class CSV_DataConsumptionDynamics(ConsumptionDynamics):
                 raise ValueError("Consumption data must contain at least one finite reading to interpolate")
 
             # Calculate the day number and time fraction
-            df['DayNumber'] = (df.index - df.index[0]).days
-            df['TimeFraction'] = df.index.hour / 24 + df.index.minute / 1440
-            df['DayTimeFraction'] = df['DayNumber'] + df['TimeFraction']
+            # Represent timestamps as elapsed days from the first CSV reading.
+            df["DayTimeFraction"] = (
+                (df.index - df.index[0]).total_seconds() / 86400.0
+            )
             df.set_index('DayTimeFraction', inplace=True)
             return df
         except Exception as e:
