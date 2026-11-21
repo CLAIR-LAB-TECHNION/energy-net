@@ -185,3 +185,57 @@ def test_only_actual_shortfalls_accumulate_penalties(tmp_path):
         assert env.total_reward == 0.0
     finally:
         env.close()
+
+
+@pytest.mark.parametrize(
+    "initial_storage, demand",
+    [
+        pytest.param(5.0, 0.1, id="small-fractional-demand"),
+        pytest.param(5.0, 1.95219, id="real-dataset-counterexample"),
+        pytest.param(5.0, 0.3, id="decimal-demand"),
+    ],
+)
+def test_floating_point_residual_does_not_trigger_shortage(
+    tmp_path, initial_storage, demand
+):
+    """Numerical roundoff must not trigger a shortage penalty.
+
+    When the battery fully serves demand, reconstructing the
+    energy used from the storage difference may produce a tiny
+    positive residual due to floating-point arithmetic.
+    """
+    env = _make_env(tmp_path, demand)
+    try:
+        env.reset()
+        env.pcs.storage_units[0].reset(initial_storage)
+
+        _, reward, _, _, info = env.step(
+            np.array([0.0], dtype=np.float32)
+        )
+
+        # The battery has sufficient energy to serve all demand.
+        assert info["storage_before_units"] == pytest.approx(
+            initial_storage
+        )
+        assert info["battery_energy_used_for_consumption_units"] == (
+            pytest.approx(demand)
+        )
+        assert info["storage_after_units"] == pytest.approx(
+            initial_storage - demand
+        )
+
+        # Any remaining uncovered demand is numerical noise.
+        assert 0.0 <= info["uncovered_consumption_units"] < 1e-12
+
+        # Numerical noise must not cause an actual penalty.
+        assert not info["shortage"]
+        assert env.shortage_count == 0
+        assert env.total_shortage_penalty == pytest.approx(0.0)
+
+        # No battery transaction and no shortage means zero reward.
+        assert info["step_money"] == pytest.approx(0.0)
+        assert reward == pytest.approx(0.0)
+        assert env.total_reward == pytest.approx(0.0)
+
+    finally:
+        env.close()

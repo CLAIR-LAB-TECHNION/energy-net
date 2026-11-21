@@ -301,25 +301,56 @@ class PCSEnv(gym.Env):
         This method handles time synchronization, internal PCS unit resets,
         and resets all financial/performance tracking metrics.
         """
-        # 1. Standard Gym reset for seeding
+
+        # 1. Handle and Validate Time Synchronization
+        explicit_date = start_date is not None
+        candidate = pd.Timestamp(
+            start_date if explicit_date else self.current_datetime
+        )
+
+        def has_full_episode(start):
+            timestamps = self.test_df.index
+            start_idx = timestamps.get_indexer([start])[0]
+
+            if start_idx < 0 or start_idx + self.max_steps > len(timestamps):
+                return False
+
+            expected = pd.date_range(
+                start=start,
+                periods=self.max_steps,
+                freq=pd.Timedelta(days=self.dt),
+            )
+
+            actual = timestamps[start_idx:start_idx + self.max_steps]
+            return actual.equals(expected)
+
+        if not has_full_episode(candidate):
+            if explicit_date:
+                raise ValueError(
+                    f"Cannot start episode at {candidate}: "
+                    f"{self.max_steps} consecutive consumption "
+                    "readings are required."
+                )
+
+            # Automatic resets may restart at the dataset beginning,
+            # but only between complete episodes.
+            candidate = pd.Timestamp(self.test_start_date)
+
+            if not has_full_episode(candidate):
+                raise ValueError(
+                    "Consumption dataset has no complete initial episode."
+                )
+
+        # 2. Standard Gym reset for seeding
         super().reset(seed=seed)
 
-        # 2. Reset episode-specific counters
+        # 3. Reset episode-specific counters
         self.current_step = 0
         self.total_reward = 0.0
         self.total_money_earned = 0.0
         self.total_shortage_penalty = 0.0
         self.shortage_count = 0
-
-        # 3. Handle Time Synchronization
-        # If a specific date is provided (e.g., during tandem training), use it.
-        # Otherwise, check if we've hit the end of the test data and loop if necessary.
-        if start_date is not None:
-            self.current_datetime = start_date
-        else:
-            if self.current_datetime >= self.test_end_date:
-                print("Reached end of dataset. Looping back to start.")
-                self.current_datetime = self.test_start_date
+        self.current_datetime = candidate
 
         # 4. Reset Physical Units
         # Resets the battery to empty (or a configured initial level) and clears PCS logs.
@@ -406,7 +437,9 @@ class PCSEnv(gym.Env):
             - battery_energy_used_for_consumption,
             0.0,
         )
-        shortage = uncovered_consumption_units > 0.0
+        # Ignore floating-point roundoff when detecting uncovered demand.
+        SHORTAGE_TOLERANCE = 1e-12
+        shortage = uncovered_consumption_units > SHORTAGE_TOLERANCE
         step_penalty = 0.0
         if shortage:
             step_penalty = self.shortage_penalty
