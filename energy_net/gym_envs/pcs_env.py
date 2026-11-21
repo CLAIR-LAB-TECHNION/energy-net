@@ -8,6 +8,11 @@ from energy_net.grid_entities.storage.battery_dynamics import DeterministicBatte
 from energy_net.grid_entities.storage.battery import Battery
 from energy_net.grid_entities.consumption.consumption_unit import ConsumptionUnit
 from energy_net.foundation.model import State, Action
+from energy_net.gym_envs.pcs_rewards import (
+    SHORTAGE_TOLERANCE,
+    net_meter_reward,
+    net_meter_reward_with_shortage_penalty,
+)
 from datetime import timedelta
 import numpy as np
 import os
@@ -17,11 +22,11 @@ class PCSEnv(gym.Env):
     """
     Simplified unit-less Gym environment for PCSUnit.
     - Uses internal "units" everywhere (battery capacity 0..100, consumption ~2 units/step).
-    - Actions are normalized in [-1, 1] and passed directly to PCS/Battery.
+    - Battery actions request energy changes in [-10, 10] (action_scale=1).
     - No unit conversions to kWh/kW — everything stays in the same internal units.
     - Loads pre-computed predictions from CSV file.
     - Queries actual CSV demand using the same calendar date as the predictions.
-    - Penalizes only demand not covered by local production and battery discharge.
+    - Settles net grid exchange; grid-reliance penalty is optional reward shaping.
     - Automatically detects and includes feature columns in observation space.
     """
 
@@ -35,7 +40,8 @@ class PCSEnv(gym.Env):
                  action_scale=1.0,
                  price_strategy: PriceCurveStrategy = None,
                  render_mode: str | None = None,
-                 verbosity: int = 2):
+                 verbosity: int = 2,
+                 include_shortage_penalty: bool = False):
         """
         Initialize PCS environment.
         
@@ -45,6 +51,9 @@ class PCSEnv(gym.Env):
         Args:
             prediction_horizon: Number of future timesteps to include in observation.
                 If None, defaults to max_steps (full day visibility).
+            include_shortage_penalty: If True, apply an additional fixed penalty
+                whenever demand must be supplied by the grid. Defaults to the
+                unpenalized POMDP reward; shortage_penalty controls its weight.
         """
         super().__init__()
 
@@ -68,7 +77,10 @@ class PCSEnv(gym.Env):
         if prediction_horizon is None:
             prediction_horizon = self.max_steps
         self.prediction_horizon = prediction_horizon
-        self.shortage_penalty = shortage_penalty
+        self.shortage_penalty = float(shortage_penalty)
+        if self.shortage_penalty < 0:
+            raise ValueError("shortage_penalty must be nonnegative")
+        self.include_shortage_penalty = include_shortage_penalty
         self.action_scale = action_scale
         if price_strategy is None:
             self.price_strategy = SineWavePriceStrategy()
@@ -178,8 +190,9 @@ class PCSEnv(gym.Env):
         encoded_prediction_dim = prediction_horizon * 2
         
         # Observation space:
-        # [storage, consumption, price] + [zero-padded predictions + mask] + [battery capacities] + [features]
-        obs_dim = 3 + encoded_prediction_dim + 2 + self.num_features
+        # [storage, consumption, PCS buy tariff, PCS sell tariff]
+        # + [zero-padded predictions + mask] + [battery capacities] + [features]
+        obs_dim = 4 + encoded_prediction_dim + 2 + self.num_features
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -189,7 +202,7 @@ class PCSEnv(gym.Env):
 
         if self.verbosity > 0:
             print(f"Observation space dimension: {obs_dim}")
-            print("  - Base features (storage, consumption, price): 3")
+            print("  - Base features (storage, consumption, buy/sell tariffs): 4")
             print(f"  - Zero-padded predictions + validity mask: {encoded_prediction_dim}")
             print("  - Battery capacity constraints: 2")
             print(f"  - Additional time features: {self.num_features}")
@@ -210,54 +223,45 @@ class PCSEnv(gym.Env):
         """Returns the accumulated money made from transactions, ignoring shortage penalties."""
         return self.total_money_earned
 
-    def _get_current_price(self, energy_flow_direction=None) -> float:
+    def _get_current_prices(self) -> tuple[float, float]:
+        """Return PCS (buy/import, sell/export) tariffs announced before action.
+
+        Pricing strategies name buy/sell from the ISO's viewpoint. Daily
+        curves are cached for their calendar date and indexed by clock slot.
         """
-        Get the current price, optionally using asymmetric buy/sell pricing.
-        
-        Args:
-            energy_flow_direction: If provided, 'buy' means PCS is buying (charging),
-                'sell' means PCS is selling (discharging). If None, uses symmetric pricing.
-        
-        Returns:
-            float: The price for the current timestep
-        """
-        # Only calculate the full day curves if the date has changed
-        if self.cached_day_prices is None or self.current_datetime.date() != self.last_price_update_date:
-            # ISO model always expects 48 timesteps (full day), regardless of PCS prediction_horizon
+        current_date = self.current_datetime.date()
+        if self.cached_day_prices is None or current_date != self.last_price_update_date:
             iso_horizon = 48
-            predicted_consumption = self._get_predicted_consumption(iso_horizon)
-            day_features = self._get_feature_window(iso_horizon)  # The 336 values (48 * 7)
+            # ISO daily input is based on the calendar date, not the episode start.
+            day_start = pd.Timestamp(current_date)
+            predicted_consumption = self._get_predicted_consumption(
+                iso_horizon, start_datetime=day_start
+            )
+            day_features = self._get_feature_window(
+                iso_horizon, start_datetime=day_start
+            )
             iso_input = np.concatenate([predicted_consumption / 10.0, day_features])
+            pcs_buy, pcs_sell = self.price_strategy.calculate_pcs_tariffs(iso_input)
+            self.cached_buy_prices = np.asarray(pcs_buy, dtype=float)
+            self.cached_sell_prices = np.asarray(pcs_sell, dtype=float)
+            if self.cached_buy_prices.shape != (48,) or self.cached_sell_prices.shape != (48,):
+                raise ValueError("ISO pricing strategy must return two 48-slot daily curves")
+            # Keep a legacy default price curve for callers inspecting this cache.
+            self.cached_day_prices = self.cached_buy_prices
+            self.last_price_update_date = current_date
 
-            # Call the ISO brain ONLY ONCE per day for all price curves
-            # Check if strategy supports asymmetric pricing
-            if hasattr(self.price_strategy, 'use_asymmetric_pricing') and self.price_strategy.use_asymmetric_pricing:
-                # Cache both buy and sell prices
-                self.cached_buy_prices = self.price_strategy.calculate_buy_price(iso_input)
-                self.cached_sell_prices = self.price_strategy.calculate_sell_price(iso_input)
-                # Also cache base prices for compatibility
-                self.cached_day_prices = self.price_strategy.calculate_price(iso_input)
-            else:
-                # Symmetric pricing - same price for buy and sell
-                self.cached_day_prices = self.price_strategy.calculate_price(iso_input)
-                self.cached_buy_prices = None
-                self.cached_sell_prices = None
-            
-            self.last_price_update_date = self.current_datetime.date()
+        slot = self.current_datetime.hour * 2 + self.current_datetime.minute // 30
+        return float(self.cached_buy_prices[slot]), float(self.cached_sell_prices[slot])
 
-        intra_day_step = self.current_step % self.max_steps
-        
-        # Return appropriate price based on direction if asymmetric pricing is enabled
-        if energy_flow_direction and self.cached_buy_prices is not None and self.cached_sell_prices is not None:
-            if energy_flow_direction == 'buy':
-                # PCS is buying (charging) - use sell price (ISO is selling to PCS)
-                return float(self.cached_sell_prices[intra_day_step])
-            elif energy_flow_direction == 'sell':
-                # PCS is selling (discharging) - use buy price (ISO is buying from PCS)
-                return float(self.cached_buy_prices[intra_day_step])
-        
-        # Default: return symmetric price
-        return float(self.cached_day_prices[intra_day_step])
+    def _get_current_price(self, energy_flow_direction=None) -> float:
+        """Legacy single-price accessor; prefer _get_current_prices().
+
+        The default returns the PCS buy/import tariff. The directional form
+        preserves the old 'buy'/'sell' vocabulary for external callers.
+        """
+        buy_tariff, sell_tariff = self._get_current_prices()
+        return sell_tariff if energy_flow_direction == "sell" else buy_tariff
+
     def set_price_strategy(self, strategy: PriceCurveStrategy):
         """
         Explicitly updates the pricing logic by injecting a new
@@ -267,11 +271,16 @@ class PCSEnv(gym.Env):
             raise TypeError("The provided strategy must be an instance of PriceCurveStrategy.")
 
         self.price_strategy = strategy
+        self.cached_day_prices = None
+        self.cached_buy_prices = None
+        self.cached_sell_prices = None
+        self.last_price_update_date = None
 
-    def _get_predicted_consumption(self, num_steps):
+    def _get_predicted_consumption(self, num_steps, start_datetime=None):
         """Get predicted consumption from preloaded cache."""
-        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
-        current_idx = int(days_from_start / self.dt)
+        window_start = self.current_datetime if start_datetime is None else pd.Timestamp(start_datetime)
+        days_from_start = (window_start - self.test_start_date).total_seconds() / 86400
+        current_idx = int(round(days_from_start / self.dt))
         end_idx = current_idx + num_steps
 
         if end_idx > len(self.prediction_cache):
@@ -376,7 +385,7 @@ class PCSEnv(gym.Env):
 
         Returns:
             obs: The next observation vector.
-            reward: The net financial reward (Money earned - Shortage penalties).
+            reward: Negative net electricity bill, optionally minus grid-reliance penalty.
             terminated: Whether the 24-hour day is complete.
             truncated: False (standard Gym API).
             info: A dictionary containing diagnostic information for the step.
@@ -387,6 +396,7 @@ class PCSEnv(gym.Env):
 
         # Record state before update for the info dict
         storage_before = self.pcs.get_total_storage()
+        buy_tariff, sell_tariff = self._get_current_prices()
         battery_entity = self.pcs.storage_units[0]
 
         # 2. Update the Physical Simulation
@@ -408,48 +418,36 @@ class PCSEnv(gym.Env):
         except Exception:
             available_discharge_units = getattr(battery_entity, 'available_discharge', 0.0)
 
-        # 3. Calculate Financials using the Price Strategy
-        # Determine energy flow direction for asymmetric pricing
-        if energy_sold_or_bought > 0:
-            # Positive means battery charged (PCS bought energy from ISO)
-            energy_flow = 'buy'
-        elif energy_sold_or_bought < 0:
-            # Negative means battery discharged (PCS sold energy to ISO)
-            energy_flow = 'sell'
-        else:
-            # No energy flow
-            energy_flow = None
-        
-        # Fetch the appropriate price based on energy flow direction
-        current_price = self._get_current_price(energy_flow_direction=energy_flow)
-
-        # Money earned: (Price * Energy Sold). If energy is bought, this is negative.
-        step_money = current_price * -energy_sold_or_bought
-
-        # 4. Handle Penalties
-        # PCSUnit returns action-only battery flow, excluding discharge to serve demand.
+        # 3. Physical energy balance: q is the realized explicit action.
+        # Automatic battery service supplies some demand; grid covers the rest.
         battery_energy_used_for_consumption = max(
             storage_before + energy_sold_or_bought - storage_after, 0.0
         )
         uncovered_consumption_units = max(
-            consumption_units
-            - float(self.pcs.get_production())
+            consumption_units - float(self.pcs.get_production())
             - battery_energy_used_for_consumption,
             0.0,
         )
-        # Ignore floating-point roundoff when detecting uncovered demand.
-        SHORTAGE_TOLERANCE = 1e-12
+        net_grid_exchange = energy_sold_or_bought + uncovered_consumption_units
         shortage = uncovered_consumption_units > SHORTAGE_TOLERANCE
-        step_penalty = 0.0
-        if shortage:
-            step_penalty = self.shortage_penalty
-            self.shortage_count += 1
-            self.total_shortage_penalty += step_penalty
 
-        # 5. Update Cumulative Metrics
+        # 4. The money component is always the POMDP net-metered bill.
+        # Reward shaping is an experimental choice, not different settlement.
+        step_money = net_meter_reward(net_grid_exchange, buy_tariff, sell_tariff)
+        if self.include_shortage_penalty:
+            reward = net_meter_reward_with_shortage_penalty(
+                net_grid_exchange, buy_tariff, sell_tariff,
+                uncovered_consumption_units, self.shortage_penalty,
+            )
+        else:
+            reward = step_money
+        step_penalty = step_money - reward
+        if shortage:
+            self.shortage_count += 1
+        self.total_shortage_penalty += step_penalty
         self.total_money_earned += step_money
-        reward = step_money - step_penalty
         self.total_reward += reward
+        current_price = buy_tariff if net_grid_exchange >= 0 else sell_tariff
 
         # 6. Advance Environment Time
         self.current_step += 1
@@ -473,20 +471,26 @@ class PCSEnv(gym.Env):
             'shortage': shortage,
             'battery_action': raw_action,
             'step_money': step_money,
-            'current_price': current_price,  # Added for better traceability
+            'grid_exchange_units': net_grid_exchange,
+            'buy_tariff': buy_tariff,
+            'sell_tariff': sell_tariff,
+            'shortage_penalty': step_penalty,
+            'include_shortage_penalty': self.include_shortage_penalty,
+            'current_price': current_price,  # tariff actually used for net exchange
             'total_money_so_far': self.total_money_earned
         }
 
         return obs, reward, terminated, truncated, info
 
-    def _get_feature_window(self, num_steps):
+    def _get_feature_window(self, num_steps, start_datetime=None):
         """Get feature values for a range of timesteps starting from current datetime."""
         if self.feature_cache is None or self.num_features == 0:
             return np.array([])
 
         # Calculate starting index in the cache
-        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
-        current_idx = int(days_from_start / self.dt)
+        window_start = self.current_datetime if start_datetime is None else pd.Timestamp(start_datetime)
+        days_from_start = (window_start - self.test_start_date).total_seconds() / 86400
+        current_idx = int(round(days_from_start / self.dt))
         end_idx = current_idx + num_steps
 
         if end_idx > len(self.feature_cache):
@@ -511,7 +515,7 @@ class PCSEnv(gym.Env):
         # Base PCS observations
         current_storage = self.pcs.get_total_storage() / 100.0
         current_consumption = self.pcs.get_consumption() / 10.0
-        current_price = self._get_current_price()
+        buy_tariff, sell_tariff = self._get_current_prices()
 
         # Get raw predictions and normalize
         predicted_consumption = self._get_predicted_consumption(self.prediction_horizon) / 10.0
@@ -547,9 +551,9 @@ class PCSEnv(gym.Env):
         # Get current time features
         current_features = self._get_current_features()
 
-        # Concatenate: [storage, consumption, price] + [zero-padded] + [mask] + [capacities] + [features]
+        # Concatenate in documented order: [storage, consumption, buy, sell, forecasts, mask, capacities, calendar].
         obs = np.concatenate([
-            [current_storage, current_consumption, current_price],
+            [current_storage, current_consumption, buy_tariff, sell_tariff],
             zero_padded,
             mask,
             [available_charge, available_discharge],

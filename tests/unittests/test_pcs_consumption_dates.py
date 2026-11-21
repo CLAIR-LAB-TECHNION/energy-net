@@ -44,7 +44,7 @@ def test_reset_consumption_matches_selected_date(dated_pcs_env, start_index):
 
     expected = readings.loc[start_date, "Consumption"]
     assert env.current_datetime == start_date
-    assert obs[3] * 10.0 == pytest.approx(expected)
+    assert obs[4] * 10.0 == pytest.approx(expected)
     assert obs[1] * 10.0 == pytest.approx(expected)
     assert env.pcs.get_consumption() == pytest.approx(expected)
 
@@ -84,7 +84,7 @@ def test_reset_without_date_uses_next_days_consumption(dated_pcs_env):
     _, _, _, _, info = env.step(np.array([0.0], dtype=np.float32))
 
     expected = readings.iloc[48]["Consumption"]
-    assert obs[3] * 10.0 == pytest.approx(expected)
+    assert obs[4] * 10.0 == pytest.approx(expected)
     np.testing.assert_allclose(
         [obs[1] * 10.0, info["consumption_units"]],
         [expected, expected],

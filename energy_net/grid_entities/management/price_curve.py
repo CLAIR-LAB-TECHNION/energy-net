@@ -35,6 +35,21 @@ class PriceCurveStrategy(ABC):
         """
         return self.calculate_price(observation)
 
+    def calculate_pcs_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+        """Return (PCS import tariff, PCS export tariff) for a whole day.
+
+        PriceCurveStrategy's buy/sell names are from the ISO's perspective:
+        the PCS buys at the ISO *sell* price and exports at its *buy* price.
+        Symmetric strategies are evaluated only once.
+        """
+        if getattr(self, "use_asymmetric_pricing", False):
+            return (
+                self.calculate_sell_price(observation),
+                self.calculate_buy_price(observation),
+            )
+        curve = self.calculate_price(observation)
+        return curve, curve
+
 
 class ActionBasedPriceStrategy(PriceCurveStrategy):
     """
@@ -217,6 +232,24 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
         sell_prices = self.price_min + (raw_sell_prices * (self.price_max - self.price_min))
         
         return sell_prices.astype(np.float32)
+    def calculate_pcs_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+        """Query the trained ISO once and extract both tariffs consistently."""
+        obs = np.asarray(observation, dtype=np.float32)
+        action, _ = self.iso_model.predict(obs, deterministic=True)
+        action = np.asarray(action, dtype=np.float32)
+        iso_buy = self.price_min + (
+            action[:self.steps_per_day] * (self.price_max - self.price_min)
+        )
+        if self.use_asymmetric_pricing:
+            iso_sell = self.price_min + (
+                action[self.steps_per_day:2 * self.steps_per_day]
+                * (self.price_max - self.price_min)
+            )
+        else:
+            iso_sell = iso_buy
+        return iso_sell.astype(np.float32), iso_buy.astype(np.float32)
+
+
 class SineWavePriceStrategy(PriceCurveStrategy):
     """
     Reproduces the original sine-wave pricing logic from PCSEnv.

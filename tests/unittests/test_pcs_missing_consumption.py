@@ -64,7 +64,7 @@ def test_missing_consumption_does_not_reach_step_observation(missing_consumption
 
         obs, reward, _, _, info = env.step(np.array([0.0], dtype=np.float32))
 
-        assert np.isfinite(obs[3:]).all(), "Forecasts and capacities are finite controls"
+        assert np.isfinite(obs[4:]).all(), "Forecasts and capacities are finite controls"
         np.testing.assert_allclose(
             [
                 env.pcs.consumption_units[0].get_state(),
