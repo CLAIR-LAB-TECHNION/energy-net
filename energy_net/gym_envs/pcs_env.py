@@ -17,6 +17,16 @@ from datetime import timedelta
 import numpy as np
 import os
 
+CALENDAR_FEATURE_COLUMNS = (
+    "sin_time",
+    "cos_time",
+    "sin_week",
+    "cos_week",
+    "sin_year",
+    "cos_year",
+    "is_weekend",
+)
+
 
 class PCSEnv(gym.Env):
     """
@@ -27,7 +37,7 @@ class PCSEnv(gym.Env):
     - Loads pre-computed predictions from CSV file.
     - Queries actual CSV demand using the same calendar date as the predictions.
     - Settles net grid exchange; grid-reliance penalty is optional reward shaping.
-    - Automatically detects and includes feature columns in observation space.
+    - Computes seven fixed calendar features from absolute timestamps.
     """
 
     def __init__(self,
@@ -99,7 +109,7 @@ class PCSEnv(gym.Env):
         self.last_action = None
         self.cached_day_prices = None
         self.last_price_update_date = None
-
+        self._episode_day_prices = {}
         # -------------------------
         # Load test data
         # -------------------------
@@ -154,20 +164,15 @@ class PCSEnv(gym.Env):
         self.prediction_cache = pred_df['predicted_consumption'].values
         self.prediction_timestamps = pred_df.index
 
-        # Automatically detect feature columns (everything except timestamp and predicted_consumption)
-        excluded_cols = {'predicted_consumption'}
-        self.feature_columns = [col for col in pred_df.columns if col not in excluded_cols]
+        # Fixed POMDP calendar-feature schema.
+        # Values will be computed from absolute timestamps.
+        self.feature_columns = list(CALENDAR_FEATURE_COLUMNS)
         self.num_features = len(self.feature_columns)
+        self.feature_cache = None
 
         if self.verbosity > 0:
             print(f"Loaded {len(self.prediction_cache)} aligned predictions")
-            print(f"Detected {self.num_features} feature columns: {self.feature_columns}")
-
-        # Cache feature values for fast lookup
-        if self.num_features > 0:
-            self.feature_cache = pred_df[self.feature_columns].values
-        else:
-            self.feature_cache = None
+            print(f"Calendar feature channels: {self.feature_columns}")
 
         # ==============================================================
         # Battery
@@ -266,44 +271,138 @@ class PCSEnv(gym.Env):
         """Returns the accumulated money made from transactions, ignoring shortage penalties."""
         return self.total_money_earned
 
-    def _get_current_prices(self) -> tuple[float, float]:
-        """Return PCS (buy/import, sell/export) tariffs announced before action.
 
-        Pricing strategies name buy/sell from the ISO's viewpoint. Daily
-        curves are cached for their calendar date and indexed by clock slot.
+    def _build_daily_tariffs(self, day, strategy=None):
         """
-        current_date = self.current_datetime.date()
-        if self.cached_day_prices is None or current_date != self.last_price_update_date:
-            iso_horizon = 48
-            # ISO daily input is based on the calendar date, not the episode start.
-            iso_input = None
+        Build and validate both PCS daily tariff curves.
 
-            if self.price_strategy.requires_daily_observation:
-                # Data-dependent ISO strategies require an entire calendar day.
-                day_start = pd.Timestamp(current_date)
+        This method does not modify the environment's
+        battery, episode counters, or tariff caches.
+        """
+        strategy = (
+            self.price_strategy
+            if strategy is None
+            else strategy
+        )
 
-                predicted_consumption = self._get_predicted_consumption(
-                    iso_horizon, start_datetime=day_start
-                )
-                day_features = self._get_feature_window(
-                    iso_horizon, start_datetime=day_start
-                )
+        day = pd.Timestamp(day).normalize()
+        iso_input = None
 
-                iso_input = np.concatenate([
-                    predicted_consumption / 10.0,
-                    day_features,
-                ])
-            pcs_buy, pcs_sell = self.price_strategy.calculate_pcs_tariffs(iso_input)
-            self.cached_buy_prices = np.asarray(pcs_buy, dtype=float)
-            self.cached_sell_prices = np.asarray(pcs_sell, dtype=float)
-            if self.cached_buy_prices.shape != (48,) or self.cached_sell_prices.shape != (48,):
-                raise ValueError("ISO pricing strategy must return two 48-slot daily curves")
-            # Keep a legacy default price curve for callers inspecting this cache.
-            self.cached_day_prices = self.cached_buy_prices
-            self.last_price_update_date = current_date
+        if strategy.requires_daily_observation:
+            demand = self._get_predicted_consumption(
+                48, start_datetime=day
+            )
 
-        slot = self.current_datetime.hour * 2 + self.current_datetime.minute // 30
-        return float(self.cached_buy_prices[slot]), float(self.cached_sell_prices[slot])
+            features = self._get_feature_window(
+                48, start_datetime=day
+            )
+
+            iso_input = np.concatenate([
+                demand / 10.0,
+                features,
+            ])
+
+        pcs_buy, pcs_sell = strategy.calculate_pcs_tariffs(
+            iso_input
+        )
+
+        buy = np.asarray(pcs_buy, dtype=float)
+        sell = np.asarray(pcs_sell, dtype=float)
+
+        # Each calendar day requires 48 half-hour tariffs.
+        if buy.shape != (48,) or sell.shape != (48,):
+            raise ValueError(
+                "ISO pricing strategy must return "
+                "two 48-slot daily curves"
+            )
+
+        if not np.isfinite(buy).all() or not np.isfinite(sell).all():
+            raise ValueError("Tariffs must be finite")
+
+        if (buy < 0).any() or (sell < 0).any():
+            raise ValueError("Tariffs must be nonnegative")
+
+        # Selling to the grid must not pay more than importing costs.
+        if (sell > buy + 1e-7).any():
+            raise ValueError(
+                "PCS sell tariff cannot exceed PCS buy tariff"
+            )
+
+        # Enforce an upper bound when declared by the strategy.
+        upper = getattr(strategy, "price_max", None)
+
+        if upper is not None and (
+            (buy > upper + 1e-7).any()
+            or (sell > upper + 1e-7).any()
+        ):
+            raise ValueError(
+                "Tariffs exceed the strategy price_max"
+            )
+
+        return buy.copy(), sell.copy()
+
+
+    def _prepare_episode_tariffs(
+        self, start, num_steps=None, strategy=None
+    ):
+        """
+        Prevalidate all calendar days touched by an episode.
+
+        Returns a dictionary:
+            calendar_date -> (PCS buy curve, PCS sell curve)
+        """
+        steps = (
+            self.max_steps if num_steps is None else num_steps
+        )
+
+        times = pd.date_range(
+            start=pd.Timestamp(start),
+            periods=steps,
+            freq=pd.Timedelta(days=self.dt),
+        )
+
+        return {
+            day.date(): self._build_daily_tariffs(day, strategy)
+            for day in times.normalize().unique()
+        }
+
+
+    def _get_current_prices(self) -> tuple[float, float]:
+        """
+        Return PCS import/export tariffs at the current
+        absolute calendar half-hour slot.
+        """
+        day = self.current_datetime.date()
+
+        if (
+            self.last_price_update_date != day
+            or self.cached_day_prices is None
+        ):
+            buy, sell = self._episode_day_prices.get(
+                day, (None, None)
+            )
+
+            if buy is None:
+                buy, sell = self._build_daily_tariffs(day)
+                self._episode_day_prices[day] = (buy, sell)
+
+            self.cached_buy_prices = buy
+            self.cached_sell_prices = sell
+
+            # Legacy accessor compatibility.
+            self.cached_day_prices = buy
+            self.last_price_update_date = day
+
+        slot = (
+            self.current_datetime.hour * 2
+            + self.current_datetime.minute // 30
+        )
+
+        return (
+            float(self.cached_buy_prices[slot]),
+            float(self.cached_sell_prices[slot]),
+        )
+
 
     def _get_current_price(self, energy_flow_direction=None) -> float:
         """Legacy single-price accessor; prefer _get_current_prices().
@@ -316,18 +415,48 @@ class PCSEnv(gym.Env):
 
     def set_price_strategy(self, strategy: PriceCurveStrategy):
         """
-        Explicitly updates the pricing logic by injecting a new
-        PriceCurveStrategy object.
+        Atomically change the pricing strategy.
+
+        If an episode is active, return a refreshed decision
+        observation. The caller must use that observation
+        instead of the previously returned one.
         """
         if not isinstance(strategy, PriceCurveStrategy):
-            raise TypeError("The provided strategy must be an instance of PriceCurveStrategy.")
+            raise TypeError(
+                "The provided strategy must be a PriceCurveStrategy"
+            )
 
+        future_curves = {}
+
+        active = (
+            self.previous_load is not None
+            and self.current_step < self.max_steps
+        )
+
+        if active:
+            remaining = self.max_steps - self.current_step
+
+            # Validate first. A failure leaves the old strategy
+            # and all current environment caches unchanged.
+            future_curves = self._prepare_episode_tariffs(
+                self.current_datetime,
+                remaining,
+                strategy,
+            )
+
+        # Commit the strategy change only after validation.
         self.price_strategy = strategy
+        self._episode_day_prices = future_curves
+
         self.cached_day_prices = None
         self.cached_buy_prices = None
         self.cached_sell_prices = None
         self.last_price_update_date = None
 
+        if active:
+            return self._get_obs()
+
+        return None
 
     def _prediction_rows(self, start_datetime, num_steps):
         """
@@ -371,15 +500,35 @@ class PCSEnv(gym.Env):
         return self._prediction_rows(
             start, num_steps
         )["predicted_consumption"].to_numpy(dtype=float)
+
     
+    @staticmethod
+    def _calendar_feature_matrix(timestamps):
+        """
+        Return the seven calendar features defined by the PCS
+        POMDP, in their documented order.
+        """
+        idx = pd.DatetimeIndex(timestamps)
+
+        slot = (idx.hour * 2 + idx.minute // 30).to_numpy()
+        weekday = idx.dayofweek.to_numpy()
+        day_of_year = idx.dayofyear.to_numpy()
+
+        return np.column_stack((
+            np.sin(2 * np.pi * slot / 48),
+            np.cos(2 * np.pi * slot / 48),
+            np.sin(2 * np.pi * weekday / 7),
+            np.cos(2 * np.pi * weekday / 7),
+            np.sin(2 * np.pi * day_of_year / 365.25),
+            np.cos(2 * np.pi * day_of_year / 365.25),
+            np.isin(weekday, [5, 6]).astype(float),
+        ))
+
     
     def _get_current_features(self):
-        if self.num_features == 0:
-            return np.array([], dtype=float)
-    
-        return self._prediction_rows(
-            self.current_datetime, 1
-        )[self.feature_columns].iloc[0].to_numpy(dtype=float)
+        return self._calendar_feature_matrix(
+            [self.current_datetime]
+        )[0]
 
 
 
@@ -459,20 +608,38 @@ class PCSEnv(gym.Env):
         return None
 
 
+
     def reset(self, start_date=None, options=None, seed=None):
         """
-        Reset the PCS to the pre-action state at c_0.
+        Reset only after validating episode data and tariffs.
 
-        The initial observation contains actual demand from c_0 - dt.
-        Demand at c_0 is not realized until the first step().
+        No current demand is processed at reset.
+        The initial observation contains the preceding load.
         """
-
         explicit_date = start_date is not None
+
         candidate = pd.Timestamp(
-            start_date if explicit_date else self.current_datetime
+            start_date if explicit_date
+            else self.current_datetime
         )
 
-        error = self._episode_error(candidate)
+        def prepare(timestamp):
+            # Validate required realized demand and forecasts.
+            error = self._episode_error(timestamp)
+
+            if error is not None:
+                return None, error
+
+            # Validate all daily tariff curves before reset.
+            try:
+                curves = self._prepare_episode_tariffs(
+                    timestamp
+                )
+                return curves, None
+            except ValueError as exc:
+                return None, str(exc)
+
+        curves, error = prepare(candidate)
 
         if error is not None:
             if explicit_date:
@@ -480,39 +647,51 @@ class PCSEnv(gym.Env):
                     f"Cannot start episode at {candidate}: {error}"
                 )
 
-            # For automatic resets, select the first eligible
-            # timestamp, skipping contaminated episodes.
-            candidate = next(
-                (
-                    t for t in self.test_df.index
-                    if self._episode_error(t) is None
-                ),
-                None,
-            )
+            # Automatic reset: find the first fully eligible
+            # episode, including valid electricity prices.
+            candidate = None
+            curves = None
+
+            for timestamp in self.test_df.index:
+                trial, trial_error = prepare(timestamp)
+
+                if trial_error is None:
+                    candidate = timestamp
+                    curves = trial
+                    break
 
             if candidate is None:
                 raise ValueError(
-                    "No eligible episode with complete valid input data"
+                    "No eligible episode with complete "
+                    "valid data and tariffs"
                 )
+
+        # All required inputs have passed validation.
         super().reset(seed=seed)
 
-        # Reset episode counters.
         self.current_step = 0
         self._reset_episode_metrics()
         self.current_datetime = candidate
 
-        # Reset physical units. No demand is processed at reset.
+        # Reset physical units without consuming demand.
         self.pcs.reset(initial_storage_unit_level=0)
         self.last_action = None
 
-        # Initialize previous demand using the actual preceding row.
-        previous_time = candidate - pd.Timedelta(days=self.dt)
+        previous_time = (
+            candidate - pd.Timedelta(days=self.dt)
+        )
+
         self.previous_load = float(
             self.test_df.at[previous_time, "Consumption"]
         )
 
-        # _get_obs() includes the announced current tariffs.
-        # The first PCS update happens only inside step().
+        # Commit validated tariff curves.
+        self._episode_day_prices = curves
+        self.cached_day_prices = None
+        self.cached_buy_prices = None
+        self.cached_sell_prices = None
+        self.last_price_update_date = None
+
         return self._get_obs(), {}
 
     def step(self, action):
@@ -762,20 +941,22 @@ class PCSEnv(gym.Env):
     def _get_feature_window(
         self, num_steps, start_datetime=None
     ):
-        """Return a flattened timestamp-aligned feature window."""
-        if self.num_features == 0:
-            return np.array([], dtype=float)
-
+        """Calendar features in the fixed documented order."""
         start = (
             self.current_datetime
             if start_datetime is None
             else start_datetime
         )
 
-        return self._prediction_rows(
-            start, num_steps
-        )[self.feature_columns].to_numpy(dtype=float).ravel()
-    
+        timestamps = pd.date_range(
+            start=pd.Timestamp(start),
+            periods=num_steps,
+            freq=pd.Timedelta(days=self.dt),
+        )
+
+        return self._calendar_feature_matrix(
+            timestamps
+        ).ravel()
     def _get_obs(self):
         """
         Build observation vector using masked_adaptive encoding:

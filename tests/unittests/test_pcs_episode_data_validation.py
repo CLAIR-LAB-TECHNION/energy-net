@@ -79,7 +79,26 @@ def test_shuffled_forecasts_with_earlier_start_are_aligned_by_timestamp(
         ].iloc[0]
 
         assert obs[4] == pytest.approx(expected / 10.0)
-        assert obs[-7:] == pytest.approx(np.arange(1.0, 8.0))
+        # Calendar features now come from timestamps,
+        # not arbitrary values in the forecast CSV.
+        weekday = start.dayofweek
+        doy = start.dayofyear
+
+        expected_features = np.array([
+            0.0,
+            1.0,
+            np.sin(2 * np.pi * weekday / 7),
+            np.cos(2 * np.pi * weekday / 7),
+            np.sin(2 * np.pi * doy / 365.25),
+            np.cos(2 * np.pi * doy / 365.25),
+            float(weekday >= 5),
+        ])
+
+        np.testing.assert_allclose(
+            obs[-7:],
+            expected_features,
+            atol=1e-6,
+        )
 
         for step in range(48):
             obs, _, done, _, info = env.step(
