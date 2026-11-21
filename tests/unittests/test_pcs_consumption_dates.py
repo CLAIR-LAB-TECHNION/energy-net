@@ -33,7 +33,7 @@ def dated_pcs_env(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "start_index", [0, 48, 60],
+    "start_index", [1, 48, 60],
     ids=["first-day-control", "second-day", "second-day-intraday"],
 )
 def test_reset_consumption_matches_selected_date(dated_pcs_env, start_index):
@@ -42,15 +42,21 @@ def test_reset_consumption_matches_selected_date(dated_pcs_env, start_index):
 
     obs, _ = env.reset(start_date=start_date)
 
-    expected = readings.loc[start_date, "Consumption"]
+    previous_load = readings.loc[
+    start_date - pd.Timedelta(minutes=30),
+    "Consumption",]
+    current_forecast = readings.loc[
+        start_date, "Consumption"
+    ]
+
     assert env.current_datetime == start_date
-    assert obs[4] * 10.0 == pytest.approx(expected)
-    assert obs[1] * 10.0 == pytest.approx(expected)
-    assert env.pcs.get_consumption() == pytest.approx(expected)
+    assert obs[4] * 10.0 == pytest.approx(current_forecast)
+    assert obs[1] * 10.0 == pytest.approx(previous_load)
+    assert env.pcs.get_consumption() == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(
-    "start_index", [0, 48, 60],
+    "start_index", [1, 48, 60],
     ids=["first-day-control", "second-day", "second-day-intraday"],
 )
 def test_step_consumption_matches_selected_day(dated_pcs_env, start_index):
@@ -74,21 +80,32 @@ def test_step_consumption_matches_selected_day(dated_pcs_env, start_index):
     )
 
 
-def test_reset_without_date_uses_next_days_consumption(dated_pcs_env):
+def test_reset_without_date_uses_next_days_consumption(
+    dated_pcs_env,
+):
     env, readings = dated_pcs_env
-    env.reset(start_date=readings.index[0])
+
+    env.reset(start_date=readings.index[1])
     for _ in range(env.max_steps):
         env.step(np.array([0.0], dtype=np.float32))
 
     obs, _ = env.reset()
-    _, _, _, _, info = env.step(np.array([0.0], dtype=np.float32))
+    _, _, _, _, info = env.step(
+        np.array([0.0], dtype=np.float32)
+    )
 
-    expected = readings.iloc[48]["Consumption"]
+    expected = readings.iloc[49]["Consumption"]
+    previous = readings.iloc[48]["Consumption"]
+
     assert obs[4] * 10.0 == pytest.approx(expected)
+
     np.testing.assert_allclose(
         [obs[1] * 10.0, info["consumption_units"]],
-        [expected, expected],
-        err_msg="The next episode must not replay the first day's demand",
+        [previous, expected],
+        err_msg=(
+            "Previous and imminent demand must belong "
+            "to different intervals"
+        ),
     )
 
 
@@ -143,16 +160,17 @@ def test_automatic_reset_wraps_between_episodes(dated_pcs_env):
     # With no explicit date, wrap to the first valid episode.
     env.reset()
 
-    assert env.current_datetime == readings.index[0]
-    assert env.pcs.get_consumption() == pytest.approx(
+    assert env.current_datetime == readings.index[1]
+    assert env.previous_load == pytest.approx(
         readings.iloc[0]["Consumption"]
     )
+    assert env.pcs.get_consumption() == pytest.approx(0.0)
 
 
 def test_rejected_reset_preserves_episode_state(dated_pcs_env):
     env, readings = dated_pcs_env
 
-    env.reset(start_date=readings.index[0])
+    env.reset(start_date=readings.index[1])
     env.step(np.array([0.0], dtype=np.float32))
 
     before = (
@@ -205,18 +223,32 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
     )
 
     try:
-        env.reset(start_date=timestamps[0])
+        env.reset(start_date=timestamps[1])
 
-        assert env.pcs.get_consumption() == pytest.approx(demand[0])
+        assert env.previous_load == pytest.approx(demand[0])
+        assert env.pcs.get_consumption() == pytest.approx(0.0)
 
         for i in range(env.max_steps):
-            _, _, terminated, _, info = env.step(
+            obs, _, terminated, _, info = env.step(
                 np.array([0.0], dtype=np.float32)
             )
 
+            expected_demand = demand[i + 1]
+
+            # The PCS processes current-interval demand.
             assert info["consumption_units"] == pytest.approx(
-                demand[i]
-            ), f"Consumption mismatch at {timestamps[i]}"
+                expected_demand
+            )
+
+            assert env.pcs.get_consumption() == pytest.approx(
+                expected_demand
+            )
+
+            # The next observation contains the demand
+            # that was just realized.
+            assert obs[1] * 10.0 == pytest.approx(
+                expected_demand
+            )
 
         assert terminated
 

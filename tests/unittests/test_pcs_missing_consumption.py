@@ -58,7 +58,7 @@ def test_missing_consumption_does_not_reach_step_observation(missing_consumption
     try:
         obs, _ = env.reset()
         assert np.isfinite(obs).all()
-        for _ in range(6):
+        for _ in range(5):
             obs, _, _, _, _ = env.step(np.array([0.0], dtype=np.float32))
             assert np.isfinite(obs).all()
 

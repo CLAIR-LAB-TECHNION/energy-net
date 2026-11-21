@@ -213,7 +213,9 @@ class PCSEnv(gym.Env):
         self.current_step = 0
         self.start_date = self.test_start_date
         self.current_datetime = self.start_date
-
+        # Demand realized in the interval preceding the current decision.
+        # This is part of the POMDP observation state.
+        self.previous_load = None
         self.total_reward = 0.0
         self.total_money_earned = 0.0
         self.total_shortage_penalty = 0.0
@@ -303,15 +305,15 @@ class PCSEnv(gym.Env):
 
         return self.feature_cache[current_idx]
 
+    
     def reset(self, start_date=None, options=None, seed=None):
         """
-        Resets the environment to an initial state for a new episode.
+        Reset the PCS to the pre-action state at c_0.
 
-        This method handles time synchronization, internal PCS unit resets,
-        and resets all financial/performance tracking metrics.
+        The initial observation contains actual demand from c_0 - dt.
+        Demand at c_0 is not realized until the first step().
         """
 
-        # 1. Handle and Validate Time Synchronization
         explicit_date = start_date is not None
         candidate = pd.Timestamp(
             start_date if explicit_date else self.current_datetime
@@ -324,36 +326,58 @@ class PCSEnv(gym.Env):
             if start_idx < 0 or start_idx + self.max_steps > len(timestamps):
                 return False
 
+            # Require all current-episode timestamps to be present.
             expected = pd.date_range(
                 start=start,
                 periods=self.max_steps,
                 freq=pd.Timedelta(days=self.dt),
             )
-
             actual = timestamps[start_idx:start_idx + self.max_steps]
-            return actual.equals(expected)
+
+            if not actual.equals(expected):
+                return False
+
+            # The initial observation needs the actual measurement
+            # immediately preceding the episode.
+            previous_time = start - pd.Timedelta(days=self.dt)
+
+            if previous_time not in timestamps:
+                return False
+
+            previous_value = self.test_df.at[
+                previous_time, "Consumption"
+            ]
+
+            return bool(
+                np.isfinite(previous_value) and previous_value >= 0
+            )
 
         if not has_full_episode(candidate):
             if explicit_date:
                 raise ValueError(
                     f"Cannot start episode at {candidate}: "
-                    f"{self.max_steps} consecutive consumption "
-                    "readings are required."
+                    f"{self.max_steps} consecutive consumption readings "
+                    "and one finite, nonnegative preceding demand "
+                    "measurement are required."
                 )
 
-            # Automatic resets may restart at the dataset beginning,
-            # but only between complete episodes.
-            candidate = pd.Timestamp(self.test_start_date)
+            # Automatic resets wrap to the first eligible start.
+            # The first CSV timestamp is not eligible because it has
+            # no preceding measurement.
+            candidate = next(
+                (t for t in self.test_df.index if has_full_episode(t)),
+                None,
+            )
 
-            if not has_full_episode(candidate):
+            if candidate is None:
                 raise ValueError(
-                    "Consumption dataset has no complete initial episode."
+                    "Consumption dataset has no eligible complete "
+                    "episode with a valid preceding demand measurement."
                 )
 
-        # 2. Standard Gym reset for seeding
         super().reset(seed=seed)
 
-        # 3. Reset episode-specific counters
+        # Reset episode counters.
         self.current_step = 0
         self.total_reward = 0.0
         self.total_money_earned = 0.0
@@ -361,19 +385,18 @@ class PCSEnv(gym.Env):
         self.shortage_count = 0
         self.current_datetime = candidate
 
-        # 4. Reset Physical Units
-        # Resets the battery to empty (or a configured initial level) and clears PCS logs.
+        # Reset physical units. No demand is processed at reset.
         self.pcs.reset(initial_storage_unit_level=0)
         self.last_action = None
 
-        # 5. Initialize consumption at the selected calendar time without applying actions
-        # This ensures consumption values are calculated before returning initial observation
-        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
-        initial_state = State({"time": days_from_start})
-        self.pcs.update(state=initial_state, actions=None)
+        # Initialize previous demand using the actual preceding row.
+        previous_time = candidate - pd.Timedelta(days=self.dt)
+        self.previous_load = float(
+            self.test_df.at[previous_time, "Consumption"]
+        )
 
-        # 6. Return Initial Observation
-        # Note: _get_obs() will internally query the price_strategy for the starting price.
+        # _get_obs() includes the announced current tariffs.
+        # The first PCS update happens only inside step().
         return self._get_obs(), {}
 
     def step(self, action):
@@ -449,7 +472,10 @@ class PCSEnv(gym.Env):
         self.total_reward += reward
         current_price = buy_tariff if net_grid_exchange >= 0 else sell_tariff
 
-        # 6. Advance Environment Time
+        # 6. Advance information and environment time.
+        # The demand just realized becomes the previous demand
+        # available for the next decision.
+        self.previous_load = consumption_units
         self.current_step += 1
         self.current_datetime += timedelta(days=self.dt)
 
@@ -514,7 +540,7 @@ class PCSEnv(gym.Env):
         """
         # Base PCS observations
         current_storage = self.pcs.get_total_storage() / 100.0
-        current_consumption = self.pcs.get_consumption() / 10.0
+        previous_consumption = self.previous_load / 10.0
         buy_tariff, sell_tariff = self._get_current_prices()
 
         # Get raw predictions and normalize
@@ -553,7 +579,7 @@ class PCSEnv(gym.Env):
 
         # Concatenate in documented order: [storage, consumption, buy, sell, forecasts, mask, capacities, calendar].
         obs = np.concatenate([
-            [current_storage, current_consumption, buy_tariff, sell_tariff],
+            [current_storage, previous_consumption, buy_tariff, sell_tariff],
             zero_padded,
             mask,
             [available_charge, available_discharge],
