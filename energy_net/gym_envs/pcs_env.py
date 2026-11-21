@@ -246,10 +246,21 @@ class PCSEnv(gym.Env):
         # Demand realized in the interval preceding the current decision.
         # This is part of the POMDP observation state.
         self.previous_load = None
+        self._last_observation = None
+        self._reset_episode_metrics()
+
+    def _reset_episode_metrics(self):
+        """Reset all experiment metrics for a new episode."""
         self.total_reward = 0.0
         self.total_money_earned = 0.0
         self.total_shortage_penalty = 0.0
         self.shortage_count = 0
+
+        self.total_grid_import_units = 0.0
+        self.total_grid_export_units = 0.0
+        self.total_consumption_units = 0.0
+        self.total_battery_served_units = 0.0
+        self.total_grid_supplied_demand_units = 0.0
 
     def get_money(self):
         """Returns the accumulated money made from transactions, ignoring shortage penalties."""
@@ -487,10 +498,7 @@ class PCSEnv(gym.Env):
 
         # Reset episode counters.
         self.current_step = 0
-        self.total_reward = 0.0
-        self.total_money_earned = 0.0
-        self.total_shortage_penalty = 0.0
-        self.shortage_count = 0
+        self._reset_episode_metrics()
         self.current_datetime = candidate
 
         # Reset physical units. No demand is processed at reset.
@@ -526,7 +534,41 @@ class PCSEnv(gym.Env):
                 "Episode has terminated; call reset() before step()"
             )
 
-        # 1. Process the Agent's Action
+        # Preserve the observation used to select this action.
+        if self._last_observation is None:
+            raise RuntimeError(
+                "No decision observation available; call reset()"
+            )
+
+        decision_observation = self._last_observation.copy()
+
+        step_index = self.current_step
+        interval_start = self.current_datetime
+
+        previous_load_at_decision = float(self.previous_load)
+
+        # Extract the imminent demand forecast from the recorded
+        # observation. Forecast channel starts at index 4.
+        forecast_at_decision = float(
+            decision_observation[4]
+        ) * 10.0
+
+        # Extract calendar features from the recorded observation.
+        calendar_values = (
+            decision_observation[-self.num_features:]
+            if self.num_features > 0
+            else []
+        )
+
+        calendar_features_at_decision = {
+            name: float(value)
+            for name, value in zip(
+                self.feature_columns,
+                calendar_values,
+            )
+        }
+
+        # Process the agent's action.
         raw_action = float(action[0]) * self.action_scale
         self.last_action = raw_action
 
@@ -549,10 +591,14 @@ class PCSEnv(gym.Env):
         storage_after = self.pcs.get_total_storage()
         consumption_units = float(self.pcs.get_consumption())
 
-        try:
-            available_discharge_units = float(battery_entity.get_available_discharge_capacity())
-        except Exception:
-            available_discharge_units = getattr(battery_entity, 'available_discharge', 0.0)
+        # Battery capacities after the physical transition.
+        available_charge_units = float(
+            battery_entity.get_available_charge_capacity()
+        )
+
+        available_discharge_units = float(
+            battery_entity.get_available_discharge_capacity()
+        )
 
         # 3. Physical energy balance: q is the realized explicit action.
         # Automatic battery service supplies some demand; grid covers the rest.
@@ -583,8 +629,24 @@ class PCSEnv(gym.Env):
         self.total_shortage_penalty += step_penalty
         self.total_money_earned += step_money
         self.total_reward += reward
-        current_price = buy_tariff if net_grid_exchange >= 0 else sell_tariff
 
+        # Separate imports and exports before accumulation.
+        grid_import_units = max(net_grid_exchange, 0.0)
+        grid_export_units = max(-net_grid_exchange, 0.0)
+
+        self.total_grid_import_units += grid_import_units
+        self.total_grid_export_units += grid_export_units
+        self.total_consumption_units += consumption_units
+        self.total_battery_served_units += (
+            battery_energy_used_for_consumption
+        )
+        self.total_grid_supplied_demand_units += (
+            uncovered_consumption_units
+        )
+
+        current_price = (
+            buy_tariff if net_grid_exchange >= 0 else sell_tariff
+        )
         # 6. Advance information and environment time.
         # The demand just realized becomes the previous demand
         # available for the next decision.
@@ -604,27 +666,98 @@ class PCSEnv(gym.Env):
             else self._get_obs()
         )
 
+        if terminated:
+            self._last_observation = None
+
+        
+        # Physical post-transition state.
+        # This is valid even when the returned observation is zero.
+        post_action_state = {
+            "storage_units": float(storage_after),
+            "previous_load_units": float(self.previous_load),
+            "datetime": self.current_datetime.isoformat(),
+            "episode_step": int(self.current_step),
+            "available_charge_units": available_charge_units,
+            "available_discharge_units": available_discharge_units,
+        }
+
         info = {
-            'storage_before_units': storage_before,
-            'storage_after_units': storage_after,
-            'energy_sold_or_bought_units': energy_sold_or_bought,
-            'consumption_units': consumption_units,
-            'battery_energy_used_for_consumption_units': battery_energy_used_for_consumption,
-            'uncovered_consumption_units': uncovered_consumption_units,
-            'available_discharge_units': available_discharge_units,
-            'shortage': shortage,
-            'battery_action': raw_action,
-            'step_money': step_money,
-            'grid_exchange_units': net_grid_exchange,
-            'buy_tariff': buy_tariff,
-            'sell_tariff': sell_tariff,
-            'shortage_penalty': step_penalty,
-            'include_shortage_penalty': self.include_shortage_penalty,
-            'current_price': current_price,  # tariff actually used for net exchange
-            'total_money_so_far': self.total_money_earned
+            # --------------------------------------------------
+            # Existing keys: preserve backward compatibility
+            # --------------------------------------------------
+            "storage_before_units": storage_before,
+            "storage_after_units": storage_after,
+            "energy_sold_or_bought_units": energy_sold_or_bought,
+            "consumption_units": consumption_units,
+            "battery_energy_used_for_consumption_units":
+                battery_energy_used_for_consumption,
+            "uncovered_consumption_units": uncovered_consumption_units,
+            "available_discharge_units": available_discharge_units,
+            "shortage": shortage,
+            "battery_action": raw_action,
+            "step_money": step_money,
+            "grid_exchange_units": net_grid_exchange,
+            "buy_tariff": buy_tariff,
+            "sell_tariff": sell_tariff,
+            "shortage_penalty": step_penalty,
+            "include_shortage_penalty": self.include_shortage_penalty,
+            "current_price": current_price,
+            "total_money_so_far": self.total_money_earned,
+
+            # --------------------------------------------------
+            # Episode context and information at decision time
+            # --------------------------------------------------
+            "step_index": step_index,
+            "max_steps": self.max_steps,
+            "interval_start": interval_start.isoformat(),
+            "interval_end": self.current_datetime.isoformat(),
+            "agent_action": float(action[0]),
+            "previous_load_at_decision_units":
+                previous_load_at_decision,
+            "forecast_at_decision_units": forecast_at_decision,
+            "calendar_features_at_decision":
+                calendar_features_at_decision,
+            "price_strategy": type(self.price_strategy).__name__,
+            "configured_shortage_penalty": self.shortage_penalty,
+            "observation_at_decision": decision_observation.tolist(),
+
+            # --------------------------------------------------
+            # Physical and financial decomposition
+            # --------------------------------------------------
+            "storage_after_command_units":
+                float(storage_before + energy_sold_or_bought),
+            "available_charge_units": available_charge_units,
+            "grid_import_units": grid_import_units,
+            "grid_export_units": grid_export_units,
+            "grid_supplied_demand_event": shortage,
+            "electricity_cost": -step_money,
+            "step_reward": reward,
+
+            # --------------------------------------------------
+            # Cumulative episode statistics
+            # --------------------------------------------------
+            "total_reward_so_far": self.total_reward,
+            "total_shortage_penalty_so_far":
+                self.total_shortage_penalty,
+            "shortage_count_so_far": self.shortage_count,
+            "total_grid_import_units": self.total_grid_import_units,
+            "total_grid_export_units": self.total_grid_export_units,
+            "total_consumption_units": self.total_consumption_units,
+            "total_battery_served_units":
+                self.total_battery_served_units,
+            "total_grid_supplied_demand_units":
+                self.total_grid_supplied_demand_units,
+
+            # --------------------------------------------------
+            # Actual resulting state, including at termination
+            # --------------------------------------------------
+            "state_after": post_action_state,
+            "terminal_state":
+                post_action_state.copy() if terminated else None,
         }
 
         return obs, reward, terminated, truncated, info
+
 
     def _get_feature_window(
         self, num_steps, start_datetime=None
@@ -703,7 +836,11 @@ class PCSEnv(gym.Env):
             current_features
         ])
 
-        return obs.astype(np.float32)
+        obs = obs.astype(np.float32)
+
+        self._last_observation = obs.copy()
+
+        return obs
 
     def render(self, action=None, verbosity=None):
         """
