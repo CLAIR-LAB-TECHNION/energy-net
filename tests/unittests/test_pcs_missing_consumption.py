@@ -48,38 +48,45 @@ def test_missing_interior_consumption_is_interpolated(
     )
 
 
-def test_missing_consumption_does_not_reach_step_observation(missing_consumption_files):
-    data_file, predictions_file, _ = missing_consumption_files
+def test_pcs_rejects_episode_with_raw_missing_demand(
+    missing_consumption_files,
+):
+    data_file, predictions_file, readings = missing_consumption_files
+
     env = PCSEnv(
         test_data_file=str(data_file),
         predictions_file=str(predictions_file),
         verbosity=0,
     )
+
     try:
+        # The strict PCS baseline must not admit an episode
+        # containing a missing raw demand measurement.
+        with pytest.raises(
+            ValueError,
+            match="Non-finite or negative.*consumption",
+        ):
+            env.reset(start_date=readings.loc[1, "Datetime"])
+
+        # Automatic reset skips the invalid region.
         obs, _ = env.reset()
-        assert np.isfinite(obs).all()
-        for _ in range(5):
-            obs, _, _, _, _ = env.step(np.array([0.0], dtype=np.float32))
-            assert np.isfinite(obs).all()
 
-        obs, reward, _, _, info = env.step(np.array([0.0], dtype=np.float32))
-
-        assert np.isfinite(obs[4:]).all(), "Forecasts and capacities are finite controls"
-        np.testing.assert_allclose(
-            [
-                env.pcs.consumption_units[0].get_state(),
-                env.pcs.get_consumption(),
-                info["consumption_units"],
-                obs[1] * 10.0,
-            ],
-            [3.0] * 4,
-            err_msg="Missing CSV demand must not propagate through the unit into observations",
+        assert env.current_datetime == pd.Timestamp(
+            readings.loc[8, "Datetime"]
         )
         assert np.isfinite(obs).all()
-        assert np.isfinite(reward)
+
+        for _ in range(env.max_steps):
+            obs, reward, done, _, info = env.step(
+                np.array([0.0], dtype=np.float32)
+            )
+
+            assert np.isfinite(reward)
+            assert np.isfinite(info["consumption_units"])
+
+        assert done
     finally:
         env.close()
-
 
 @pytest.mark.parametrize(
     "values, expected",

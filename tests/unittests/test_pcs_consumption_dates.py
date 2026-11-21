@@ -246,9 +246,16 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
 
             # The next observation contains the demand
             # that was just realized.
-            assert obs[1] * 10.0 == pytest.approx(
-                expected_demand
-            )
+            if not terminated:
+                # During the episode, the next observation exposes
+                # the demand just realized.
+                assert obs[1] * 10.0 == pytest.approx(
+                    expected_demand
+                )
+            else:
+                # Terminal observation is a placeholder, not
+                # another valid decision observation.
+                assert np.all(obs == 0.0)
 
         assert terminated
 

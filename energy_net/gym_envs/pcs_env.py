@@ -109,6 +109,26 @@ class PCSEnv(gym.Env):
             parse_dates=True
         )
 
+        if "Consumption" not in self.test_df.columns:
+            raise ValueError(
+                "Consumption CSV must have a Consumption column"
+            )
+
+        if (
+            self.test_df.index.has_duplicates
+            or not self.test_df.index.is_monotonic_increasing
+        ):
+            raise ValueError(
+                "Consumption timestamps must be unique and sorted"
+            )
+
+        # Invalid numeric values are rejected by episode validation,
+        # rather than silently corrected.
+        self.test_df["Consumption"] = pd.to_numeric(
+            self.test_df["Consumption"],
+            errors="coerce",
+        )
+
         self.test_start_date = self.test_df.index[0]
         self.test_end_date = self.test_df.index[-1]
 
@@ -119,6 +139,16 @@ class PCSEnv(gym.Env):
             predictions_file,
             parse_dates=['timestamp']
         ).set_index('timestamp').sort_index()
+
+        if "predicted_consumption" not in pred_df.columns:
+            raise ValueError(
+                "Forecast CSV must have a predicted_consumption column"
+            )
+
+        if pred_df.index.has_duplicates:
+            raise ValueError("Forecast timestamps must be unique")
+
+        pred_df = pred_df.apply(pd.to_numeric, errors="coerce")
 
         self.pred_df = pred_df
         self.prediction_cache = pred_df['predicted_consumption'].values
@@ -235,14 +265,23 @@ class PCSEnv(gym.Env):
         if self.cached_day_prices is None or current_date != self.last_price_update_date:
             iso_horizon = 48
             # ISO daily input is based on the calendar date, not the episode start.
-            day_start = pd.Timestamp(current_date)
-            predicted_consumption = self._get_predicted_consumption(
-                iso_horizon, start_datetime=day_start
-            )
-            day_features = self._get_feature_window(
-                iso_horizon, start_datetime=day_start
-            )
-            iso_input = np.concatenate([predicted_consumption / 10.0, day_features])
+            iso_input = None
+
+            if self.price_strategy.requires_daily_observation:
+                # Data-dependent ISO strategies require an entire calendar day.
+                day_start = pd.Timestamp(current_date)
+
+                predicted_consumption = self._get_predicted_consumption(
+                    iso_horizon, start_datetime=day_start
+                )
+                day_features = self._get_feature_window(
+                    iso_horizon, start_datetime=day_start
+                )
+
+                iso_input = np.concatenate([
+                    predicted_consumption / 10.0,
+                    day_features,
+                ])
             pcs_buy, pcs_sell = self.price_strategy.calculate_pcs_tariffs(iso_input)
             self.cached_buy_prices = np.asarray(pcs_buy, dtype=float)
             self.cached_sell_prices = np.asarray(pcs_sell, dtype=float)
@@ -278,34 +317,137 @@ class PCSEnv(gym.Env):
         self.cached_sell_prices = None
         self.last_price_update_date = None
 
-    def _get_predicted_consumption(self, num_steps, start_datetime=None):
-        """Get predicted consumption from preloaded cache."""
-        window_start = self.current_datetime if start_datetime is None else pd.Timestamp(start_datetime)
-        days_from_start = (window_start - self.test_start_date).total_seconds() / 86400
-        current_idx = int(round(days_from_start / self.dt))
-        end_idx = current_idx + num_steps
 
-        if end_idx > len(self.prediction_cache):
-            available = self.prediction_cache[current_idx:]
-            padding = np.full(num_steps - len(available), self.prediction_cache[-1])
-            return np.concatenate([available, padding])
-
-        return self.prediction_cache[current_idx:end_idx]
-
-    def _get_current_features(self):
-        """Get current feature values from preloaded cache."""
-        if self.feature_cache is None or self.num_features == 0:
-            return np.array([])
-
-        days_from_start = (self.current_datetime - self.test_start_date).total_seconds() / 86400
-        current_idx = int(days_from_start / self.dt)
-
-        if current_idx >= len(self.feature_cache):
-            return self.feature_cache[-1]
-
-        return self.feature_cache[current_idx]
-
+    def _prediction_rows(self, start_datetime, num_steps):
+        """
+        Return timestamp-aligned forecast rows.
     
+        Never interpolate missing timestamps or numeric values.
+        """
+        timestamps = pd.date_range(
+            start=pd.Timestamp(start_datetime),
+            periods=num_steps,
+            freq=pd.Timedelta(days=self.dt),
+        )
+    
+        missing = timestamps.difference(self.pred_df.index)
+    
+        if len(missing):
+            raise ValueError(
+                f"Missing forecast timestamp: {missing[0]}"
+            )
+    
+        rows = self.pred_df.loc[timestamps]
+    
+        if not np.isfinite(rows.to_numpy(dtype=float)).all():
+            raise ValueError(
+                "Non-finite forecast or calendar features "
+                f"from {timestamps[0]}"
+            )
+    
+        return rows
+    
+    
+    def _get_predicted_consumption(
+        self, num_steps, start_datetime=None
+    ):
+        start = (
+            self.current_datetime
+            if start_datetime is None
+            else start_datetime
+        )
+    
+        return self._prediction_rows(
+            start, num_steps
+        )["predicted_consumption"].to_numpy(dtype=float)
+    
+    
+    def _get_current_features(self):
+        if self.num_features == 0:
+            return np.array([], dtype=float)
+    
+        return self._prediction_rows(
+            self.current_datetime, 1
+        )[self.feature_columns].iloc[0].to_numpy(dtype=float)
+
+
+
+    def _episode_error(self, start):
+        """
+        Return None if the episode has valid required inputs.
+        Otherwise, return a description of the invalid input.
+        """
+        start = pd.Timestamp(start)
+
+        episode_times = pd.date_range(
+            start=start,
+            periods=self.max_steps,
+            freq=pd.Timedelta(days=self.dt),
+        )
+
+        previous_time = start - pd.Timedelta(days=self.dt)
+
+        # Previous demand + all realized demands in the episode.
+        required_load_times = episode_times.insert(
+            0, previous_time
+        )
+
+        missing_load = required_load_times.difference(
+            self.test_df.index
+        )
+
+        if len(missing_load):
+            return (
+                "Missing preceding/episode consumption timestamp: "
+                f"{missing_load[0]}"
+            )
+
+        loads = self.test_df.loc[
+            required_load_times, "Consumption"
+        ].to_numpy(dtype=float)
+
+        if not np.isfinite(loads).all() or (loads < 0).any():
+            return (
+                "Non-finite or negative preceding/episode consumption"
+            )
+
+        # All 48 in-episode timestamps require forecasts.
+        required_forecast_times = episode_times
+
+        if self.price_strategy.requires_daily_observation:
+            # Data-dependent ISO strategies require full daily
+            # inputs for every calendar day touched by the episode.
+            for day_start in episode_times.normalize().unique():
+                day_times = pd.date_range(
+                    start=day_start,
+                    periods=48,
+                    freq=pd.Timedelta(minutes=30),
+                )
+
+                required_forecast_times = (
+                    required_forecast_times.union(day_times)
+                )
+
+        missing_predictions = required_forecast_times.difference(
+            self.pred_df.index
+        )
+
+        if len(missing_predictions):
+            return (
+                "Missing forecast/calendar timestamp: "
+                f"{missing_predictions[0]}"
+            )
+
+        pred_rows = self.pred_df.loc[required_forecast_times]
+
+        if not np.isfinite(
+            pred_rows.to_numpy(dtype=float)
+        ).all():
+            return "Non-finite forecast or calendar features"
+
+        return None
+
+
     def reset(self, start_date=None, options=None, seed=None):
         """
         Reset the PCS to the pre-action state at c_0.
@@ -319,62 +461,28 @@ class PCSEnv(gym.Env):
             start_date if explicit_date else self.current_datetime
         )
 
-        def has_full_episode(start):
-            timestamps = self.test_df.index
-            start_idx = timestamps.get_indexer([start])[0]
+        error = self._episode_error(candidate)
 
-            if start_idx < 0 or start_idx + self.max_steps > len(timestamps):
-                return False
-
-            # Require all current-episode timestamps to be present.
-            expected = pd.date_range(
-                start=start,
-                periods=self.max_steps,
-                freq=pd.Timedelta(days=self.dt),
-            )
-            actual = timestamps[start_idx:start_idx + self.max_steps]
-
-            if not actual.equals(expected):
-                return False
-
-            # The initial observation needs the actual measurement
-            # immediately preceding the episode.
-            previous_time = start - pd.Timedelta(days=self.dt)
-
-            if previous_time not in timestamps:
-                return False
-
-            previous_value = self.test_df.at[
-                previous_time, "Consumption"
-            ]
-
-            return bool(
-                np.isfinite(previous_value) and previous_value >= 0
-            )
-
-        if not has_full_episode(candidate):
+        if error is not None:
             if explicit_date:
                 raise ValueError(
-                    f"Cannot start episode at {candidate}: "
-                    f"{self.max_steps} consecutive consumption readings "
-                    "and one finite, nonnegative preceding demand "
-                    "measurement are required."
+                    f"Cannot start episode at {candidate}: {error}"
                 )
 
-            # Automatic resets wrap to the first eligible start.
-            # The first CSV timestamp is not eligible because it has
-            # no preceding measurement.
+            # For automatic resets, select the first eligible
+            # timestamp, skipping contaminated episodes.
             candidate = next(
-                (t for t in self.test_df.index if has_full_episode(t)),
+                (
+                    t for t in self.test_df.index
+                    if self._episode_error(t) is None
+                ),
                 None,
             )
 
             if candidate is None:
                 raise ValueError(
-                    "Consumption dataset has no eligible complete "
-                    "episode with a valid preceding demand measurement."
+                    "No eligible episode with complete valid input data"
                 )
-
         super().reset(seed=seed)
 
         # Reset episode counters.
@@ -413,6 +521,11 @@ class PCSEnv(gym.Env):
             truncated: False (standard Gym API).
             info: A dictionary containing diagnostic information for the step.
         """
+        if self.current_step >= self.max_steps:
+            raise RuntimeError(
+                "Episode has terminated; call reset() before step()"
+            )
+
         # 1. Process the Agent's Action
         raw_action = float(action[0]) * self.action_scale
         self.last_action = raw_action
@@ -484,7 +597,12 @@ class PCSEnv(gym.Env):
         truncated = False
 
         # 8. Prepare Return Values
-        obs = self._get_obs()
+        # No further decision or exogenous observation after termination.
+        obs = (
+            np.zeros(self.observation_space.shape, dtype=np.float32)
+            if terminated
+            else self._get_obs()
+        )
 
         info = {
             'storage_before_units': storage_before,
@@ -508,29 +626,23 @@ class PCSEnv(gym.Env):
 
         return obs, reward, terminated, truncated, info
 
-    def _get_feature_window(self, num_steps, start_datetime=None):
-        """Get feature values for a range of timesteps starting from current datetime."""
-        if self.feature_cache is None or self.num_features == 0:
-            return np.array([])
+    def _get_feature_window(
+        self, num_steps, start_datetime=None
+    ):
+        """Return a flattened timestamp-aligned feature window."""
+        if self.num_features == 0:
+            return np.array([], dtype=float)
 
-        # Calculate starting index in the cache
-        window_start = self.current_datetime if start_datetime is None else pd.Timestamp(start_datetime)
-        days_from_start = (window_start - self.test_start_date).total_seconds() / 86400
-        current_idx = int(round(days_from_start / self.dt))
-        end_idx = current_idx + num_steps
+        start = (
+            self.current_datetime
+            if start_datetime is None
+            else start_datetime
+        )
 
-        if end_idx > len(self.feature_cache):
-            # Handle end-of-dataset by padding with the last known features
-            available = self.feature_cache[current_idx:]
-            padding_needed = num_steps - len(available)
-            padding = np.tile(self.feature_cache[-1], (padding_needed, 1))
-            features = np.vstack([available, padding])
-        else:
-            features = self.feature_cache[current_idx:end_idx]
-
-        # Flatten from (48, 7) to (336,) to match ISO requirements
-        return features.flatten()
-
+        return self._prediction_rows(
+            start, num_steps
+        )[self.feature_columns].to_numpy(dtype=float).ravel()
+    
     def _get_obs(self):
         """
         Build observation vector using masked_adaptive encoding:
@@ -544,19 +656,24 @@ class PCSEnv(gym.Env):
         buy_tariff, sell_tariff = self._get_current_prices()
 
         # Get raw predictions and normalize
-        predicted_consumption = self._get_predicted_consumption(self.prediction_horizon) / 10.0
-        
-        # Apply masked_adaptive encoding
+        # Request only forecasts belonging to this episode.
         steps_remaining = self.max_steps - self.current_step
-        num_valid = min(len(predicted_consumption), steps_remaining)
-        
-        # Zero-pad predictions after episode end
-        zero_padded = predicted_consumption.copy()
-        zero_padded[num_valid:] = 0.0
-        
-        # Create validity mask (1 for valid within episode, 0 for beyond episode)
-        mask = np.zeros(len(predicted_consumption))
-        mask[:num_valid] = 1.0
+        num_valid = min(self.prediction_horizon, steps_remaining)
+
+        zero_padded = np.zeros(
+            self.prediction_horizon,
+            dtype=float,
+        )
+        mask = np.zeros(
+            self.prediction_horizon,
+            dtype=float,
+        )
+
+        if num_valid > 0:
+            zero_padded[:num_valid] = (
+                self._get_predicted_consumption(num_valid) / 10.0
+            )
+            mask[:num_valid] = 1.0
         
         # Get battery capacity constraints
         battery_entity = self.pcs.storage_units[0] if len(self.pcs.storage_units) > 0 else None

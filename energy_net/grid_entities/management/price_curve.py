@@ -10,6 +10,7 @@ class PriceCurveStrategy(ABC):
     1. Implement calculate_price() for symmetric buy/sell pricing
     2. Implement calculate_buy_price() AND calculate_sell_price() for asymmetric pricing
     """
+    requires_daily_observation = True
 
     def calculate_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
@@ -60,6 +61,8 @@ class ActionBasedPriceStrategy(PriceCurveStrategy):
     Use this during training when you have the action available.
     Use RLPriceCurveStrategy for evaluation when you need to query the model.
     """
+
+    requires_daily_observation = False
 
     def __init__(self, action, price_min=0.0, price_max=0.20,
                  use_asymmetric_pricing=False, steps_per_day=48):
@@ -254,6 +257,9 @@ class SineWavePriceStrategy(PriceCurveStrategy):
     """
     Reproduces the original sine-wave pricing logic from PCSEnv.
     """
+
+    requires_daily_observation = False
+
     def __init__(self, base_price=0.10, price_volatility=0.15, steps_per_day=48):
         self.base_price = base_price
         self.price_volatility = price_volatility
@@ -274,6 +280,9 @@ class FixedPriceStrategy(PriceCurveStrategy):
     """
     Generates a fixed price curve.
     """
+
+    requires_daily_observation = False
+
     def __init__(self, fixed_price=0.10, steps_per_day=48):
         self.fixed_price = fixed_price
         self.steps_per_day = steps_per_day
