@@ -52,6 +52,56 @@ class AlternatingISOEnv(ISOEnv):
         self.render_enabled = bool(render_enabled)  # Keep for backward compatibility
         self.render_every_n = max(1, int(render_every_n))
 
+
+    def reset(self, seed=None, options=None):
+        """
+        Reset the ISO to a day for which the PCS can execute
+        a complete, valid episode.
+
+        Preserve alignment between the ISO observation,
+        ISO action, and PCS simulation.
+        """
+        if self.total_rows < self.T:
+            raise ValueError(
+                "Not enough data for a complete ISO episode"
+            )
+
+        start_idx = int(self._next_start_idx)
+        max_start = self.total_rows - self.T
+
+        # Wrap when the remaining data cannot contain
+        # another complete ISO episode.
+        if start_idx < 0 or start_idx > max_start:
+            start_idx = 0
+
+        # Search forward in full ISO-episode increments.
+        # If necessary, wrap back to the beginning.
+        candidate_indices = list(
+            range(start_idx, max_start + 1, self.T)
+        )
+        candidate_indices.extend(
+            range(0, start_idx, self.T)
+        )
+
+        for idx in candidate_indices:
+            timestamp = self._get_iso_timestamp_from_pcs_index(idx)
+
+            # Reuse the strict PCS episode eligibility check.
+            error = self.pcs_env._episode_error(timestamp)
+
+            if error is None:
+                self._next_start_idx = idx
+                return super().reset(
+                    seed=seed,
+                    options=options,
+                )
+
+        raise ValueError(
+            "No ISO interval can provide a complete valid "
+            "PCS episode with the required input data"
+        )
+
+
     def sync_to_pcs(self, pcs_step_index: int):
         """Move the ISO's internal pointer to match the PCS half-hour index."""
         self._next_start_idx = int(pcs_step_index)
