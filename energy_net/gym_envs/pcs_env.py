@@ -480,7 +480,7 @@ class PCSEnv(gym.Env):
     def _prediction_rows(self, start_datetime, num_steps):
         """
         Return timestamp-aligned forecast rows.
-    
+
         Never interpolate missing timestamps or numeric values.
         """
         timestamps = pd.date_range(
@@ -488,25 +488,25 @@ class PCSEnv(gym.Env):
             periods=num_steps,
             freq=pd.Timedelta(days=self.dt),
         )
-    
+
         missing = timestamps.difference(self.pred_df.index)
-    
+
         if len(missing):
             raise ValueError(
                 f"Missing forecast timestamp: {missing[0]}"
             )
-    
+
         rows = self.pred_df.loc[timestamps]
-    
+
         if not np.isfinite(rows.to_numpy(dtype=float)).all():
             raise ValueError(
                 "Non-finite forecast or calendar features "
                 f"from {timestamps[0]}"
             )
-    
+
         return rows
-    
-    
+
+
     def _get_predicted_consumption(
         self, num_steps, start_datetime=None
     ):
@@ -515,12 +515,12 @@ class PCSEnv(gym.Env):
             if start_datetime is None
             else start_datetime
         )
-    
+
         return self._prediction_rows(
             start, num_steps
         )["predicted_consumption"].to_numpy(dtype=float)
 
-    
+
     @staticmethod
     def _calendar_feature_matrix(timestamps):
         """
@@ -543,7 +543,7 @@ class PCSEnv(gym.Env):
             np.isin(weekday, [5, 6]).astype(float),
         ))
 
-    
+
     def _get_current_features(self):
         return self._calendar_feature_matrix(
             [self.current_datetime]
@@ -887,7 +887,7 @@ class PCSEnv(gym.Env):
         if terminated:
             self._last_observation = None
 
-        
+
         # Physical post-transition state.
         # This is valid even when the returned observation is zero.
         post_action_state = {
