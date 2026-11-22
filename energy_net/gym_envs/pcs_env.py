@@ -13,6 +13,7 @@ from energy_net.gym_envs.pcs_rewards import (
     net_meter_reward,
     net_meter_reward_with_shortage_penalty,
 )
+
 from datetime import timedelta
 import numpy as np
 import os
@@ -27,17 +28,28 @@ CALENDAR_FEATURE_COLUMNS = (
     "is_weekend",
 )
 
-
 class PCSEnv(gym.Env):
     """
-    Simplified unit-less Gym environment for PCSUnit.
-    - Uses internal "units" everywhere (battery capacity 0..100, consumption ~2 units/step).
-    - Battery actions request energy changes in [-10, 10] (action_scale=1).
-    - No unit conversions to kWh/kW — everything stays in the same internal units.
-    - Loads pre-computed predictions from CSV file.
-    - Queries actual CSV demand using the same calendar date as the predictions.
-    - Settles net grid exchange; grid-reliance penalty is optional reward shaping.
-    - Computes seven fixed calendar features from absolute timestamps.
+    CSV-backed battery-only PCS environment.
+
+    Energy is represented in internal units; the battery has a
+    storage range of [0, 100].
+
+    The action space is [-10, 10]. The requested battery energy
+    change is the action multiplied by action_scale. Positive
+    requests charge the battery; negative requests discharge it.
+
+    Realized household demand is processed after the action.
+    The observation exposes the preceding realized demand,
+    timestamp-aligned demand forecasts, PCS buy/sell tariffs,
+    battery capacities, and seven deterministic calendar features.
+
+    The default reward is negative net-metered electricity cost.
+    An optional fixed penalty applies when household demand
+    requires grid supply.
+
+    Episode duration, discounting in the trainer, forecast
+    horizon, and action scaling are experimental choices.
     """
 
     def __init__(self,
@@ -53,17 +65,23 @@ class PCSEnv(gym.Env):
                  verbosity: int = 2,
                  include_shortage_penalty: bool = False):
         """
-        Initialize PCS environment.
-        
-        Note: Predictions are encoded with zero-padding after episode end
-        plus a validity mask (masked_adaptive encoding) for optimal performance.
-        
+        Initialize the PCS environment
+
+        Forecasts are zero-padded beyond the episode horizon and
+        accompanied by a validity mask. Calendar features are
+        computed from absolute timestamps, not loaded from CSV.
+
         Args:
-            prediction_horizon: Number of future timesteps to include in observation.
-                If None, defaults to max_steps (full day visibility).
-            include_shortage_penalty: If True, apply an additional fixed penalty
-                whenever demand must be supplied by the grid. Defaults to the
-                unpenalized POMDP reward; shortage_penalty controls its weight.
+            dt: Duration of a simulation step, expressed in days.
+            episode_length_days: Episode duration in days.
+            prediction_horizon: Number of forecast positions in
+                the observation. Defaults to max_steps.
+            action_scale: Multiplier converting the agent's action
+                into a battery energy request.
+            shortage_penalty: Nonnegative fixed penalty weight.
+            include_shortage_penalty: Whether to use the penalized
+                reward variant instead of the baseline net-metering
+                reward.
         """
         super().__init__()
 
@@ -143,7 +161,7 @@ class PCSEnv(gym.Env):
         self.test_end_date = self.test_df.index[-1]
 
         # -------------------------
-        # Load predictions and automatically detect features
+        # Load timestamp-indexed demand forecasts
         # -------------------------
         pred_df = pd.read_csv(
             predictions_file,
@@ -225,9 +243,10 @@ class PCSEnv(gym.Env):
         encoded_prediction_dim = prediction_horizon * 2
         
         # Observation space:
-        # [storage, consumption, PCS buy tariff, PCS sell tariff]
+        # [storage, previous realized load, PCS buy tariff, PCS sell tariff]
         # + [zero-padded predictions + mask] + [battery capacities] + [features]
         obs_dim = 4 + encoded_prediction_dim + 2 + self.num_features
+        # Zero-padded forecasts, validity mask, capacities and seven calendar features
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -240,7 +259,7 @@ class PCSEnv(gym.Env):
             print("  - Base features (storage, consumption, buy/sell tariffs): 4")
             print(f"  - Zero-padded predictions + validity mask: {encoded_prediction_dim}")
             print("  - Battery capacity constraints: 2")
-            print(f"  - Additional time features: {self.num_features}")
+            print(f"  - Calendar features: {self.num_features}")
 
         # ==============================================================
         # Episode state
@@ -616,6 +635,24 @@ class PCSEnv(gym.Env):
         No current demand is processed at reset.
         The initial observation contains the preceding load.
         """
+
+        # Support Gymnasium's options-based reset API while preserving
+        # the existing reset(start_date=...) interface.
+        if options is not None:
+            if not isinstance(options, dict):
+                raise TypeError(
+                    "reset options must be a dictionary or None"
+                )
+
+            options_start_date = options.get("start_date")
+
+            if options_start_date is not None:
+                if start_date is not None:
+                    raise ValueError(
+                        "Specify start_date directly or through options, not both"
+                    )
+
+                start_date = options_start_date
         explicit_date = start_date is not None
 
         candidate = pd.Timestamp(
@@ -699,12 +736,14 @@ class PCSEnv(gym.Env):
         Executes one 30-minute time step in the environment.
 
         Args:
-            action: A NumPy array containing the normalized battery intent [-10, 10].
+            action: A one-element battery command in the declared
+                action range [-10, 10]. The applied request is
+                action[0] * action_scale.
 
         Returns:
             obs: The next observation vector.
             reward: Negative net electricity bill, optionally minus grid-reliance penalty.
-            terminated: Whether the 24-hour day is complete.
+            terminated: Whether the configured episode length has elapsed.
             truncated: False (standard Gym API).
             info: A dictionary containing diagnostic information for the step.
         """
@@ -1008,7 +1047,7 @@ class PCSEnv(gym.Env):
         # Get current time features
         current_features = self._get_current_features()
 
-        # Concatenate in documented order: [storage, consumption, buy, sell, forecasts, mask, capacities, calendar].
+        # Concatenate in documented order: [storage, previous load, tariffs, forecasts, mask, capacities, calendar features].
         obs = np.concatenate([
             [current_storage, previous_consumption, buy_tariff, sell_tariff],
             zero_padded,
@@ -1130,7 +1169,7 @@ class PCSEnv(gym.Env):
             print(f"Price ({strategy_name}): ${current_price:.4f}/unit")
             
             if self.last_action is not None:
-                action_type = "Charge" if self.last_action < 0 else "Discharge" if self.last_action > 0 else "Idle"
+                action_type = "Charge" if self.last_action > 0 else "Discharge" if self.last_action < 0 else "Idle"
                 print(f"Battery Action:        {self.last_action:.2f} units ({action_type})")
             
             # Show features if available
@@ -1174,7 +1213,7 @@ class PCSEnv(gym.Env):
             print(f"Current Price:         ${current_price:.6f}/unit")
             
             if self.last_action is not None:
-                action_type = "CHARGE" if self.last_action < 0 else "DISCHARGE" if self.last_action > 0 else "IDLE"
+                action_type = "CHARGE" if self.last_action > 0 else "DISCHARGE" if self.last_action < 0 else "IDLE"
                 print(f"\n--- Agent Action ---")
                 print(f"Raw Action Value:      {self.last_action:.4f} units")
                 print(f"Action Type:           {action_type}")
@@ -1201,7 +1240,7 @@ class PCSEnv(gym.Env):
             print(f"Net Reward (Total):    ${self.total_reward:.6f}")
             print(f"Shortage Count:        {self.shortage_count}")
             if self.current_step > 0:
-                avg_reward = self.total_reward / (self.current_step + 1)
+                avg_reward = self.total_reward / self.current_step
                 print(f"Average Reward/Step:   ${avg_reward:.6f}")
             
             print(f"{'=' * 80}")
@@ -1250,7 +1289,7 @@ if __name__ == "__main__":
         # 4. Intra-day Time Steps (Typically 48 steps per day)
         while True:
             # Generate a random battery action (Intent) between -10 and 10.
-            # -10: Maximum Charge, 10: Maximum Discharge.
+            # -10: maximum discharge; +10: maximum charge.
             action_value = float(np.random.uniform(-10.0, 10.0))
             action = np.array([action_value], dtype=np.float32)
 

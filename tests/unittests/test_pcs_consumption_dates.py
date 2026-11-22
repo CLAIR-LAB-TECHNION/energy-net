@@ -261,3 +261,86 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
 
     finally:
         env.close()
+
+
+def test_gymnasium_options_start_date_matches_direct_reset(
+    dated_pcs_env,
+):
+    env, readings = dated_pcs_env
+    start = readings.index[60]
+
+    direct_obs, _ = env.reset(start_date=start)
+
+    options_obs, info = env.reset(
+        seed=123,
+        options={"start_date": start.isoformat()},
+    )
+
+    np.testing.assert_array_equal(options_obs, direct_obs)
+
+    assert env.current_datetime == start
+    assert env.previous_load == pytest.approx(
+        readings.iloc[59]["Consumption"]
+    )
+    assert info == {}
+
+
+def test_conflicting_reset_dates_preserve_active_state(
+    dated_pcs_env,
+):
+    env, readings = dated_pcs_env
+
+    env.reset(start_date=readings.index[1])
+    env.step(np.array([2.0], dtype=np.float32))
+
+    old_state = (
+        env.current_datetime,
+        env.current_step,
+        env.previous_load,
+        env.pcs.get_total_storage(),
+        env.total_reward,
+        env._last_observation.copy(),
+    )
+
+    with pytest.raises(ValueError, match="not both"):
+        env.reset(
+            start_date=readings.index[48],
+            options={"start_date": readings.index[60]},
+        )
+
+    assert (
+        env.current_datetime,
+        env.current_step,
+        env.previous_load,
+        env.pcs.get_total_storage(),
+        env.total_reward,
+    ) == old_state[:5]
+
+    np.testing.assert_array_equal(
+        env._last_observation,
+        old_state[5],
+    )
+
+
+def test_render_action_directions_and_debug_average(
+    dated_pcs_env, capsys
+):
+    env, readings = dated_pcs_env
+    env.reset(start_date=readings.index[1])
+
+    env.step(np.array([2.0], dtype=np.float32))
+    env.render(verbosity=3)
+
+    assert "(Charge)" in capsys.readouterr().out
+
+    env.step(np.array([-1.0], dtype=np.float32))
+    env.render(verbosity=4)
+
+    output = capsys.readouterr().out
+
+    assert "Action Type:           DISCHARGE" in output
+
+    assert (
+        f"Average Reward/Step:   ${env.total_reward / 2:.6f}"
+        in output
+    )
