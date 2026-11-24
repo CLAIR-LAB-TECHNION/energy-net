@@ -9,6 +9,20 @@ from pandas._libs.tslibs import to_offset
 
 _data_cache = {}
 
+
+def read_csv_exact(path, **kwargs) -> pd.DataFrame:
+    """
+    ``pd.read_csv`` with correctly rounded floats on every pandas version.
+
+    pandas >= 3 parses floats exactly by default (and deprecates
+    ``float_precision``). pandas 2's default C parser does not: on the test
+    forecasts it is one ulp off for about 15% of the values, so simulation
+    inputs would depend on the installed pandas version.
+    """
+    if int(pd.__version__.split(".")[0]) < 3:
+        kwargs.setdefault("float_precision", "round_trip")
+    return pd.read_csv(path, **kwargs)
+
 def load_data_from_yaml(data_file: str, data_key: str) -> Dict[float, float]:
     """
     Load data from a YAML file and cache it.
