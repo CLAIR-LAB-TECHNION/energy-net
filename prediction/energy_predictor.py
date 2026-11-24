@@ -388,6 +388,23 @@ class EnergyPredictor:
             time_str
         )
 
+    def predict_timestamps(self, timestamps):
+        """
+        Predict the configured energy target at many timestamps at once.
+
+        Equivalent to calling :meth:`predict` for each timestamp, but the
+        feature engineering and the model run once over the whole batch.
+
+        Args:
+            timestamps: Iterable of datetime-like values.
+
+        Returns:
+            numpy.ndarray of predictions, in the order given.
+        """
+        frame = pd.DataFrame({"Datetime": pd.DatetimeIndex(timestamps)})
+        frame = self.feature_engineering_fn(frame)
+        return np.asarray(self.model.predict(frame[self.feature_cols]), dtype=float)
+
     def predict_days(self, start_date, num_days=1, output_csv=None, include_features=None):
         """
         Generate predictions for multiple days.
