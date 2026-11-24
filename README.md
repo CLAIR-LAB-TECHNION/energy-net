@@ -2,7 +2,7 @@
 
 > A multi-agent reinforcement learning framework for smart grid simulation
 
-[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.13–3.14](https://img.shields.io/badge/python-3.13%E2%80%933.14-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
@@ -238,8 +238,8 @@ energy-net/
 ## Dependencies
 
 **Core Requirements:**
-- Python 3.14 (`>=3.14,<3.15`)
-- numpy, scipy, pandas
+- Python 3.13 or 3.14 (`>=3.13,<3.15`)
+- numpy, scipy, pandas (>= 3)
 - gymnasium
 - pyyaml
 - scikit-learn

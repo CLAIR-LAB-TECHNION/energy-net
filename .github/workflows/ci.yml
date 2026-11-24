@@ -22,8 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # setup.cfg: python_requires = >=3.14,<3.15
-        python-version: ["3.14"]
+        # setup.cfg: python_requires = >=3.13,<3.15
+        python-version: ["3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4

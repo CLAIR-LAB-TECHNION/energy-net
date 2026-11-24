@@ -88,12 +88,12 @@ def default_time_features(df):
     df["cos_time"] = np.cos(2 * pi * slot / 48)
 
     # DAY OF WEEK FEATURES
-    dow = dt.dt.weekday
+    dow = dt.dt.day_of_week
     df["sin_week"] = np.sin(2 * pi * dow / 7)
     df["cos_week"] = np.cos(2 * pi * dow / 7)
 
     # DAY OF YEAR FEATURES
-    doy = dt.dt.dayofyear
+    doy = dt.dt.day_of_year
     df["sin_year"] = np.sin(2 * pi * doy / 365.25)
     df["cos_year"] = np.cos(2 * pi * doy / 365.25)
 
@@ -266,7 +266,7 @@ def generate_day_predictions(model, feature_cols, feature_engineering_fn,
                 "Date": date_str,
                 "Time": time_str,
                 "Day_of_Week": date.strftime('%A'),
-                "Day_of_Year": date.dayofyear,
+                "Day_of_Year": date.day_of_year,
                 "Hour": hour,
                 output_col: round(prediction_value, 2)
             })
