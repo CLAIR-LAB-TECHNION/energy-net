@@ -11,6 +11,7 @@ from energy_net.grid_entities.management.price_curve import (
 
 from stable_baselines3 import PPO
 import numpy as np
+import pandas as pd
 from energy_net.gym_envs.iso_env import ISOEnv
 
 
@@ -589,6 +590,37 @@ def get_pred_window(env: ISOEnv, start: int, length: int) -> np.ndarray:
         return preds.astype(np.float32)
 
 
+class ISODailyObservation:
+    """
+    Daily observation for an ISO pricing policy, built exactly as the ISO
+    env builds its own observation (``get_pred_window``). Injected into the
+    prosumer's tariff schedule, it guarantees that a trained ISO model sees
+    identical inputs when it prices the prosumer's day.
+
+    Days outside the ISO data are refused rather than wrapped around.
+    """
+
+    def __init__(self, iso_env: ISOEnv):
+        self.iso_env = iso_env
+
+    def _offset(self, day) -> float:
+        start = pd.Timestamp(day).normalize()
+        return (start - self.iso_env.base_timestamp) / pd.Timedelta(minutes=30)
+
+    def availability_error(self, day, issue_time):
+        offset = self._offset(day)
+        if (offset != int(offset) or offset < 0
+                or offset + self.iso_env.T > self.iso_env.total_rows):
+            return f"No ISO observation for {pd.Timestamp(day).date()}"
+        return None
+
+    def observe(self, day, issue_time) -> np.ndarray:
+        error = self.availability_error(day, issue_time)
+        if error is not None:
+            raise ValueError(error)
+        return get_pred_window(self.iso_env, int(self._offset(day)), self.iso_env.T)
+
+
 # -----------------------
 # Main training function
 # -----------------------
@@ -703,6 +735,9 @@ def run_alternating_training(
         use_asymmetric_pricing=iso_env.use_asymmetric_pricing,
         steps_per_day=iso_env.T,
     )
+    # The ISO prices the prosumer's days from exactly the observation it
+    # was trained on.
+    prosumer_env.simulator.tariffs.daily_observation = ISODailyObservation(iso_env)
 
     # Metric Tracking Initialization
     history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}

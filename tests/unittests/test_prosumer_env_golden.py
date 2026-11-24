@@ -8,7 +8,11 @@ import pytest
 
 from energy_net.gym_envs.prosumer_env import ProsumerEnv
 from tests.golden.fixture import load_fixture
-from tests.golden.scenarios import SCENARIOS, RecordingDataDrivenStrategy
+from tests.golden.scenarios import (
+    SCENARIOS,
+    RecordingDataDrivenStrategy,
+    use_legacy_daily_observation,
+)
 
 # Info keys that echoed reward *configuration* rather than step data; the
 # reward function itself is available as env.reward_fn.
@@ -49,6 +53,7 @@ def test_prosumer_env_reproduces_legacy_pcs_env(name):
     layout = recorded["layout"]
     strategy = spec["strategy"]()
     env = _env(spec, strategy)
+    use_legacy_daily_observation(env.simulator)
     assert env.max_steps == recorded["max_steps"]
 
     for index, (start, episode) in enumerate(zip(spec["starts"], recorded["episodes"])):

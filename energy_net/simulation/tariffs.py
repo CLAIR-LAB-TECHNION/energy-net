@@ -38,11 +38,17 @@ class ForecastDailyObservation:
     Daily observation = load forecast for the day's 48 slots, divided by
     ``demand_scale``, followed by the flattened calendar features.
 
+    This matches the observation ``ISOEnv`` trains on (raw forecasts plus
+    the calendar features of a standard predictions CSV), so an ISO policy
+    sees the same kind of input when it prices the prosumer's day. For an
+    exact match with a particular ISO env, inject that env's own builder
+    instead (see ``alternating_env.ISODailyObservation``).
+
     ``load_unit`` is any entity with ``predict`` and ``forecaster`` (the
     prosumer's load).
     """
 
-    def __init__(self, load_unit, demand_scale: float = 10.0):
+    def __init__(self, load_unit, demand_scale: float = 1.0):
         self.load_unit = load_unit
         self.demand_scale = float(demand_scale)
 
@@ -73,6 +79,7 @@ class TariffSchedule:
                  daily_observation: Optional[DailyObservationSource] = None):
         self._validate_strategy_type(strategy)
         self._strategy = strategy
+        # Replace before a reset: curves already built keep their inputs.
         self.daily_observation = daily_observation
         self._curves: Dict[object, Curves] = {}
 

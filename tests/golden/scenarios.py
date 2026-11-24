@@ -125,6 +125,20 @@ SCENARIOS = {
 }
 
 
+def use_legacy_daily_observation(simulator):
+    """
+    The legacy PCSEnv divided the demand forecast by 10 in the observation
+    it handed to data-driven pricing strategies, unlike the ISO env that
+    trains them. The refactor fixed the default (raw forecasts); replaying
+    the legacy trajectories therefore needs the legacy scaling back.
+    """
+    from energy_net.simulation import ForecastDailyObservation
+
+    simulator.tariffs.daily_observation = ForecastDailyObservation(
+        simulator.prosumer.load, demand_scale=10.0
+    )
+
+
 def legacy_layout(horizon):
     """Observation slices of the legacy 4 + 2H + 2 + 7 PCS observation."""
     return {

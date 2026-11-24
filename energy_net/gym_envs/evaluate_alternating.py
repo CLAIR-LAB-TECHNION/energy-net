@@ -14,6 +14,7 @@ import pandas as pd
 
 from energy_net.grid_entities.management.price_curve import RLPriceCurveStrategy  # New strategy class
 from energy_net.gym_envs.alternating_env import (
+    ISODailyObservation,
     AlternatingISOEnv, 
     PenalizedAlternatingISOEnv,
     MultiObjectiveAlternatingISOEnv,
@@ -150,6 +151,7 @@ class AlternatingEvaluator:
             load_forecast_file=self.predicted_csv,
             forecast_horizon=steps_per_day,
         )
+        prosumer_env.simulator.tariffs.daily_observation = ISODailyObservation(self.iso_env)
         history = []
 
         for day in range(num_days):
@@ -411,6 +413,7 @@ def run_experiment(actual_csv,
         use_asymmetric_pricing=iso_env_train.use_asymmetric_pricing,
         steps_per_day=iso_env_train.T,
     )
+    temp_prosumer_env.simulator.tariffs.daily_observation = ISODailyObservation(iso_env_train)
     
     # Training loop (simplified version of run_alternating_training)
     history = {"iteration": [], "avg_money": [], "avg_mae": [], "total_shortages": [], "avg_iso_price": []}

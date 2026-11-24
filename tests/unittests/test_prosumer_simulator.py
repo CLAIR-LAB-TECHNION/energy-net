@@ -24,7 +24,11 @@ from energy_net.simulation.factory import steps_per_episode
 from energy_net.simulation.prosumer_simulator import ProsumerSimulator
 from energy_net.simulation.tariffs import TariffSchedule
 from tests.golden.fixture import load_fixture
-from tests.golden.scenarios import SCENARIOS, RecordingDataDrivenStrategy
+from tests.golden.scenarios import (
+    SCENARIOS,
+    RecordingDataDrivenStrategy,
+    use_legacy_daily_observation,
+)
 
 DAYS = 4
 TIMES = pd.date_range("2025-01-01", periods=DAYS * 48, freq="30min")
@@ -73,6 +77,7 @@ def test_simulator_reproduces_legacy_trajectories(name):
         spec["load"], spec["forecast"], price_strategy=strategy,
         forecast_horizon=options.pop("prediction_horizon", None),
     )
+    use_legacy_daily_observation(simulator)
     assert not options
 
     # Values the legacy env decoded from its float32 observation.
