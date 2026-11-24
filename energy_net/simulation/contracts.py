@@ -139,6 +139,7 @@ class StepResult:
             "battery_energy_used_for_consumption_units": t.battery_to_load,
             "battery_charged_from_surplus_units": t.surplus_to_storage,
             "exported_surplus_units": t.exported_surplus,
+            "battery_losses_units": t.losses,
             "uncovered_consumption_units": t.uncovered_load,
             "available_charge_units": t.available_charge,
             "available_discharge_units": t.available_discharge,

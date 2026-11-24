@@ -284,3 +284,61 @@ def test_battery_set_energy_level_validates_bounds():
         battery.set_energy_level(100.5)
     with pytest.raises(ValueError):
         battery.set_energy_level(float("nan"))
+
+
+# ------------------------------------------------------- efficiencies
+
+def _lossy_transition(level, command, load, generation, eta_c, eta_d, rates=(INF, INF)):
+    dynamics = DeterministicBattery({"charge_efficiency": eta_c, "discharge_efficiency": eta_d})
+    limits = BatteryLimits(0.0, 100.0, *rates)
+    return prosumer_transition(level, limits, dynamics, command, load, generation)
+
+
+def test_charging_is_billed_for_grid_energy_not_stored_energy():
+    t = _lossy_transition(50.0, 10.0, load=0.0, generation=0.0, eta_c=0.8, eta_d=1.0)
+    assert t.storage_after == pytest.approx(58.0)
+    assert t.applied_command == pytest.approx(10.0)
+    assert t.grid_exchange == pytest.approx(10.0)
+    assert t.losses == pytest.approx(2.0)
+
+
+def test_discharging_withdraws_more_than_it_delivers():
+    t = _lossy_transition(50.0, -8.0, load=0.0, generation=0.0, eta_c=1.0, eta_d=0.8)
+    assert t.storage_after == pytest.approx(40.0)
+    assert t.applied_command == pytest.approx(-8.0)
+    assert t.grid_exchange == pytest.approx(-8.0)
+    assert t.losses == pytest.approx(2.0)
+
+
+def test_battery_serving_load_counts_delivered_energy():
+    t = _lossy_transition(4.0, 0.0, load=5.0, generation=0.0, eta_c=1.0, eta_d=0.5)
+    # 4 stored units can deliver only 2.
+    assert t.battery_to_load == pytest.approx(2.0)
+    assert t.uncovered_load == pytest.approx(3.0)
+    assert t.storage_after == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_energy_is_conserved_with_losses(seed):
+    rng = np.random.default_rng(seed)
+    for _ in range(500):
+        eta_c, eta_d = rng.uniform(0.5, 1.0, 2)
+        rates = tuple(rng.choice([INF, rng.uniform(1.0, 10.0)]) for _ in range(2))
+        t = _lossy_transition(
+            float(rng.uniform(0, 100)), float(rng.uniform(-15, 15)),
+            float(rng.uniform(0, 8)), float(rng.uniform(0, 8)), eta_c, eta_d, rates,
+        )
+        assert 0.0 <= t.storage_after <= 100.0
+        assert t.losses >= 0.0
+        assert t.grid_exchange + t.generation - t.load == pytest.approx(
+            t.storage_after - t.storage_before + t.losses, abs=1e-9
+        )
+        _assert_respects_rate_budget(t, *rates)
+
+
+def test_battery_efficiency_has_one_source_the_dynamics():
+    dynamics = DeterministicBattery({"charge_efficiency": 0.9, "discharge_efficiency": 0.8})
+    battery = Battery(dynamics, {"min": 0.0, "max": 100.0, "init": 50.0})
+    assert (battery.charge_efficiency, battery.discharge_efficiency) == (0.9, 0.8)
+    with pytest.warns(UserWarning, match="ignored"):
+        Battery(dynamics, {"min": 0.0, "max": 100.0, "charge_efficiency": 0.5})

@@ -71,10 +71,16 @@ class Prosumer(CompositeGridEntity):
         return self.storage.get_state()
 
     def available_charge(self) -> float:
-        return self.battery_limits().available_charge(self.storage_level())
+        """Grid-side energy the battery can accept in one interval."""
+        return self.battery_limits().available_charge(
+            self.storage_level(), self.storage.charge_efficiency
+        )
 
     def available_discharge(self) -> float:
-        return self.battery_limits().available_discharge(self.storage_level())
+        """Grid-side energy the battery can deliver in one interval."""
+        return self.battery_limits().available_discharge(
+            self.storage_level(), self.storage.discharge_efficiency
+        )
 
     def get_state(self) -> Dict[str, float]:
         return {

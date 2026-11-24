@@ -1,3 +1,5 @@
+import warnings
+from numbers import Real
 from typing import Any, Dict, Optional
 from energy_net.foundation.grid_entity import ElementaryGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
@@ -21,8 +23,7 @@ class Battery(ElementaryGridEntity):
                 - max: Maximum energy level (default: inf)
                 - charge_rate_max: Maximum charge rate (default: inf)
                 - discharge_rate_max: Maximum discharge rate (default: inf)
-                - charge_efficiency: Charging efficiency (default: 1.0)
-                - discharge_efficiency: Discharging efficiency (default: 1.0)
+                Efficiencies are defined by the dynamics, not here.
                 - init: Initial energy level (default: 0.0)
         """
         super().__init__(dynamics)
@@ -32,8 +33,13 @@ class Battery(ElementaryGridEntity):
         self.energy_max: float = config.get('max', float('inf'))
         self.charge_rate_max: float = config.get('charge_rate_max', float('inf'))
         self.discharge_rate_max: float = config.get('discharge_rate_max', float('inf'))
-        self.charge_efficiency: float = config.get('charge_efficiency', 1.0)
-        self.discharge_efficiency: float = config.get('discharge_efficiency', 1.0)
+        if 'charge_efficiency' in config or 'discharge_efficiency' in config:
+            warnings.warn(
+                "Battery config 'charge_efficiency'/'discharge_efficiency' are "
+                "ignored; efficiency is defined by the battery dynamics",
+                UserWarning,
+                stacklevel=2,
+            )
         self.initial_energy: float = config.get('init', 0.0)
         self.energy_level: float = self.initial_energy
         self.energy_change: float = 0.0
@@ -80,6 +86,20 @@ class Battery(ElementaryGridEntity):
         self._state.set_attribute('energy_level', self.energy_level)
         self._state.set_attribute('energy_change', self.energy_change)
 
+    def _efficiency(self, name: str) -> float:
+        value = getattr(self.dynamics, name, 1.0)
+        return float(value) if isinstance(value, Real) else 1.0
+
+    @property
+    def charge_efficiency(self) -> float:
+        """Fraction of grid-side charging energy that is stored."""
+        return self._efficiency('charge_efficiency')
+
+    @property
+    def discharge_efficiency(self) -> float:
+        """Fraction of withdrawn stored energy that is delivered."""
+        return self._efficiency('discharge_efficiency')
+
     def set_energy_level(self, level: float) -> None:
         """
         Commit an energy level computed elsewhere (e.g. a pure transition).
@@ -107,7 +127,7 @@ class Battery(ElementaryGridEntity):
             float: Maximum energy that can be charged, considering both
                    the charge rate limit and remaining capacity to max.
         """
-        remaining_capacity = self.energy_max - self.energy_level
+        remaining_capacity = (self.energy_max - self.energy_level) / self.charge_efficiency
         return min(self.charge_rate_max, remaining_capacity)
 
     def get_available_discharge_capacity(self) -> float:
@@ -118,7 +138,7 @@ class Battery(ElementaryGridEntity):
             float: Maximum energy that can be discharged, considering both
                    the discharge rate limit and available energy above min.
         """
-        available_energy = self.energy_level - self.energy_min
+        available_energy = (self.energy_level - self.energy_min) * self.discharge_efficiency
         return min(self.discharge_rate_max, available_energy)
 
     def get_state(self) -> float:

@@ -7,6 +7,8 @@ PCSUnit.update + PCSEnv.step accounting bit for bit; the floating-point
 expressions below deliberately mirror the legacy ones.
 """
 
+from numbers import Real
+
 from energy_net.grid_entities.prosumer.prosumer_classes import (
     BatteryLimits,
     ProsumerTransition,
@@ -27,11 +29,21 @@ def _battery_step(battery_dynamics, level: float, limits: BatteryLimits,
     )
 
 
+def _efficiency(battery_dynamics, name: str) -> float:
+    value = getattr(battery_dynamics, name, 1.0)
+    return float(value) if isinstance(value, Real) else 1.0
+
+
 def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
                         command: float, load: float, generation: float,
                         time: float = 0.0) -> ProsumerTransition:
     """
     Compute one interval of the prosumer.
+
+    All energies are grid-side (what the grid and the household see); the
+    battery's efficiencies, read from its dynamics, convert them to stored
+    energy. With efficiency 1 every expression below reduces exactly to the
+    legacy one.
 
     Order of events:
       1. The agent's battery command is applied (clipped by the battery's
@@ -54,13 +66,20 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
         time: Passed through to the battery dynamics.
     """
     storage_before = level
+    charge_efficiency = _efficiency(battery_dynamics, "charge_efficiency")
+    discharge_efficiency = _efficiency(battery_dynamics, "discharge_efficiency")
 
     # 1. Agent command. Like Battery.update, a zero command is a no-op.
     if command != 0:
         after_command = _battery_step(battery_dynamics, level, limits, command, time)
     else:
         after_command = level
-    applied = after_command - storage_before
+    stored_by_command = after_command - storage_before
+    # Grid-side energy the command actually moved.
+    if stored_by_command > 0:
+        applied = stored_by_command / charge_efficiency
+    else:
+        applied = stored_by_command * discharge_efficiency
 
     # Rate budget left for balancing in each direction (inf - x == inf, so
     # unlimited rates behave exactly as before).
@@ -73,7 +92,7 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
     energy_diff = generation - load  # positive = surplus, negative = deficit
     if energy_diff != 0:
         if energy_diff > 0:
-            capacity = min(charge_budget, limits.max - after_command)
+            capacity = min(charge_budget, (limits.max - after_command) / charge_efficiency)
             if capacity > 0:
                 surplus_to_storage = capacity if capacity < energy_diff else energy_diff
                 storage_after = _battery_step(
@@ -81,15 +100,18 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
                 )
         else:
             deficit = abs(energy_diff)
-            capacity = min(discharge_budget, after_command - limits.min)
+            capacity = min(discharge_budget, (after_command - limits.min) * discharge_efficiency)
             if capacity > 0:
                 amount = capacity if capacity < deficit else deficit
                 storage_after = _battery_step(
                     battery_dynamics, after_command, limits, -amount, time
                 )
 
-    # 3. Grid covers what the battery did not (legacy expressions).
-    battery_to_load = max(storage_before + applied - storage_after, 0.0)
+    # 3. Grid covers what the battery did not (legacy expressions, with the
+    #    stored energy withdrawn converted to energy delivered).
+    battery_to_load = max(
+        storage_before + stored_by_command - storage_after, 0.0
+    ) * discharge_efficiency
     uncovered_load = max(load - generation - battery_to_load, 0.0)
 
     # 4. Surplus the battery could not absorb is exported.
@@ -98,6 +120,11 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
     # x - 0.0 == x exactly, so with no export this equals the legacy
     # ``applied + uncovered`` bit for bit.
     grid_exchange = applied + uncovered_load - exported_surplus
+
+    charged = max(applied, 0.0) + surplus_to_storage
+    delivered = max(-applied, 0.0) + battery_to_load
+    losses = (charged * (1.0 - charge_efficiency)
+              + delivered * (1.0 / discharge_efficiency - 1.0))
 
     return ProsumerTransition(
         storage_before=storage_before,
@@ -112,6 +139,7 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
         exported_surplus=exported_surplus,
         uncovered_load=uncovered_load,
         grid_exchange=grid_exchange,
-        available_charge=limits.available_charge(storage_after),
-        available_discharge=limits.available_discharge(storage_after),
+        available_charge=limits.available_charge(storage_after, charge_efficiency),
+        available_discharge=limits.available_discharge(storage_after, discharge_efficiency),
+        losses=losses,
     )
