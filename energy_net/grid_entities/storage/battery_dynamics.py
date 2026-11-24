@@ -92,14 +92,12 @@ class DeterministicBattery(EnergyDynamics):
 
         # Apply charging or discharging efficiency
         if action > 0:
-            assert action <= charge_rate_max, "Charging action exceeds maximum charge rate."
-            # Charging
+            # Charging; requests above the rate limit are clipped to it.
             charge_power = min(action, charge_rate_max)
             energy_change = charge_power * self.charge_efficiency
             new_energy = min(current_energy + energy_change, max_energy)
         elif action < 0:
-            assert abs(action) <= discharge_rate_max, "Discharging action exceeds maximum discharge rate."
-            # Discharging
+            # Discharging; requests above the rate limit are clipped to it.
             discharge_power = min(abs(action), discharge_rate_max)
             energy_change = discharge_power * self.discharge_efficiency
             new_energy = max(current_energy - energy_change, min_energy)

@@ -62,15 +62,39 @@ def _replay(inputs, row):
     )
 
 
+def _legacy_exceeded_rate_budget(inputs, outputs, row):
+    """Legacy let the command and the balancing each use the full rate."""
+    applied = outputs["applied_command"][row]
+    surplus_charge = max(outputs["storage_after"][row] - inputs["level"][row] - applied, 0.0)
+    charged = max(applied, 0.0) + surplus_charge
+    discharged = max(-applied, 0.0) + outputs["battery_to_load"][row]
+    return (charged > inputs["charge_rate"][row] + 1e-12
+            or discharged > inputs["discharge_rate"][row] + 1e-12)
+
+
+def _assert_respects_rate_budget(t, charge_rate, discharge_rate):
+    charged = max(t.applied_command, 0.0) + t.surplus_to_storage
+    discharged = max(-t.applied_command, 0.0) + t.battery_to_load
+    assert charged <= charge_rate + 1e-9
+    assert discharged <= discharge_rate + 1e-9
+
+
 def test_transition_matches_legacy_pcs_bit_for_bit():
+    """Identical to legacy wherever legacy respected the per-interval rate."""
     inputs, outputs = _legacy_transitions()
     rows = np.flatnonzero(inputs["generation"] == 0.0)
     assert len(rows) == 1500
+    exceeded = 0
     for row in rows:
         got = _replay(inputs, row)
+        if _legacy_exceeded_rate_budget(inputs, outputs, row):
+            exceeded += 1
+            _assert_respects_rate_budget(got, inputs["charge_rate"][row], inputs["discharge_rate"][row])
+            continue
         for key, values in outputs.items():
             assert getattr(got, key) == values[row], (key, row)
         assert got.exported_surplus == 0.0
+    assert exceeded > 0  # the fixture does exercise the fixed defect
 
 
 def test_transition_with_generation_matches_legacy_except_export():
@@ -80,6 +104,9 @@ def test_transition_with_generation_matches_legacy_except_export():
     assert len(rows) == 500
     for row in rows:
         got = _replay(inputs, row)
+        if _legacy_exceeded_rate_budget(inputs, outputs, row):
+            _assert_respects_rate_budget(got, inputs["charge_rate"][row], inputs["discharge_rate"][row])
+            continue
         for key, values in outputs.items():
             if key == "grid_exchange":
                 assert got.grid_exchange == pytest.approx(
@@ -87,6 +114,28 @@ def test_transition_with_generation_matches_legacy_except_export():
                 )
             else:
                 assert getattr(got, key) == values[row], (key, row)
+
+
+def test_rate_limit_is_one_budget_per_direction_per_interval():
+    limits = BatteryLimits(0.0, 100.0, charge_rate_max=4.0, discharge_rate_max=4.0)
+    # Discharge command 3 leaves 1 of the discharge rate for a 5-unit load.
+    t = _transition(50.0, -3.0, load=5.0, generation=0.0, limits=limits)
+    assert t.applied_command == -3.0
+    assert t.battery_to_load == pytest.approx(1.0)
+    assert t.uncovered_load == pytest.approx(4.0)
+    # Charge command 3 leaves 1 of the charge rate for a 5-unit surplus.
+    t = _transition(50.0, 3.0, load=0.0, generation=5.0, limits=limits)
+    assert t.surplus_to_storage == pytest.approx(1.0)
+    assert t.exported_surplus == pytest.approx(4.0)
+    # Opposite directions have separate budgets.
+    t = _transition(50.0, -4.0, load=0.0, generation=5.0, limits=limits)
+    assert t.surplus_to_storage == pytest.approx(4.0)
+
+
+def test_commands_beyond_the_rate_are_clipped_not_fatal():
+    limits = BatteryLimits(0.0, 100.0, charge_rate_max=2.0, discharge_rate_max=3.0)
+    assert _transition(50.0, 10.0, 0.0, 0.0, limits).applied_command == 2.0
+    assert _transition(50.0, -10.0, 0.0, 0.0, limits).applied_command == -3.0
 
 
 # ------------------------------------------------------ physical invariants

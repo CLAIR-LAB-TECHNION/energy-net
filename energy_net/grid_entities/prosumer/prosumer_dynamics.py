@@ -34,9 +34,12 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
     Compute one interval of the prosumer.
 
     Order of events:
-      1. The agent's battery command is applied (clipped by the battery).
+      1. The agent's battery command is applied (clipped by the battery's
+         capacity and rate limits).
       2. The residual ``generation - load`` is balanced against the
-         battery: surplus charges it, deficit discharges it.
+         battery: surplus charges it, deficit discharges it. The rate
+         limits are per direction *per interval*: balancing only gets the
+         part of each direction's rate the command did not use.
       3. Load the battery could not cover is imported from the grid.
       4. Surplus the battery could not absorb is exported to the grid.
 
@@ -59,13 +62,18 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
         after_command = level
     applied = after_command - storage_before
 
+    # Rate budget left for balancing in each direction (inf - x == inf, so
+    # unlimited rates behave exactly as before).
+    charge_budget = limits.charge_rate_max - max(applied, 0.0)
+    discharge_budget = limits.discharge_rate_max - max(-applied, 0.0)
+
     # 2. Self-balancing of the residual, as in PCSUnit._distribute_*.
     storage_after = after_command
     surplus_to_storage = 0.0
     energy_diff = generation - load  # positive = surplus, negative = deficit
     if energy_diff != 0:
         if energy_diff > 0:
-            capacity = limits.available_charge(after_command)
+            capacity = min(charge_budget, limits.max - after_command)
             if capacity > 0:
                 surplus_to_storage = capacity if capacity < energy_diff else energy_diff
                 storage_after = _battery_step(
@@ -73,7 +81,7 @@ def prosumer_transition(level: float, limits: BatteryLimits, battery_dynamics,
                 )
         else:
             deficit = abs(energy_diff)
-            capacity = limits.available_discharge(after_command)
+            capacity = min(discharge_budget, after_command - limits.min)
             if capacity > 0:
                 amount = capacity if capacity < deficit else deficit
                 storage_after = _battery_step(
