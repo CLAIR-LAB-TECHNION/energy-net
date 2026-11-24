@@ -23,6 +23,7 @@ def _make_env(tmp_path, demand):
         test_data_file=str(data_file),
         predictions_file=str(predictions_file),
         shortage_penalty=7.0,
+        include_shortage_penalty=True,
         verbosity=0,
     )
 
@@ -65,7 +66,10 @@ def test_shortage_penalizes_only_uncovered_consumption(
         expected_storage = initial_storage + action - served
         expected_shortage = uncovered > 0.0
         expected_penalty = penalty if expected_shortage else 0.0
-        expected_money = -action * info["current_price"]
+        expected_money = (
+            -info["buy_tariff"] * max(action + uncovered, 0.0)
+            + info["sell_tariff"] * max(-(action + uncovered), 0.0)
+        )
         assert env.pcs.get_production() == 0.0
         assert info["consumption_units"] == pytest.approx(demand)
         assert info["uncovered_consumption_units"] == pytest.approx(uncovered)
@@ -142,7 +146,7 @@ def test_shortage_respects_discharge_rate(
         assert info["storage_after_units"] == pytest.approx(expected_storage)
         assert info["shortage"] == expected_shortage
         expected_penalty = env.shortage_penalty if expected_shortage else 0.0
-        assert reward == pytest.approx(-expected_penalty)
+        assert reward == pytest.approx(info["step_money"] - expected_penalty)
         assert env.total_shortage_penalty == pytest.approx(expected_penalty)
         assert env.shortage_count == int(expected_shortage)
     finally:
@@ -157,11 +161,13 @@ def test_only_actual_shortfalls_accumulate_penalties(tmp_path):
 
         shortages = []
         rewards = []
+        money = []
         storage_levels = []
         for _ in range(3):
             _, reward, _, _, info = env.step(np.array([0.0], dtype=np.float32))
             shortages.append(info["shortage"])
             rewards.append(reward)
+            money.append(info["step_money"])
             storage_levels.append(info["storage_after_units"])
 
         np.testing.assert_allclose(storage_levels, [3.0, 0.0, 0.0])
@@ -173,10 +179,10 @@ def test_only_actual_shortfalls_accumulate_penalties(tmp_path):
             env.total_reward,
         ) == (
             [False, False, True],
-            [0.0, 0.0, -env.shortage_penalty],
+            [money[0], money[1], money[2] - env.shortage_penalty],
             1,
             env.shortage_penalty,
-            -env.shortage_penalty,
+            sum(money) - env.shortage_penalty,
         )
 
         env.reset()

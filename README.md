@@ -100,6 +100,32 @@ Simulates a household or facility managing:
 
 **Agent Goal**: Minimize energy costs while meeting consumption requirements through strategic battery management.
 
+#### PCS tariffs and reward variants
+
+`PCSEnv` exposes both tariffs in the observation: channel `2` is the price paid by
+PCS for net imports (`p_buy`) and channel `3` is the payment PCS receives for net
+exports (`p_sell`). These are from the **PCS** perspective, whereas the ISO price
+strategy methods use the ISO perspective. With 48 forecast steps and seven
+calendar features, the observation has 109 channels.
+
+The default reward is the negative net-metered electricity bill, where the
+metered exchange includes the explicit battery transaction and residual grid
+supply after automatic battery service:
+
+```python
+# Documented POMDP baseline: no additional reward shaping.
+env = PCSEnv(include_shortage_penalty=False)
+
+# Experimental variant: same electricity bill, plus a fixed penalty per
+# interval where any demand must be supplied by the grid.
+env = PCSEnv(include_shortage_penalty=True, shortage_penalty=1.0)
+```
+
+The penalty is *not* the price of unmet demand: household demand is always
+satisfied because the grid supplies any residual. Settle and log the real
+monetary cost (`info["step_money"]`) separately from the shaped reward.
+Existing PCS RL policies trained with the old 108-channel input need retraining.
+
 ### ISOEnv (Independent System Operator)
 
 Simulates a grid operator managing:

@@ -1,5 +1,6 @@
 import os
 
+import pandas as pd
 import numpy as np
 import pytest
 from stable_baselines3 import PPO
@@ -139,3 +140,64 @@ def test_action_length_must_match_configured_contract(use_asymmetric_pricing):
 
     with pytest.raises(ValueError, match="action length"):
         iso_env.step(np.zeros(iso_env.action_space.shape[0] - 1, dtype=np.float32))
+
+
+def test_alternating_reset_skips_missing_preceding_demand():
+    iso_env = create_model_linked_environment()
+
+    try:
+        obs, reset_info = iso_env.reset()
+
+        # First dataset day is not eligible for PCS reset.
+        assert reset_info["start_idx"] == 48
+        assert reset_info["timestamp"] == pd.Timestamp(
+            "2025-07-10 00:00:00"
+        )
+
+        # ISO observation must correspond to selected day.
+        assert obs[0] == pytest.approx(
+            iso_env.pred_data[48]
+        )
+
+        # The ISO's action must control that same day.
+        action = np.zeros(
+            iso_env.action_space.shape,
+            dtype=np.float32,
+        )
+
+        _, _, terminated, truncated, info = iso_env.step(action)
+
+        assert terminated
+        assert not truncated
+
+        assert info["realized_consumption"][0] == pytest.approx(
+            iso_env.actual_data[48]
+        )
+
+        assert iso_env.pcs_env.current_step == 48
+
+    finally:
+        iso_env.close()
+
+
+def test_alternating_reset_skips_invalid_consumption_day():
+    iso_env = create_model_linked_environment()
+
+    try:
+        # July 14 contains an invalid demand measurement.
+        iso_env._next_start_idx = 5 * iso_env.T
+
+        obs, info = iso_env.reset()
+
+        # Skip the invalid day and use July 15 instead.
+        assert info["start_idx"] == 6 * iso_env.T
+        assert info["timestamp"] == pd.Timestamp(
+            "2025-07-15 00:00:00"
+        )
+
+        assert obs[0] == pytest.approx(
+            iso_env.pred_data[6 * iso_env.T]
+        )
+
+    finally:
+        iso_env.close()

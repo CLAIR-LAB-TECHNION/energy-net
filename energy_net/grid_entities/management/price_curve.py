@@ -10,6 +10,7 @@ class PriceCurveStrategy(ABC):
     1. Implement calculate_price() for symmetric buy/sell pricing
     2. Implement calculate_buy_price() AND calculate_sell_price() for asymmetric pricing
     """
+    requires_daily_observation = True
 
     def calculate_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
@@ -35,6 +36,21 @@ class PriceCurveStrategy(ABC):
         """
         return self.calculate_price(observation)
 
+    def calculate_pcs_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+        """Return (PCS import tariff, PCS export tariff) for a whole day.
+
+        PriceCurveStrategy's buy/sell names are from the ISO's perspective:
+        the PCS buys at the ISO *sell* price and exports at its *buy* price.
+        Symmetric strategies are evaluated only once.
+        """
+        if getattr(self, "use_asymmetric_pricing", False):
+            return (
+                self.calculate_sell_price(observation),
+                self.calculate_buy_price(observation),
+            )
+        curve = self.calculate_price(observation)
+        return curve, curve
+
 
 class ActionBasedPriceStrategy(PriceCurveStrategy):
     """
@@ -45,6 +61,8 @@ class ActionBasedPriceStrategy(PriceCurveStrategy):
     Use this during training when you have the action available.
     Use RLPriceCurveStrategy for evaluation when you need to query the model.
     """
+
+    requires_daily_observation = False
 
     def __init__(self, action, price_min=0.0, price_max=0.20,
                  use_asymmetric_pricing=False, steps_per_day=48):
@@ -217,10 +235,31 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
         sell_prices = self.price_min + (raw_sell_prices * (self.price_max - self.price_min))
         
         return sell_prices.astype(np.float32)
+    def calculate_pcs_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+        """Query the trained ISO once and extract both tariffs consistently."""
+        obs = np.asarray(observation, dtype=np.float32)
+        action, _ = self.iso_model.predict(obs, deterministic=True)
+        action = np.asarray(action, dtype=np.float32)
+        iso_buy = self.price_min + (
+            action[:self.steps_per_day] * (self.price_max - self.price_min)
+        )
+        if self.use_asymmetric_pricing:
+            iso_sell = self.price_min + (
+                action[self.steps_per_day:2 * self.steps_per_day]
+                * (self.price_max - self.price_min)
+            )
+        else:
+            iso_sell = iso_buy
+        return iso_sell.astype(np.float32), iso_buy.astype(np.float32)
+
+
 class SineWavePriceStrategy(PriceCurveStrategy):
     """
     Reproduces the original sine-wave pricing logic from PCSEnv.
     """
+
+    requires_daily_observation = False
+
     def __init__(self, base_price=0.10, price_volatility=0.15, steps_per_day=48):
         self.base_price = base_price
         self.price_volatility = price_volatility
@@ -241,6 +280,9 @@ class FixedPriceStrategy(PriceCurveStrategy):
     """
     Generates a fixed price curve.
     """
+
+    requires_daily_observation = False
+
     def __init__(self, fixed_price=0.10, steps_per_day=48):
         self.fixed_price = fixed_price
         self.steps_per_day = steps_per_day
