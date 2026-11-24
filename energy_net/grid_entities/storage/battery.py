@@ -80,6 +80,25 @@ class Battery(ElementaryGridEntity):
         self._state.set_attribute('energy_level', self.energy_level)
         self._state.set_attribute('energy_change', self.energy_change)
 
+    def set_energy_level(self, level: float) -> None:
+        """
+        Commit an energy level computed elsewhere (e.g. a pure transition).
+
+        Raises:
+            ValueError: if the level is not finite or lies outside [min, max].
+        """
+        level = float(level)
+        if not (self.energy_min <= level <= self.energy_max):
+            raise ValueError(
+                f"Energy level {level} outside "
+                f"[{self.energy_min}, {self.energy_max}]"
+            )
+        previous_energy = self.energy_level
+        self.energy_level = level
+        self.energy_change = level - previous_energy
+        self._state.set_attribute('energy_level', self.energy_level)
+        self._state.set_attribute('energy_change', self.energy_change)
+
     def get_available_charge_capacity(self) -> float:
         """
         Calculates how much energy this battery can accept (charge).
