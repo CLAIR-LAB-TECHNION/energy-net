@@ -172,16 +172,23 @@ class ProsumerSimulator:
     # ---------------------------------------------------------- lifecycle
 
     def reset(self, start=None, initial_storage: Optional[float] = None,
-              rng: Optional[np.random.Generator] = None) -> ProsumerObservation:
+              rng: Optional[np.random.Generator] = None,
+              rewind: bool = False) -> ProsumerObservation:
         """
         Start an episode. Nothing changes unless the episode is valid.
 
-        Without ``start``, continue from the current time; if that is not
-        valid, use the first valid start in the data. No load is processed
-        at reset: the observation holds the previous interval's values.
+        Without ``start``, continue from the current time (or, with
+        ``rewind``, from the start of the data); if that is not valid, use
+        the first valid start in the data. No load is processed at reset:
+        the observation holds the previous interval's values.
         """
         explicit = start is not None
-        candidate = pd.Timestamp(start) if explicit else self._current_time
+        if explicit:
+            candidate = pd.Timestamp(start)
+        elif rewind:
+            candidate = self._first_supported_time()
+        else:
+            candidate = self._current_time
         curves, error = (None, "no start time") if candidate is None else self._prepare(candidate)
 
         if error is not None:
@@ -320,6 +327,6 @@ class ProsumerSimulator:
             sell_tariff=sell,
             load_forecast=load_forecast,
             generation_forecast=generation_forecast,
-            calendar=calendar_features([now])[0],
+            calendar=calendar_features(now)[0],
             calendar_columns=CALENDAR_FEATURE_COLUMNS,
         )

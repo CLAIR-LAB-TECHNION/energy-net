@@ -3,7 +3,11 @@
 import numpy as np
 import pandas as pd
 
-from energy_net.foundation.dynamics import GroundTruthDynamics, as_datetime_index
+from energy_net.foundation.dynamics import (
+    GroundTruthDynamics,
+    as_datetime_index,
+    timestamps_of,
+)
 
 
 class ProfileDynamics(GroundTruthDynamics):
@@ -39,4 +43,4 @@ class ConstantDynamics(GroundTruthDynamics):
         self.value = float(value)
 
     def ground_truth(self, times) -> np.ndarray:
-        return np.full(len(as_datetime_index(times)), self.value, dtype=float)
+        return np.full(len(timestamps_of(times)), self.value, dtype=float)

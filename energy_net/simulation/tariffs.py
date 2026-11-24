@@ -11,7 +11,7 @@ from energy_net.simulation.calendar import (
     SLOT,
     SLOTS_PER_DAY,
     calendar_features,
-    slot_of_day,
+    slot_index,
 )
 
 Curves = Tuple[np.ndarray, np.ndarray]
@@ -170,5 +170,5 @@ class TariffSchedule:
         if day not in self._curves:
             self._curves[day] = self.build_day(timestamp, issue_time=timestamp)
         buy, sell = self._curves[day]
-        slot = int(slot_of_day([timestamp])[0])
+        slot = slot_index(timestamp)
         return float(buy[slot]), float(sell[slot])

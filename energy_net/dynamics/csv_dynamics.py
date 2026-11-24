@@ -8,7 +8,7 @@ import pandas as pd
 from energy_net.foundation.dynamics import (
     GroundTruthDynamics,
     GroundTruthUnavailableError,
-    as_datetime_index,
+    timestamps_of,
 )
 
 
@@ -60,9 +60,9 @@ class CSVDynamics(GroundTruthDynamics):
         return cls(frame[value_column], quantity=quantity)
 
     def ground_truth(self, times) -> np.ndarray:
-        index = as_datetime_index(times)
-        values = np.empty(len(index), dtype=float)
-        for position, timestamp in enumerate(index):
+        stamps = timestamps_of(times)
+        values = np.empty(len(stamps), dtype=float)
+        for position, timestamp in enumerate(stamps):
             value = self._lookup.get(timestamp)
             if value is None:
                 raise GroundTruthUnavailableError(
@@ -77,9 +77,8 @@ class CSVDynamics(GroundTruthDynamics):
 
     def availability_error(self, times, context: Optional[str] = None) -> Optional[str]:
         label = f"{context} {self.quantity}" if context else self.quantity
-        index = as_datetime_index(times)
         values = []
-        for timestamp in index:
+        for timestamp in timestamps_of(times):
             value = self._lookup.get(timestamp)
             if value is None:
                 return f"Missing {label} timestamp: {timestamp}"

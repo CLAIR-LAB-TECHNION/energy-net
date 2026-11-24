@@ -39,6 +39,17 @@ class GroundTruthUnavailableError(ValueError):
     """Raised when ground truth is requested for a time it does not cover."""
 
 
+def timestamps_of(times) -> list:
+    """Timestamps as a list; avoids building an index for one timestamp."""
+    if isinstance(times, pd.Timestamp):
+        return [times]
+    if isinstance(times, str) or not hasattr(times, "__iter__"):
+        return [pd.Timestamp(times)]
+    if isinstance(times, pd.DatetimeIndex):
+        return list(times)
+    return [pd.Timestamp(t) for t in times]
+
+
 def as_datetime_index(times) -> pd.DatetimeIndex:
     """Normalize a timestamp, a string, or an iterable of them to an index."""
     if isinstance(times, pd.DatetimeIndex):
@@ -113,7 +124,7 @@ class GroundTruthDynamics(EnergyDynamics):
                 f"{type(self).__name__} requires a 'timestamp' to "
                 "provide ground truth"
             )
-        return float(self.ground_truth(as_datetime_index(timestamp))[0])
+        return float(self.ground_truth(pd.Timestamp(timestamp))[0])
 
     def reset(self) -> None:
         """Ground truth does not depend on episodes; nothing to reset."""
