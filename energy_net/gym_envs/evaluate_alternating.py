@@ -19,6 +19,7 @@ from energy_net.gym_envs.alternating_env import (
     PenalizedAlternatingISOEnv,
     MultiObjectiveAlternatingISOEnv,
     get_pred_window, 
+    next_eligible_start,
     run_alternating_training
 )
 from stable_baselines3 import PPO, SAC
@@ -154,8 +155,13 @@ class AlternatingEvaluator:
         prosumer_env.simulator.tariffs.daily_observation = ISODailyObservation(self.iso_env)
         history = []
 
+        cursor = start_idx
         for day in range(num_days):
-            current_start = start_idx + (day * steps_per_day)
+            # Inject the strategy first: eligibility depends on it.
+            prosumer_env.set_price_strategy(self.pricing_strategy)
+            # Evaluate the next day the prosumer can actually run.
+            current_start = next_eligible_start(self.iso_env, prosumer_env, cursor)
+            cursor = current_start + steps_per_day
 
             # 3. Get the full observation window (Predictions + Features)
             pred_window = get_pred_window(self.iso_env, current_start, steps_per_day).astype(np.float32)
@@ -165,8 +171,7 @@ class AlternatingEvaluator:
             iso_action, _ = self.iso_model.predict(pred_window, deterministic=True)
             _, _, iso_dispatch = self.iso_env._split_action(iso_action)
 
-            # 5. Inject the strategy object into ProsumerEnv
-            prosumer_env.set_price_strategy(self.pricing_strategy)
+            # 5. Start the prosumer's day (the strategy is already injected)
             obs, _ = prosumer_env.reset(options={
                 "start_date": self.iso_env.base_timestamp + timedelta(minutes=30 * current_start)
             })
@@ -425,19 +430,20 @@ def run_experiment(actual_csv,
         iso_mod.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
         
         # Evaluate and train Prosumer
-        base_idx = iso_env_train._next_start_idx
+        cursor = iso_env_train._next_start_idx
         day_money_list = []
         iteration_maes = []
         iteration_shortages = 0
         day_avg_prices = []
         
         for day in range(cycle_days):
-            start = base_idx + day * steps_per_day
+            temp_prosumer_env.set_price_strategy(pricing_strategy)
+            start = next_eligible_start(iso_env_train, temp_prosumer_env, cursor)
+            cursor = start + steps_per_day
             obs_window = get_pred_window(iso_env_train, start, steps_per_day)
             price_curve = pricing_strategy.calculate_price(obs_window)
             day_avg_prices.append(float(np.mean(price_curve)))
             
-            temp_prosumer_env.set_price_strategy(pricing_strategy)
             obs, _ = temp_prosumer_env.reset(options={"start_date": iso_env_train._timestamp_for_index(start)})
             
             eval_day_money = 0.0
@@ -461,8 +467,7 @@ def run_experiment(actual_csv,
             prosumer_mod.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
         
         # Update history
-        final_idx = base_idx + (cycle_days * steps_per_day)
-        iso_env_train.sync_to_prosumer(final_idx)
+        iso_env_train.sync_to_prosumer(cursor)
         
         avg_money = float(np.mean(day_money_list))
         avg_mae = float(np.mean(iteration_maes))

@@ -63,50 +63,22 @@ class AlternatingISOEnv(ISOEnv):
         Preserve alignment between the ISO observation,
         ISO action, and prosumer simulation.
         """
-        if self.total_rows < self.T:
-            raise ValueError(
-                "Not enough data for a complete ISO episode"
-            )
-
-        start_idx = int(self._next_start_idx)
-        max_start = self.total_rows - self.T
-
-        # Wrap when the remaining data cannot contain
-        # another complete ISO episode.
-        if start_idx < 0 or start_idx > max_start:
-            start_idx = 0
-
-        # Search forward in full ISO-episode increments.
-        # If necessary, wrap back to the beginning.
-        candidate_indices = list(
-            range(start_idx, max_start + 1, self.T)
+        self._next_start_idx = next_eligible_start(
+            self, self.prosumer_env, self._next_start_idx
         )
-        candidate_indices.extend(
-            range(0, start_idx, self.T)
-        )
-
-        for idx in candidate_indices:
-            timestamp = self._timestamp_for_index(idx)
-
-            # Reuse the strict prosumer episode eligibility check.
-            error = self.prosumer_env.simulator.episode_error(timestamp)
-
-            if error is None:
-                self._next_start_idx = idx
-                return super().reset(
-                    seed=seed,
-                    options=options,
-                )
-
-        raise ValueError(
-            "No ISO interval can provide a complete valid "
-            "prosumer episode with the required input data"
-        )
+        return super().reset(seed=seed, options=options)
 
 
     def sync_to_prosumer(self, step_index: int):
-        """Move the ISO's internal pointer to a global half-hour index."""
-        self._next_start_idx = int(step_index)
+        """
+        Move the ISO's internal pointer to the first day at or after the
+        global half-hour index ``step_index`` that the prosumer can run.
+
+        ``step()`` uses the pointer as is (it assumes ``reset()`` validated
+        it), and SB3's ``learn(reset_num_timesteps=False)`` may step without
+        resetting first, so the pointer must always be an eligible day.
+        """
+        self._next_start_idx = next_eligible_start(self, self.prosumer_env, step_index)
 
     def _timestamp_for_index(self, index: int):
         """Timestamp of a global half-hour index in the ISO data."""
@@ -590,6 +562,38 @@ def get_pred_window(env: ISOEnv, start: int, length: int) -> np.ndarray:
         return preds.astype(np.float32)
 
 
+def next_eligible_start(iso_env: ISOEnv, prosumer_env, start_idx: int) -> int:
+    """
+    First ISO day index at or after ``start_idx`` on which the prosumer can
+    run a complete, valid episode with its current pricing strategy.
+
+    The search steps one ISO episode (``iso_env.T`` rows) at a time and, at
+    the end of the data, wraps around to the beginning. Every loop that
+    starts prosumer days must use it: computing ``start + day * T`` directly
+    lands on days with invalid data or runs past the end of the data.
+    """
+    steps = iso_env.T
+    if iso_env.total_rows < steps:
+        raise ValueError("Not enough data for a complete ISO episode")
+
+    max_start = iso_env.total_rows - steps
+    start_idx = int(start_idx)
+    if start_idx < 0 or start_idx > max_start:
+        start_idx = 0
+
+    candidates = list(range(start_idx, max_start + 1, steps))
+    candidates.extend(range(0, start_idx, steps))
+    for index in candidates:
+        timestamp = iso_env.base_timestamp + timedelta(minutes=30 * index)
+        if prosumer_env.simulator.episode_error(timestamp) is None:
+            return index
+
+    raise ValueError(
+        "No ISO interval can provide a complete valid "
+        "prosumer episode with the required input data"
+    )
+
+
 class ISODailyObservation:
     """
     Daily observation for an ISO pricing policy, built exactly as the ISO
@@ -751,14 +755,19 @@ def run_alternating_training(
         if render:
             print(f"[Iteration {iteration}] Prosumer Learning Phase...")
 
-        base_idx = iso_env._next_start_idx
+        cursor = iso_env._next_start_idx
         day_money_list = []
         iteration_maes = []
         iteration_shortages = 0
         day_avg_prices = []
 
         for day in range(cycle_days):
-            start = base_idx + day * steps_per_day
+            # Inject the strategy first: eligibility depends on it.
+            prosumer_env.set_price_strategy(pricing_strategy)
+            # Next day the prosumer can actually run (skips invalid data,
+            # wraps at the end of the data, like the ISO's own reset).
+            start = next_eligible_start(iso_env, prosumer_env, cursor)
+            cursor = start + steps_per_day
 
             # Get the ISO's full observation (predictions + features)
             obs_window = get_pred_window(iso_env, start, steps_per_day)
@@ -767,8 +776,6 @@ def run_alternating_training(
             price_curve = pricing_strategy.calculate_price(obs_window)
             day_avg_prices.append(float(np.mean(price_curve)))
 
-            # Inject the strategy into the prosumer environment for the learning loop
-            prosumer_env.set_price_strategy(pricing_strategy)
             obs, _ = prosumer_env.reset(options={"start_date": iso_env._timestamp_for_index(start)})
 
             eval_day_money = 0.0
@@ -795,9 +802,8 @@ def run_alternating_training(
             obs, _ = prosumer_env.reset(options={"start_date": iso_env._timestamp_for_index(start)})
             prosumer_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
 
-        # Advance global clock
-        final_idx = base_idx + (cycle_days * steps_per_day)
-        iso_env.sync_to_prosumer(final_idx)
+        # Advance global clock past the days just used
+        iso_env.sync_to_prosumer(cursor)
 
         # Update History
         avg_money = float(np.mean(day_money_list))
