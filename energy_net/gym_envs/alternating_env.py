@@ -1,7 +1,7 @@
-# alternating_env.py (Enhanced with shortage & MAE tracking + avg ISO price tracking + dynamic features)
+# alternating_env.py: alternating ISO <-> prosumer training (shortage & MAE tracking, avg ISO price, dynamic features)
 from datetime import timedelta
 
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 from energy_net.grid_entities.management.price_curve import (
     ActionBasedPriceStrategy,
     RLPriceCurveStrategy,
@@ -15,20 +15,21 @@ from energy_net.gym_envs.iso_env import ISOEnv
 
 
 class AlternatingISOEnv(ISOEnv):
-    """An ISO environment that internally coordinates a PCS environment.
+    """An ISO environment that internally coordinates a prosumer environment.
 
     Behavior differences compared to a simple nested reset:
-    - The ISO queries the PCS env for its global half-hour index and advances
-      the ISO pointer forward to that index (prevents rewinding).
-    - The ISO injects its price curve into the PCS and runs the PCS policy for
-      T=48 steps to produce an economic reward which becomes the ISO reward.
+    - The ISO keeps its own half-hour index and only starts days on which the
+      prosumer can run a complete, valid episode.
+    - The ISO injects its price curve into the prosumer and runs the prosumer
+      policy for T=48 steps to produce an economic reward which becomes the
+      ISO reward.
     - TRACKS MAE and shortages separately from the money-based reward for comparison.
     - Automatically handles features from predictions CSV.
     """
 
-    def __init__(self, actual_csv, predicted_csv, pcs_env, pcs_model,
+    def __init__(self, actual_csv, predicted_csv, prosumer_env, prosumer_model,
                  steps_per_day=48, render_enabled: bool = False, render_every_n: int = 1,
-                 iso_verbosity: int = 2, pcs_verbosity: int = 0,
+                 iso_verbosity: int = 2, prosumer_verbosity: int = 0,
                  use_asymmetric_pricing: bool = False):
         super().__init__(
             actual_csv,
@@ -36,18 +37,18 @@ class AlternatingISOEnv(ISOEnv):
             steps_per_day,
             use_asymmetric_pricing=use_asymmetric_pricing,
         )
-        self.pcs_env = pcs_env
-        self.pcs_model = pcs_model
+        self.prosumer_env = prosumer_env
+        self.prosumer_model = prosumer_model
         self.iso_model = None
 
-        # Rendering control for ISO-driven PCS runs
+        # Rendering control for ISO-driven prosumer runs
         # Keep render_enabled for backward compatibility but map to verbosity
         if render_enabled:
             self.iso_verbosity = iso_verbosity if iso_verbosity != 2 else 2
-            self.pcs_verbosity = pcs_verbosity if pcs_verbosity != 0 else 1
+            self.prosumer_verbosity = prosumer_verbosity if prosumer_verbosity != 0 else 1
         else:
             self.iso_verbosity = iso_verbosity
-            self.pcs_verbosity = pcs_verbosity
+            self.prosumer_verbosity = prosumer_verbosity
         
         self.render_enabled = bool(render_enabled)  # Keep for backward compatibility
         self.render_every_n = max(1, int(render_every_n))
@@ -55,11 +56,11 @@ class AlternatingISOEnv(ISOEnv):
 
     def reset(self, seed=None, options=None):
         """
-        Reset the ISO to a day for which the PCS can execute
+        Reset the ISO to a day for which the prosumer can execute
         a complete, valid episode.
 
         Preserve alignment between the ISO observation,
-        ISO action, and PCS simulation.
+        ISO action, and prosumer simulation.
         """
         if self.total_rows < self.T:
             raise ValueError(
@@ -84,10 +85,10 @@ class AlternatingISOEnv(ISOEnv):
         )
 
         for idx in candidate_indices:
-            timestamp = self._get_iso_timestamp_from_pcs_index(idx)
+            timestamp = self._timestamp_for_index(idx)
 
-            # Reuse the strict PCS episode eligibility check.
-            error = self.pcs_env._episode_error(timestamp)
+            # Reuse the strict prosumer episode eligibility check.
+            error = self.prosumer_env.simulator.episode_error(timestamp)
 
             if error is None:
                 self._next_start_idx = idx
@@ -98,16 +99,17 @@ class AlternatingISOEnv(ISOEnv):
 
         raise ValueError(
             "No ISO interval can provide a complete valid "
-            "PCS episode with the required input data"
+            "prosumer episode with the required input data"
         )
 
 
-    def sync_to_pcs(self, pcs_step_index: int):
-        """Move the ISO's internal pointer to match the PCS half-hour index."""
-        self._next_start_idx = int(pcs_step_index)
+    def sync_to_prosumer(self, step_index: int):
+        """Move the ISO's internal pointer to a global half-hour index."""
+        self._next_start_idx = int(step_index)
 
-    def _get_iso_timestamp_from_pcs_index(self, pcs_index: int):
-        return self.base_timestamp + timedelta(minutes=30 * int(pcs_index))
+    def _timestamp_for_index(self, index: int):
+        """Timestamp of a global half-hour index in the ISO data."""
+        return self.base_timestamp + timedelta(minutes=30 * int(index))
 
     def step(self, action):
         """
@@ -122,7 +124,7 @@ class AlternatingISOEnv(ISOEnv):
 
         # 1) Anchor the index to the ISO's current position
         current_idx = self._next_start_idx
-        current_iso_timestamp = self._get_iso_timestamp_from_pcs_index(current_idx)
+        current_iso_timestamp = self._timestamp_for_index(current_idx)
 
         # 2) Get the observation window needed for info/rendering
         # This is the (384,) vector: 48 predictions + 336 features
@@ -144,34 +146,31 @@ class AlternatingISOEnv(ISOEnv):
         else:
             actual_scaled_prices = strategy.calculate_price(iso_obs)
 
-        # 4) Inject strategy into PCS and sync time
-        self.pcs_env.set_price_strategy(strategy)
-        self.pcs_env.set_step_index(current_idx)
+        # 4) Inject the strategy into the prosumer and start its day.
+        self.prosumer_env.set_price_strategy(strategy)
+        obs, _ = self.prosumer_env.reset(options={"start_date": current_iso_timestamp})
 
-        # Reset the PCS env for the day.
-        obs, _ = self.pcs_env.reset(start_date=current_iso_timestamp)
-
-        # Render PCS start based on verbosity
-        if self.pcs_verbosity > 0:
-            self.pcs_env.render(verbosity=self.pcs_verbosity)
+        # Render prosumer start based on verbosity
+        if self.prosumer_verbosity > 0:
+            self.prosumer_env.render(verbosity=self.prosumer_verbosity)
 
         day_money = 0
         day_shortages = 0
         realized_consumption = []
 
-        # 5) Run the PCS loop for 48 steps (one day)
+        # 5) Run the prosumer loop for 48 steps (one day)
         for step_i in range(self.T):
-            pcs_action, _ = self.pcs_model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = self.pcs_env.step(pcs_action)
+            prosumer_action, _ = self.prosumer_model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = self.prosumer_env.step(prosumer_action)
 
             day_money += info.get('step_money', 0)
             realized_consumption.append(info.get('consumption_units', 0))
             if info.get('shortage', False):
                 day_shortages += 1
 
-            # Render PCS steps based on verbosity and render_every_n
-            if self.pcs_verbosity >= 2 and (self.pcs_env.current_step % self.render_every_n == 0):
-                self.pcs_env.render(verbosity=self.pcs_verbosity)
+            # Render prosumer steps based on verbosity and render_every_n
+            if self.prosumer_verbosity >= 2 and (self.prosumer_env.current_step % self.render_every_n == 0):
+                self.prosumer_env.render(verbosity=self.prosumer_verbosity)
 
         # 6) Calculate metrics for ISO reward
         realized_array = np.array(realized_consumption, dtype=np.float32)
@@ -180,15 +179,15 @@ class AlternatingISOEnv(ISOEnv):
         # 7) Advance ISO state via parent class
         next_obs, _, _, _, iso_info = super().step(action)
 
-        # 8) Convert PCS money to ISO perspective
-        # step_money is from PCS perspective (negative when buying, positive when selling)
-        # ISO perspective is opposite: positive when PCS buys (ISO sells), negative when PCS sells (ISO buys)
+        # 8) Convert prosumer money to ISO perspective
+        # step_money is from the prosumer perspective (negative when buying, positive when selling)
+        # ISO perspective is opposite: positive when the prosumer buys (ISO sells), negative when it sells (ISO buys)
         iso_money = -day_money
 
         # 9) Enrich info dict with ACTUAL prices for the render function
         iso_info.update({
             "prices": actual_scaled_prices,  # Now render() shows real $ prices
-            "pcs_money": day_money,  # Keep PCS perspective for reference
+            "prosumer_money": day_money,  # Keep prosumer perspective for reference
             "money_earned": iso_money,  # ISO's earnings (corrected perspective)
             "mae": mae,
             "shortages": day_shortages,
@@ -413,7 +412,7 @@ class PenalizedAlternatingISOEnv(AlternatingISOEnv):
         # 1. Call the original step method (which now uses RLPriceCurveStrategy)
         expected, reward, done, truncated, info = super().step(action)
 
-        # 2. Apply shortage penalty based on the data returned from the parent's PCS loop
+        # 2. Apply shortage penalty based on the data returned from the parent's prosumer loop
         penalties = info.get("shortages", 0) * self.shortage_penalty
         net_reward = reward - penalties
 
@@ -429,7 +428,7 @@ class MultiObjectiveAlternatingISOEnv(AlternatingISOEnv):
     ISO environment with multi-objective reward balancing money, shortages, and dispatch accuracy.
     
     This addresses the core coordination failure by giving the ISO incentives for:
-    1. Economic efficiency (money earned by PCS)
+    1. Economic efficiency (money earned by the prosumer)
     2. Reliability (minimizing shortages)
     3. Forecast accuracy (minimizing MAE between dispatch and actual consumption)
     
@@ -524,7 +523,7 @@ class MultiObjectiveAlternatingISOEnv(AlternatingISOEnv):
                 else:
                     # Detailed format
                     print(f"\n--- Multi-Objective Reward Breakdown ---")
-                    print(f"Money Earned (PCS):    ${components['money']:.2f} × {components['weights']['money']:.1f} = ${components['money_contribution']:.2f}")
+                    print(f"Money Earned:          ${components['money']:.2f} × {components['weights']['money']:.1f} = ${components['money_contribution']:.2f}")
                     print(f"Shortage Penalty:      -{components['shortage_penalty']:.2f}")
                     print(f"MAE Penalty:           -{components['mae_penalty']:.2f}")
                     print(f"Net ISO Reward:        ${components['net_reward']:.2f}")
@@ -597,13 +596,13 @@ def run_alternating_training(
         cycle_days: int = 7,
         total_iterations: int = 50,
         *,
-        pcs_algo_cls=PPO,
+        prosumer_algo_cls=PPO,
         iso_algo_cls=PPO,
-        pcs_policy: str = "MlpPolicy",
+        prosumer_policy: str = "MlpPolicy",
         iso_policy: str = "MlpPolicy",
-        pcs_algo_kwargs: dict | None = None,
+        prosumer_algo_kwargs: dict | None = None,
         iso_algo_kwargs: dict | None = None,
-        pcs_steps_per_day: int | None = None,
+        prosumer_steps_per_day: int | None = None,
         test_data_file: str = None,
         predictions_file: str = None,
         verbose: int = 0,
@@ -612,19 +611,19 @@ def run_alternating_training(
         use_asymmetric_pricing: bool = False,
 ):
     """
-    Tandem ISO <-> PCS training loop with convergence tracking and feature support.
-    Uses the RLPriceCurveStrategy to bridge the ISO agent's policy into the PCS environment.
+    Tandem ISO <-> prosumer training loop with convergence tracking and feature support.
+    Uses the RLPriceCurveStrategy to bridge the ISO agent's policy into the prosumer environment.
 
     Args:
         cycle_days: Number of days per training cycle
         total_iterations: Total number of training iterations
-        pcs_algo_cls: Algorithm class for PCS agent (default: PPO)
+        prosumer_algo_cls: Algorithm class for the prosumer agent (default: PPO)
         iso_algo_cls: Algorithm class for ISO agent (default: PPO)
-        pcs_policy: Policy type for PCS agent
+        prosumer_policy: Policy type for the prosumer agent
         iso_policy: Policy type for ISO agent
-        pcs_algo_kwargs: Additional kwargs for PCS algorithm
+        prosumer_algo_kwargs: Additional kwargs for the prosumer algorithm
         iso_algo_kwargs: Additional kwargs for ISO algorithm
-        pcs_steps_per_day: Steps per day for PCS training
+        prosumer_steps_per_day: Steps per day for prosumer training
         test_data_file: Path to test data CSV file
         predictions_file: Path to predictions CSV file
         verbose: Verbosity level
@@ -647,30 +646,30 @@ def run_alternating_training(
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         predictions_file = os.path.join(project_root, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
-    pcs_algo_kwargs = {} if pcs_algo_kwargs is None else dict(pcs_algo_kwargs)
+    prosumer_algo_kwargs = {} if prosumer_algo_kwargs is None else dict(prosumer_algo_kwargs)
 
-    # Initialize the base environment for the household/battery agent (PCS)
+    # Initialize the environment for the household/battery agent (prosumer)
     # First create a temporary env to determine steps_per_day if not provided
-    if pcs_steps_per_day is None:
-        temp_check_env = PCSEnv(
-            test_data_file=test_data_file,
-            predictions_file=predictions_file,
+    if prosumer_steps_per_day is None:
+        temp_check_env = ProsumerEnv(
+            load_data_file=test_data_file,
+            load_forecast_file=predictions_file,
             verbosity=0
         )
         steps_per_day = temp_check_env.max_steps
     else:
-        steps_per_day = int(pcs_steps_per_day)
-    
-    # Now create the actual PCS environment with correct prediction_horizon
-    temp_env = PCSEnv(
-        test_data_file=test_data_file,
-        predictions_file=predictions_file,
-        prediction_horizon=steps_per_day,
+        steps_per_day = int(prosumer_steps_per_day)
+
+    # Now create the actual prosumer environment with the correct forecast horizon
+    prosumer_env = ProsumerEnv(
+        load_data_file=test_data_file,
+        load_forecast_file=predictions_file,
+        forecast_horizon=steps_per_day,
         verbosity=0
     )
 
-    pcs_algo_kwargs.setdefault('n_steps', steps_per_day)
-    pcs_algo_kwargs.setdefault('batch_size', steps_per_day)
+    prosumer_algo_kwargs.setdefault('n_steps', steps_per_day)
+    prosumer_algo_kwargs.setdefault('batch_size', steps_per_day)
 
     iso_algo_kwargs = {} if iso_algo_kwargs is None else dict(iso_algo_kwargs)
     iso_algo_kwargs.setdefault('n_steps', cycle_days)
@@ -678,18 +677,16 @@ def run_alternating_training(
 
     print("\n--- INITIALIZING TANDEM TRAINING ---")
 
-    base_pcs_env = temp_env
-
-    # 1. Create the PCS (Household) Model
-    pcs_model = pcs_algo_cls(pcs_policy, base_pcs_env, verbose=verbose, **pcs_algo_kwargs)
+    # 1. Create the prosumer (household) model
+    prosumer_model = prosumer_algo_cls(prosumer_policy, prosumer_env, verbose=verbose, **prosumer_algo_kwargs)
 
     # 2. Create the ISO (Grid) Environment
-    # Note: AlternatingISOEnv needs the PCS model to simulate household responses
+    # Note: AlternatingISOEnv needs the prosumer model to simulate household responses
     iso_env = AlternatingISOEnv(
         actual_csv=test_data_file,
         predicted_csv=predictions_file,
-        pcs_env=base_pcs_env,
-        pcs_model=pcs_model,
+        prosumer_env=prosumer_env,
+        prosumer_model=prosumer_model,
         render_enabled=render,
         render_every_n=max(1, int(render_every_n_steps)),
         use_asymmetric_pricing=use_asymmetric_pricing,
@@ -717,7 +714,7 @@ def run_alternating_training(
         iso_model.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
 
         if render:
-            print(f"[Iteration {iteration}] PCS Learning Phase...")
+            print(f"[Iteration {iteration}] Prosumer Learning Phase...")
 
         base_idx = iso_env._next_start_idx
         day_money_list = []
@@ -735,10 +732,9 @@ def run_alternating_training(
             price_curve = pricing_strategy.calculate_price(obs_window)
             day_avg_prices.append(float(np.mean(price_curve)))
 
-            # Inject the strategy into the PCS environment for the learning loop
-            base_pcs_env.set_price_strategy(pricing_strategy)
-            base_pcs_env.set_step_index(start)
-            obs, _ = base_pcs_env.reset(start_date=iso_env._get_iso_timestamp_from_pcs_index(start))
+            # Inject the strategy into the prosumer environment for the learning loop
+            prosumer_env.set_price_strategy(pricing_strategy)
+            obs, _ = prosumer_env.reset(options={"start_date": iso_env._timestamp_for_index(start)})
 
             eval_day_money = 0.0
             day_actuals = []
@@ -747,27 +743,26 @@ def run_alternating_training(
             _, _, day_dispatch = iso_env._split_action(iso_action)
 
             for step_i in range(steps_per_day):
-                # PCS Agent acts based on the current ISO-generated price
-                pcs_action, _ = pcs_model.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, info = base_pcs_env.step(pcs_action)
+                # Prosumer agent acts based on the current ISO-generated price
+                prosumer_action, _ = prosumer_model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = prosumer_env.step(prosumer_action)
 
                 eval_day_money += info.get('step_money', 0.0)
                 day_actuals.append(info.get('consumption_units', 0.0))
                 if info.get('shortage', False):
                     iteration_shortages += 1
 
-            # Convert PCS money to ISO perspective (negate)
+            # Convert prosumer money to ISO perspective (negate)
             day_money_list.append(-eval_day_money)
             iteration_maes.append(np.mean(np.abs(np.array(day_actuals) - day_dispatch)))
 
-            # PCS agent learns from the rewards earned today
-            base_pcs_env.set_step_index(start)
-            obs, _ = base_pcs_env.reset(start_date=iso_env._get_iso_timestamp_from_pcs_index(start))
-            pcs_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
+            # Prosumer agent learns from the rewards earned today
+            obs, _ = prosumer_env.reset(options={"start_date": iso_env._timestamp_for_index(start)})
+            prosumer_model.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
 
         # Advance global clock
         final_idx = base_idx + (cycle_days * steps_per_day)
-        iso_env.sync_to_pcs(final_idx)
+        iso_env.sync_to_prosumer(final_idx)
 
         # Update History
         avg_money = float(np.mean(day_money_list))

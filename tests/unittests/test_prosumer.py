@@ -1,5 +1,7 @@
 """Tests for the one-of-each Prosumer and its pure transition."""
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,6 +21,10 @@ from energy_net.grid_entities.storage.battery_dynamics import DeterministicBatte
 
 INF = float("inf")
 T0 = pd.Timestamp("2025-01-01 00:00")
+LEGACY_FIXTURE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "golden", "legacy_pcs_unit_transitions.npz",
+)
 
 
 def _battery(level=0.0, **config):
@@ -40,83 +46,47 @@ def _transition(level, command, load, generation, limits=None):
 
 # ------------------------------------------------ equivalence with legacy
 
-def _legacy_reference(level, command, load, generation, charge_rate, discharge_rate):
-    """Run the legacy PCSUnit and PCSEnv.step accounting on one interval."""
-    from energy_net.grid_entities.PCSUnit.pcs_unit import PCSUnit
-    from energy_net.grid_entities.consumption.consumption_dynamics import (
-        ConstantConsumptionDynamics,
+def _legacy_transitions():
+    """Transitions recorded from the deleted legacy PCSUnit + PCSEnv code."""
+    with np.load(LEGACY_FIXTURE) as data:
+        inputs = dict(zip(data["input_names"], data["inputs"].T))
+        outputs = dict(zip(data["output_names"], data["outputs"].T))
+    return inputs, outputs
+
+
+def _replay(inputs, row):
+    return _transition(
+        inputs["level"][row], inputs["command"][row],
+        inputs["load"][row], inputs["generation"][row],
+        BatteryLimits(0.0, 100.0, inputs["charge_rate"][row], inputs["discharge_rate"][row]),
     )
-    from energy_net.grid_entities.production.production_dynamics import (
-        ConstantProductionDynamics,
-    )
-
-    battery = _battery(level, charge_rate_max=charge_rate, discharge_rate_max=discharge_rate)
-    production = []
-    if generation:
-        production = [ProductionUnit(
-            ConstantProductionDynamics({"base_load": generation}),
-            {"production_capacity": 10.0},
-        )]
-    pcs = PCSUnit(
-        storage_units=[battery],
-        production_units=production,
-        consumption_units=[ConsumptionUnit(
-            ConstantConsumptionDynamics({"base_load": load}),
-            {"consumption_capacity": 10.0},
-        )],
-    )
-    storage_before = pcs.get_total_storage()
-    applied = pcs.update(State({"time": 0.0}), {"Battery_0": Action({"value": command})})
-    storage_after = pcs.get_total_storage()
-    battery_used = max(storage_before + applied - storage_after, 0.0)
-    uncovered = max(float(pcs.get_consumption()) - float(pcs.get_production()) - battery_used, 0.0)
-    return {
-        "storage_after": storage_after,
-        "applied_command": applied,
-        "battery_to_load": battery_used,
-        "uncovered_load": uncovered,
-        "grid_exchange": applied + uncovered,
-        "available_charge": battery.get_available_charge_capacity(),
-        "available_discharge": battery.get_available_discharge_capacity(),
-    }
 
 
-def _cases(seed, count):
-    rng = np.random.default_rng(seed)
-    for _ in range(count):
-        charge_rate = rng.choice([INF, rng.uniform(1.0, 12.0)])
-        discharge_rate = rng.choice([INF, rng.uniform(1.0, 12.0)])
-        command = rng.uniform(-15.0, 15.0)
-        # Legacy asserts when the command exceeds the rate; stay inside it.
-        command = float(np.clip(command, -discharge_rate, charge_rate))
-        if rng.random() < 0.15:
-            command = 0.0
-        level = float(rng.choice([0.0, 100.0, rng.uniform(0.0, 100.0)]))
-        load = float(rng.choice([0.0, rng.uniform(0.0, 8.0)]))
-        yield level, command, load, float(charge_rate), float(discharge_rate)
-
-
-@pytest.mark.parametrize("seed", range(4))
-def test_transition_matches_legacy_pcs_bit_for_bit(seed):
-    for level, command, load, charge_rate, discharge_rate in _cases(seed, 250):
-        expected = _legacy_reference(level, command, load, 0.0, charge_rate, discharge_rate)
-        got = _transition(level, command, load, 0.0,
-                          BatteryLimits(0.0, 100.0, charge_rate, discharge_rate))
-        for key, value in expected.items():
-            assert getattr(got, key) == value, (key, level, command, load)
+def test_transition_matches_legacy_pcs_bit_for_bit():
+    inputs, outputs = _legacy_transitions()
+    rows = np.flatnonzero(inputs["generation"] == 0.0)
+    assert len(rows) == 1500
+    for row in rows:
+        got = _replay(inputs, row)
+        for key, values in outputs.items():
+            assert getattr(got, key) == values[row], (key, row)
         assert got.exported_surplus == 0.0
 
 
-@pytest.mark.parametrize("seed", range(2))
-def test_storage_evolution_matches_legacy_with_generation(seed):
-    rng = np.random.default_rng(100 + seed)
-    for level, command, load, charge_rate, discharge_rate in _cases(seed, 150):
-        generation = float(rng.uniform(0.0, 10.0))
-        expected = _legacy_reference(level, command, load, generation, charge_rate, discharge_rate)
-        got = _transition(level, command, load, generation,
-                          BatteryLimits(0.0, 100.0, charge_rate, discharge_rate))
-        assert got.storage_after == expected["storage_after"]
-        assert got.applied_command == expected["applied_command"]
+def test_transition_with_generation_matches_legacy_except_export():
+    """Legacy discarded surplus; now it is exported. Everything else agrees."""
+    inputs, outputs = _legacy_transitions()
+    rows = np.flatnonzero(inputs["generation"] > 0.0)
+    assert len(rows) == 500
+    for row in rows:
+        got = _replay(inputs, row)
+        for key, values in outputs.items():
+            if key == "grid_exchange":
+                assert got.grid_exchange == pytest.approx(
+                    values[row] - got.exported_surplus, abs=1e-12
+                )
+            else:
+                assert getattr(got, key) == values[row], (key, row)
 
 
 # ------------------------------------------------------ physical invariants

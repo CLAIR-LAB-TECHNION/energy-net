@@ -4,7 +4,6 @@ from typing import Dict, Any
 from energy_net.common import defs
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.common.utils import load_data_from_yaml, interpolate_value
-import pandas as pd
 from datetime import datetime, timedelta
 class ConsumptionDynamics(EnergyDynamics):
     """
@@ -142,86 +141,6 @@ def _load_consumption_data(data_file: str) -> Dict[float, float]:
         Dictionary mapping time fractions to consumption values.
     """
     return load_data_from_yaml(data_file, defs.CONSUMPTION_DATA)
-
-class CSV_DataConsumptionDynamics(ConsumptionDynamics):
-    """
-    Consumption pattern based on external data loaded from a CSV file with Datetime and Consumption columns.
-    Allows querying consumption at specific date/time values.
-    Missing and infinite readings are interpolated in time at load time;
-    leading and trailing gaps use the nearest valid reading.
-    """
-    def __init__(self, params: Dict[str, str]):
-        """
-        Initializes the dynamics with a specific configuration.
-
-        Args:
-            params (Dict[str, EnergyDynamics]): Configuration dictionary for the pattern.
-        """
-        super().__init__(params)
-        self.data_file = self.params.get('data_file')
-        if not self.data_file:
-            raise ValueError("No data file specified for DateTimeDrivenConsumptionDynamics")
-        self.consumption_data = self._load_consumption_data(self.data_file)
-        self.total_days = int(self.consumption_data.index[-1])+1
-
-
-
-    def _load_consumption_data(self, data_file: str) -> pd.DataFrame:
-        """
-        Load consumption data from a CSV file.
-
-        Args:
-            data_file: Path to the CSV file.
-
-        Returns:
-            pd.DataFrame: DataFrame containing Datetime, Consumption, and TimeFraction columns.
-        """
-        try:
-            df = pd.read_csv(data_file, parse_dates=['Datetime'])
-            if 'Datetime' not in df.columns or 'Consumption' not in df.columns:
-                raise ValueError("CSV file must contain 'Datetime' and 'Consumption' columns")
-            df.set_index('Datetime', inplace=True)
-            df['Consumption'] = (
-                df['Consumption']
-                .replace([np.inf, -np.inf], np.nan)
-                .interpolate(method='time', limit_direction='both')
-            )
-            if df['Consumption'].isna().any():
-                raise ValueError("Consumption data must contain at least one finite reading to interpolate")
-
-            # Calculate the day number and time fraction
-            # Represent timestamps as elapsed days from the first CSV reading.
-            df["DayTimeFraction"] = (
-                (df.index - df.index[0]).total_seconds() / 86400.0
-            )
-            df.set_index('DayTimeFraction', inplace=True)
-            return df
-        except Exception as e:
-            raise ValueError(f"Failed to load consumption data: {e}")
-
-    def get_value(self, **kwargs) -> float:
-        """
-        Retrieves the consumption value for a specific date/time.
-
-        Args:
-            **kwargs:
-                - datetime (datetime): The specific date/time to query.
-
-        Returns:
-            float: The consumption value at the specified date/time.
-        """
-        query_time = kwargs.get('time')
-
-        # Ensure the query time wraps around within the total days to handle dates that go past the data range
-        query_time = query_time%self.total_days
-
-        if query_time not in self.consumption_data.index:
-            # Interpolate the missing value
-            extended_index = self.consumption_data.index.union([query_time]).sort_values()
-            interpolated_data = self.consumption_data.reindex(extended_index).interpolate(method='index')
-            return interpolated_data.loc[query_time, 'Consumption']
-            # Return the interpolated value
-        return self.consumption_data.loc[query_time, 'Consumption']
 
 def _interpolate_consumption(time_fraction: float, consumption_data: Dict[float, float]) -> float:
     """

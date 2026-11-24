@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Test script to demonstrate all verbosity levels in PCSEnv.
+Test script to demonstrate all verbosity levels in ProsumerEnv.
 """
 
 import numpy as np
 import sys
 import os
 import pytest
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 
 
 # Add the project root to the path to import energy_net
@@ -19,9 +19,9 @@ PREDICTIONS_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/consumpt
 
 def test_verbosity_zero_is_silent(capsys):
     """Construction, reset, step, and render stay silent at verbosity zero."""
-    env = PCSEnv(
-        test_data_file=TEST_DATA_FILE,
-        predictions_file=PREDICTIONS_FILE,
+    env = ProsumerEnv(
+        load_data_file=TEST_DATA_FILE,
+        load_forecast_file=PREDICTIONS_FILE,
         verbosity=0,
     )
     env.reset()
@@ -48,9 +48,9 @@ def test_verbosity_level(level, description):
     print("=" * 80)
     
     # Create environment with specific verbosity
-    env = PCSEnv(
-        test_data_file=TEST_DATA_FILE,
-        predictions_file=PREDICTIONS_FILE,
+    env = ProsumerEnv(
+        load_data_file=TEST_DATA_FILE,
+        load_forecast_file=PREDICTIONS_FILE,
         verbosity=level
     )
     
@@ -92,9 +92,9 @@ def test_override():
     print("\nEnvironment created with verbosity=2 (default)")
     print("But we'll call render() with different verbosity levels...\n")
     
-    env = PCSEnv(
-        test_data_file=TEST_DATA_FILE,
-        predictions_file=PREDICTIONS_FILE,
+    env = ProsumerEnv(
+        load_data_file=TEST_DATA_FILE,
+        load_forecast_file=PREDICTIONS_FILE,
         verbosity=2  # Default
     )
     
@@ -120,9 +120,9 @@ def test_backward_compatibility():
     print("\nCreating env with render_mode='human' (old style)...")
     print("This should map to verbosity=2\n")
     
-    env = PCSEnv(
-        test_data_file=TEST_DATA_FILE,
-        predictions_file=PREDICTIONS_FILE,
+    env = ProsumerEnv(
+        load_data_file=TEST_DATA_FILE,
+        load_forecast_file=PREDICTIONS_FILE,
         render_mode='human'  # Old style
     )
     
@@ -137,7 +137,7 @@ def test_backward_compatibility():
 
 if __name__ == "__main__":
     print("\n" + "#" * 80)
-    print("# PCS ENVIRONMENT VERBOSITY SYSTEM TEST")
+    print("# PROSUMER ENVIRONMENT VERBOSITY SYSTEM TEST")
     print("#" * 80)
     
     # Test each verbosity level

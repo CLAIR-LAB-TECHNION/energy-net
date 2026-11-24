@@ -21,7 +21,7 @@ from energy_net.gym_envs.alternating_env import (
     run_alternating_training
 )
 from stable_baselines3 import PPO, SAC
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 
 
 def plot_training_convergence(history, output_prefix="convergence_results"):
@@ -40,9 +40,9 @@ def plot_training_convergence(history, output_prefix="convergence_results"):
 
     fig, axes = plt.subplots(3, 1, figsize=(10, 12))
 
-    # 1. PCS Average Money (green)
+    # 1. Prosumer Average Money (green)
     axes[0].plot(history["iteration"], history["avg_money"], color='green', marker='o')
-    axes[0].set_title("PCS Average Daily Money (Convergence)", fontsize=14, fontweight='bold')
+    axes[0].set_title("Prosumer Average Daily Money (Convergence)", fontsize=14, fontweight='bold')
     axes[0].set_ylabel("Dollars ($)")
     axes[0].grid(True, alpha=0.3)
 
@@ -71,7 +71,7 @@ class AlternatingEvaluator:
     def __init__(
         self,
         iso_model,
-        pcs_model,
+        prosumer_model,
         actual_csv,
         predicted_csv,
         config_name="Default",
@@ -79,16 +79,16 @@ class AlternatingEvaluator:
         steps_per_day=48,
     ):
         """
-        Evaluator for alternating ISO/PCS experiments.
+        Evaluator for alternating ISO/prosumer experiments.
 
         Parameters
         ----------
         iso_model : RL model
             The ISO agent/model used to generate dispatch decisions.
-        pcs_model : RL model
-            The PCS agent/model used to make charging/discharging actions.
+        prosumer_model : RL model
+            The prosumer agent/model used to make charging/discharging actions.
         actual_csv : str
-            Path to CSV containing actual test data for the PCS environment.
+            Path to CSV containing actual test data for the prosumer environment.
         predicted_csv : str
             Path to CSV containing predicted consumption values for the ISO model.
         config_name : str, optional
@@ -104,7 +104,7 @@ class AlternatingEvaluator:
             - loads predicted values into self.predicted_vals for quick access
         """
         self.iso_model = iso_model
-        self.pcs_model = pcs_model
+        self.prosumer_model = prosumer_model
         self.iso_env = ISOEnv(
             actual_csv,
             predicted_csv,
@@ -128,7 +128,7 @@ class AlternatingEvaluator:
 
     def run_evaluation(self, num_days=7, start_idx=0):
         """
-        Run multi-day evaluation of PCS vs ISO using the provided models.
+        Run multi-day evaluation of prosumer vs ISO using the provided models.
 
         Parameters
         ----------
@@ -145,10 +145,10 @@ class AlternatingEvaluator:
                 - day_mae for each step of that day
         """
         steps_per_day = self.iso_env.T
-        pcs_env = PCSEnv(
-            test_data_file=self.actual_csv,
-            predictions_file=self.predicted_csv,
-            prediction_horizon=steps_per_day,
+        prosumer_env = ProsumerEnv(
+            load_data_file=self.actual_csv,
+            load_forecast_file=self.predicted_csv,
+            forecast_horizon=steps_per_day,
         )
         history = []
 
@@ -163,17 +163,18 @@ class AlternatingEvaluator:
             iso_action, _ = self.iso_model.predict(pred_window, deterministic=True)
             _, _, iso_dispatch = self.iso_env._split_action(iso_action)
 
-            # 5. Inject the strategy object into PCSEnv
-            pcs_env.set_price_strategy(self.pricing_strategy)
-            pcs_env.set_step_index(current_start)
-            obs, _ = pcs_env.reset(start_date=self.iso_env.base_timestamp + timedelta(minutes=30 * current_start))
+            # 5. Inject the strategy object into ProsumerEnv
+            prosumer_env.set_price_strategy(self.pricing_strategy)
+            obs, _ = prosumer_env.reset(options={
+                "start_date": self.iso_env.base_timestamp + timedelta(minutes=30 * current_start)
+            })
 
             day_actual_consumption = []
             day_dispatch = []
 
             for t in range(steps_per_day):
-                action, _ = self.pcs_model.predict(obs, deterministic=True)
-                next_obs, reward, _, _, info = pcs_env.step(action)
+                action, _ = self.prosumer_model.predict(obs, deterministic=True)
+                next_obs, reward, _, _, info = prosumer_env.step(action)
 
                 dispatch_value = iso_dispatch[t]
 
@@ -181,7 +182,7 @@ class AlternatingEvaluator:
                 day_dispatch.append(dispatch_value)
 
                 history.append({
-                    "timestamp": pcs_env.current_datetime - timedelta(days=pcs_env.dt),
+                    "timestamp": prosumer_env.current_datetime - timedelta(days=prosumer_env.dt),
                     "price": price_curve[t],
                     "action": float(action[0]),
                     "money": info.get('step_money', 0),
@@ -210,7 +211,7 @@ class AlternatingEvaluator:
             Prefix for saved image files (two PNGs will be created:
             {output_prefix}_cumulative_sheet.png and {output_prefix}_signals_sheet.png).
         """
-        df['cumulative_pcs_reward'] = df['money'].cumsum()
+        df['cumulative_prosumer_reward'] = df['money'].cumsum()
         df['cumulative_iso_reward'] = -df['money'].cumsum()
         df['cumulative_shortages'] = df['shortage'].cumsum()
         df['mae_instantaneous'] = np.abs(df['actual_consumption'] - df['dispatch'])
@@ -219,8 +220,8 @@ class AlternatingEvaluator:
         fig, axes = plt.subplots(2, 2, figsize=(16, 10))
         fig.suptitle(f"Cumulative Performance - {self.config_name}", fontsize=18, fontweight='bold')
 
-        axes[0, 0].plot(df['timestamp'], df['cumulative_pcs_reward'], color='green')
-        axes[0, 0].set_title("PCS Cumulative Reward ($)")
+        axes[0, 0].plot(df['timestamp'], df['cumulative_prosumer_reward'], color='green')
+        axes[0, 0].set_title("Prosumer Cumulative Reward ($)")
         axes[0, 0].grid(True, alpha=0.3)
 
         axes[0, 1].plot(df['timestamp'], df['cumulative_iso_reward'], color='blue')
@@ -249,7 +250,7 @@ class AlternatingEvaluator:
         axes2[0].grid(True, alpha=0.3)
 
         axes2[1].plot(df['timestamp'], df['action'], color='teal')
-        axes2[1].set_title("PCS Agent Action Magnitude")
+        axes2[1].set_title("Prosumer Agent Action Magnitude")
         axes2[1].grid(True, alpha=0.3)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -272,28 +273,28 @@ class AlternatingEvaluator:
         -------
         dict
             Dictionary with keys:
-                - 'pcs_reward' : total PCS money (sum of 'money')
+                - 'prosumer_reward' : total prosumer money (sum of 'money')
                 - 'total_shortages' : total number of shortage events (int)
                 - 'avg_mae' : average instantaneous MAE across dataset
         """
         if 'mae_instantaneous' not in df.columns:
             df['mae_instantaneous'] = np.abs(df['actual_consumption'] - df['dispatch'])
 
-        total_pcs_reward = df['money'].sum()
-        total_iso_reward = -total_pcs_reward
+        total_prosumer_reward = df['money'].sum()
+        total_iso_reward = -total_prosumer_reward
         total_shortages = df['shortage'].sum()
         avg_mae = df['mae_instantaneous'].mean()
 
         print(f"\n{'=' * 60}")
         print(f"COMPREHENSIVE EVALUATION SUMMARY - {self.config_name}")
         print(f"{'=' * 60}")
-        print(f"PCS Total Reward:       ${total_pcs_reward:,.2f}")
+        print(f"Prosumer Total Reward:  ${total_prosumer_reward:,.2f}")
         print(f"ISO Total Reward:       ${total_iso_reward:,.2f}")
         print(f"Total Shortages:        {int(total_shortages)}")
         print(f"Average MAE:            {avg_mae:.4f}")
         print(f"{'=' * 60}\n")
 
-        return {'pcs_reward': total_pcs_reward, 'total_shortages': int(total_shortages), 'avg_mae': avg_mae}
+        return {'prosumer_reward': total_prosumer_reward, 'total_shortages': int(total_shortages), 'avg_mae': avg_mae}
 
 
 def make_run_id(provided_id=None):
@@ -379,24 +380,24 @@ def run_experiment(actual_csv,
     # TRAINING
     print("\n[1/4] Training models...")
     
-    # Extract pcs_env_kwargs if provided
-    pcs_env_kwargs = env_kwargs.pop('pcs_env_kwargs', {})
-    temp_pcs_env = PCSEnv(
-        test_data_file=actual_csv, 
-        predictions_file=pred_csv, 
-        prediction_horizon=48,
-        **pcs_env_kwargs
+    # Extract prosumer_env_kwargs if provided
+    prosumer_env_kwargs = env_kwargs.pop('prosumer_env_kwargs', {})
+    temp_prosumer_env = ProsumerEnv(
+        load_data_file=actual_csv,
+        load_forecast_file=pred_csv,
+        forecast_horizon=48,
+        **prosumer_env_kwargs
     )
     
-    # Create PCS model
-    pcs_mod = SAC("MlpPolicy", temp_pcs_env, verbose=0)
+    # Create Prosumer model
+    prosumer_mod = SAC("MlpPolicy", temp_prosumer_env, verbose=0)
     
     # Create ISO environment with specified class and kwargs
     iso_env_train = env_class(
         actual_csv=actual_csv,
         predicted_csv=pred_csv,
-        pcs_env=temp_pcs_env,
-        pcs_model=pcs_mod,
+        prosumer_env=temp_prosumer_env,
+        prosumer_model=prosumer_mod,
         **env_kwargs
     )
     
@@ -420,7 +421,7 @@ def run_experiment(actual_csv,
         # ISO learns
         iso_mod.learn(total_timesteps=cycle_days, reset_num_timesteps=False)
         
-        # Evaluate and train PCS
+        # Evaluate and train Prosumer
         base_idx = iso_env_train._next_start_idx
         day_money_list = []
         iteration_maes = []
@@ -433,9 +434,8 @@ def run_experiment(actual_csv,
             price_curve = pricing_strategy.calculate_price(obs_window)
             day_avg_prices.append(float(np.mean(price_curve)))
             
-            temp_pcs_env.set_price_strategy(pricing_strategy)
-            temp_pcs_env.set_step_index(start)
-            obs, _ = temp_pcs_env.reset(start_date=iso_env_train._get_iso_timestamp_from_pcs_index(start))
+            temp_prosumer_env.set_price_strategy(pricing_strategy)
+            obs, _ = temp_prosumer_env.reset(options={"start_date": iso_env_train._timestamp_for_index(start)})
             
             eval_day_money = 0.0
             day_actuals = []
@@ -443,8 +443,8 @@ def run_experiment(actual_csv,
             _, _, day_dispatch = iso_env_train._split_action(iso_action)
             
             for step_i in range(steps_per_day):
-                pcs_action, _ = pcs_mod.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, info = temp_pcs_env.step(pcs_action)
+                prosumer_action, _ = prosumer_mod.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = temp_prosumer_env.step(prosumer_action)
                 eval_day_money += info.get('step_money', 0.0)
                 day_actuals.append(info.get('consumption_units', 0.0))
                 if info.get('shortage', False):
@@ -453,14 +453,13 @@ def run_experiment(actual_csv,
             day_money_list.append(eval_day_money)
             iteration_maes.append(np.mean(np.abs(np.array(day_actuals) - day_dispatch)))
             
-            # PCS learns
-            temp_pcs_env.set_step_index(start)
-            obs, _ = temp_pcs_env.reset(start_date=iso_env_train._get_iso_timestamp_from_pcs_index(start))
-            pcs_mod.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
+            # Prosumer learns
+            obs, _ = temp_prosumer_env.reset(options={"start_date": iso_env_train._timestamp_for_index(start)})
+            prosumer_mod.learn(total_timesteps=steps_per_day, reset_num_timesteps=False)
         
         # Update history
         final_idx = base_idx + (cycle_days * steps_per_day)
-        iso_env_train.sync_to_pcs(final_idx)
+        iso_env_train.sync_to_prosumer(final_idx)
         
         avg_money = float(np.mean(day_money_list))
         avg_mae = float(np.mean(iteration_maes))
@@ -477,7 +476,7 @@ def run_experiment(actual_csv,
 
     print("\n[2/4] Evaluating trained models...")
     evaluator = AlternatingEvaluator(
-        iso_mod, pcs_mod, actual_csv, pred_csv,
+        iso_mod, prosumer_mod, actual_csv, pred_csv,
         config_name=config_name
     )
 
@@ -586,5 +585,5 @@ if __name__ == "__main__":
     print("\nCheck the results directory for:")
     print("  • *_convergence.png - Training progress over iterations")
     print("  • *_cumulative_sheet.png - Cumulative performance metrics")
-    print("  • *_signals_sheet.png - ISO prices and PCS actions")
+    print("  • *_signals_sheet.png - ISO prices and Prosumer actions")
     print(f"{'='*80}\n")

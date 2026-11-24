@@ -107,7 +107,7 @@ class TariffSchedule:
                 )
             observation = self.daily_observation.observe(day, issue_time)
 
-        buy, sell = strategy.calculate_pcs_tariffs(observation)
+        buy, sell = strategy.calculate_prosumer_tariffs(observation)
         buy = np.asarray(buy, dtype=float)
         sell = np.asarray(sell, dtype=float)
 

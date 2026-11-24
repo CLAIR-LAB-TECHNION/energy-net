@@ -282,7 +282,7 @@ def test_surplus_generation_is_exported_at_the_sell_tariff():
     class _Spread(PriceCurveStrategy):
         requires_daily_observation = False
 
-        def calculate_pcs_tariffs(self, observation=None):
+        def calculate_prosumer_tariffs(self, observation=None):
             return np.full(48, 0.30), np.full(48, 0.10)
 
     simulator = _simulator(load=load, generation=generation, strategy=_Spread(),
@@ -305,7 +305,7 @@ class _BadStrategy(PriceCurveStrategy):
     def __init__(self, buy, sell):
         self.buy, self.sell = buy, sell
 
-    def calculate_pcs_tariffs(self, observation=None):
+    def calculate_prosumer_tariffs(self, observation=None):
         return self.buy, self.sell
 
 

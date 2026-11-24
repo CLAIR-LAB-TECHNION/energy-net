@@ -36,11 +36,11 @@ class PriceCurveStrategy(ABC):
         """
         return self.calculate_price(observation)
 
-    def calculate_pcs_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
-        """Return (PCS import tariff, PCS export tariff) for a whole day.
+    def calculate_prosumer_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+        """Return (prosumer import tariff, prosumer export tariff) for a whole day.
 
         PriceCurveStrategy's buy/sell names are from the ISO's perspective:
-        the PCS buys at the ISO *sell* price and exports at its *buy* price.
+        the prosumer buys at the ISO *sell* price and exports at its *buy* price.
         Symmetric strategies are evaluated only once.
         """
         if getattr(self, "use_asymmetric_pricing", False):
@@ -97,7 +97,7 @@ class ActionBasedPriceStrategy(PriceCurveStrategy):
     
     def calculate_buy_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
-        Calculate the price at which ISO buys energy from PCS.
+        Calculate the price at which ISO buys energy from the prosumer.
         
         If asymmetric pricing is disabled, returns the same as calculate_price().
         If enabled, uses the first T action values as buy prices.
@@ -114,7 +114,7 @@ class ActionBasedPriceStrategy(PriceCurveStrategy):
     
     def calculate_sell_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
-        Calculate the price at which ISO sells energy to PCS.
+        Calculate the price at which ISO sells energy to the prosumer.
         
         If asymmetric pricing is disabled, returns the same as calculate_price().
         If enabled, uses the second T action values as sell prices.
@@ -186,7 +186,7 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
     
     def calculate_buy_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
-        Calculate the price at which ISO buys energy from PCS.
+        Calculate the price at which ISO buys energy from the prosumer.
         
         If asymmetric pricing is disabled, returns the same as calculate_price().
         If enabled, uses the first T action outputs as independent buy prices.
@@ -212,7 +212,7 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
     
     def calculate_sell_price(self, observation: np.ndarray = None) -> np.ndarray:
         """
-        Calculate the price at which ISO sells energy to PCS.
+        Calculate the price at which ISO sells energy to the prosumer.
         
         If asymmetric pricing is disabled, returns the same as calculate_price().
         If enabled, uses the second T action outputs as independent sell prices.
@@ -235,7 +235,7 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
         sell_prices = self.price_min + (raw_sell_prices * (self.price_max - self.price_min))
         
         return sell_prices.astype(np.float32)
-    def calculate_pcs_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
+    def calculate_prosumer_tariffs(self, observation: np.ndarray = None) -> tuple[np.ndarray, np.ndarray]:
         """Query the trained ISO once and extract both tariffs consistently."""
         obs = np.asarray(observation, dtype=np.float32)
         action, _ = self.iso_model.predict(obs, deterministic=True)
@@ -255,7 +255,7 @@ class RLPriceCurveStrategy(PriceCurveStrategy):
 
 class SineWavePriceStrategy(PriceCurveStrategy):
     """
-    Reproduces the original sine-wave pricing logic from PCSEnv.
+    Sine-wave daily price curve (the default prosumer tariff).
     """
 
     requires_daily_observation = False

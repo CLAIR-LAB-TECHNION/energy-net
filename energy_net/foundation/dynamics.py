@@ -10,7 +10,7 @@ import pandas as pd
 class EnergyDynamics(ABC):
     """
     Abstract Base Class for defining energy dynamics.
-    Represents the behavior of a component in the PCSUnit.
+    Represents the behavior of a grid entity's component.
     """
 
     @abstractmethod

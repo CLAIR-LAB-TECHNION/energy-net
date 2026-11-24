@@ -1,14 +1,23 @@
-"""Calendar-alignment regression tests for the CSV-backed PCS environment."""
+"""Calendar-alignment regression tests for the CSV-backed prosumer environment."""
+
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
+
+
+def obs_value(env, observation, name):
+    return float(env.encoder.field(observation, name)[0])
+
+
+def previous_load(env):
+    return env.simulator.observe().previous_load
 
 
 @pytest.fixture
-def dated_pcs_env(tmp_path):
+def dated_prosumer_env(tmp_path):
     timestamps = pd.date_range("2025-01-01", periods=3 * 48, freq="30min")
     consumption = np.repeat([1.0, 3.0, 5.0], 48) + np.tile(
         np.arange(48) / 64.0, 3
@@ -23,9 +32,9 @@ def dated_pcs_env(tmp_path):
         "predicted_consumption": consumption,
     }).to_csv(predictions_file, index=False)
 
-    env = PCSEnv(
-        test_data_file=str(data_file),
-        predictions_file=str(predictions_file),
+    env = ProsumerEnv(
+        load_data_file=str(data_file),
+        load_forecast_file=str(predictions_file),
         verbosity=0,
     )
     yield env, readings
@@ -36,11 +45,11 @@ def dated_pcs_env(tmp_path):
     "start_index", [1, 48, 60],
     ids=["first-day-control", "second-day", "second-day-intraday"],
 )
-def test_reset_consumption_matches_selected_date(dated_pcs_env, start_index):
-    env, readings = dated_pcs_env
+def test_reset_consumption_matches_selected_date(dated_prosumer_env, start_index):
+    env, readings = dated_prosumer_env
     start_date = readings.index[start_index]
 
-    obs, _ = env.reset(start_date=start_date)
+    obs, _ = env.reset(options={"start_date": start_date})
 
     previous_load = readings.loc[
     start_date - pd.Timedelta(minutes=30),
@@ -50,19 +59,19 @@ def test_reset_consumption_matches_selected_date(dated_pcs_env, start_index):
     ]
 
     assert env.current_datetime == start_date
-    assert obs[4] * 10.0 == pytest.approx(current_forecast)
-    assert obs[1] * 10.0 == pytest.approx(previous_load)
-    assert env.pcs.get_consumption() == pytest.approx(0.0)
+    assert obs_value(env, obs, "load_forecast") * 10.0 == pytest.approx(current_forecast)
+    assert obs_value(env, obs, "previous_load") * 10.0 == pytest.approx(previous_load)
+    assert env.simulator.prosumer.load.get_state() == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(
     "start_index", [1, 48, 60],
     ids=["first-day-control", "second-day", "second-day-intraday"],
 )
-def test_step_consumption_matches_selected_day(dated_pcs_env, start_index):
-    env, readings = dated_pcs_env
+def test_step_consumption_matches_selected_day(dated_prosumer_env, start_index):
+    env, readings = dated_prosumer_env
     start_date = readings.index[start_index]
-    env.reset(start_date=start_date)
+    env.reset(options={"start_date": start_date})
 
     actual = []
     for _ in range(env.max_steps):
@@ -81,11 +90,11 @@ def test_step_consumption_matches_selected_day(dated_pcs_env, start_index):
 
 
 def test_reset_without_date_uses_next_days_consumption(
-    dated_pcs_env,
+    dated_prosumer_env,
 ):
-    env, readings = dated_pcs_env
+    env, readings = dated_prosumer_env
 
-    env.reset(start_date=readings.index[1])
+    env.reset(options={"start_date": readings.index[1]})
     for _ in range(env.max_steps):
         env.step(np.array([0.0], dtype=np.float32))
 
@@ -97,10 +106,10 @@ def test_reset_without_date_uses_next_days_consumption(
     expected = readings.iloc[49]["Consumption"]
     previous = readings.iloc[48]["Consumption"]
 
-    assert obs[4] * 10.0 == pytest.approx(expected)
+    assert obs_value(env, obs, "load_forecast") * 10.0 == pytest.approx(expected)
 
     np.testing.assert_allclose(
-        [obs[1] * 10.0, info["consumption_units"]],
+        [obs_value(env, obs, "previous_load") * 10.0, info["consumption_units"]],
         [previous, expected],
         err_msg=(
             "Previous and imminent demand must belong "
@@ -109,14 +118,14 @@ def test_reset_without_date_uses_next_days_consumption(
     )
 
 
-def test_valid_episode_crosses_midnight(dated_pcs_env):
-    env, readings = dated_pcs_env
+def test_valid_episode_crosses_midnight(dated_prosumer_env):
+    env, readings = dated_prosumer_env
 
     # January 2 at 18:00; 48 valid readings remain.
     start_index = 48 + 36
     start_date = readings.index[start_index]
 
-    env.reset(start_date=start_date)
+    env.reset(options={"start_date": start_date})
 
     actual = []
     for _ in range(env.max_steps):
@@ -134,21 +143,21 @@ def test_valid_episode_crosses_midnight(dated_pcs_env):
     )
 
 
-def test_reject_episode_without_full_data(dated_pcs_env):
-    env, readings = dated_pcs_env
+def test_reject_episode_without_full_data(dated_prosumer_env):
+    env, readings = dated_prosumer_env
 
     # January 3 at 18:00: only 12 readings remain.
     start_date = readings.index[-12]
 
     with pytest.raises(ValueError):
-        env.reset(start_date=start_date)
+        env.reset(options={"start_date": start_date})
 
 
-def test_automatic_reset_wraps_between_episodes(dated_pcs_env):
-    env, readings = dated_pcs_env
+def test_automatic_reset_wraps_between_episodes(dated_prosumer_env):
+    env, readings = dated_prosumer_env
 
     # The last complete episode begins on January 3.
-    env.reset(start_date=readings.index[-48])
+    env.reset(options={"start_date": readings.index[-48]})
 
     for _ in range(env.max_steps):
         _, _, terminated, _, _ = env.step(
@@ -161,35 +170,35 @@ def test_automatic_reset_wraps_between_episodes(dated_pcs_env):
     env.reset()
 
     assert env.current_datetime == readings.index[1]
-    assert env.previous_load == pytest.approx(
+    assert previous_load(env) == pytest.approx(
         readings.iloc[0]["Consumption"]
     )
-    assert env.pcs.get_consumption() == pytest.approx(0.0)
+    assert env.simulator.prosumer.load.get_state() == pytest.approx(0.0)
 
 
-def test_rejected_reset_preserves_episode_state(dated_pcs_env):
-    env, readings = dated_pcs_env
+def test_rejected_reset_preserves_episode_state(dated_prosumer_env):
+    env, readings = dated_prosumer_env
 
-    env.reset(start_date=readings.index[1])
+    env.reset(options={"start_date": readings.index[1]})
     env.step(np.array([0.0], dtype=np.float32))
 
     before = (
         env.current_step,
         env.current_datetime,
         env.total_reward,
-        env.shortage_count,
-        env.pcs.get_total_storage(),
+        env.simulator.metrics.grid_supplied_count,
+        env.simulator.prosumer.storage_level(),
     )
 
     with pytest.raises(ValueError):
-        env.reset(start_date=readings.index[-12])
+        env.reset(options={"start_date": readings.index[-12]})
 
     after = (
         env.current_step,
         env.current_datetime,
         env.total_reward,
-        env.shortage_count,
-        env.pcs.get_total_storage(),
+        env.simulator.metrics.grid_supplied_count,
+        env.simulator.prosumer.storage_level(),
     )
 
     assert after == before
@@ -216,17 +225,17 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
         "predicted_consumption": demand,
     }).to_csv(predictions_file, index=False)
 
-    env = PCSEnv(
-        test_data_file=str(consumption_file),
-        predictions_file=str(predictions_file),
+    env = ProsumerEnv(
+        load_data_file=str(consumption_file),
+        load_forecast_file=str(predictions_file),
         verbosity=0,
     )
 
     try:
-        env.reset(start_date=timestamps[1])
+        env.reset(options={"start_date": timestamps[1]})
 
-        assert env.previous_load == pytest.approx(demand[0])
-        assert env.pcs.get_consumption() == pytest.approx(0.0)
+        assert previous_load(env) == pytest.approx(demand[0])
+        assert env.simulator.prosumer.load.get_state() == pytest.approx(0.0)
 
         for i in range(env.max_steps):
             obs, _, terminated, _, info = env.step(
@@ -235,12 +244,12 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
 
             expected_demand = demand[i + 1]
 
-            # The PCS processes current-interval demand.
+            # The prosumer processes current-interval demand.
             assert info["consumption_units"] == pytest.approx(
                 expected_demand
             )
 
-            assert env.pcs.get_consumption() == pytest.approx(
+            assert env.simulator.prosumer.load.get_state() == pytest.approx(
                 expected_demand
             )
 
@@ -249,7 +258,7 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
             if not terminated:
                 # During the episode, the next observation exposes
                 # the demand just realized.
-                assert obs[1] * 10.0 == pytest.approx(
+                assert obs_value(env, obs, "previous_load") * 10.0 == pytest.approx(
                     expected_demand
                 )
             else:
@@ -264,12 +273,12 @@ def test_non_midnight_dataset_start_preserves_consumption_alignment(tmp_path):
 
 
 def test_gymnasium_options_start_date_matches_direct_reset(
-    dated_pcs_env,
+    dated_prosumer_env,
 ):
-    env, readings = dated_pcs_env
+    env, readings = dated_prosumer_env
     start = readings.index[60]
 
-    direct_obs, _ = env.reset(start_date=start)
+    direct_obs, _ = env.reset(options={"start_date": start})
 
     options_obs, info = env.reset(
         seed=123,
@@ -279,54 +288,44 @@ def test_gymnasium_options_start_date_matches_direct_reset(
     np.testing.assert_array_equal(options_obs, direct_obs)
 
     assert env.current_datetime == start
-    assert env.previous_load == pytest.approx(
+    assert previous_load(env) == pytest.approx(
         readings.iloc[59]["Consumption"]
     )
     assert info == {}
 
 
-def test_conflicting_reset_dates_preserve_active_state(
-    dated_pcs_env,
+def test_invalid_reset_options_preserve_active_state(
+    dated_prosumer_env,
 ):
-    env, readings = dated_pcs_env
+    env, readings = dated_prosumer_env
 
-    env.reset(start_date=readings.index[1])
+    env.reset(options={"start_date": readings.index[1]})
     env.step(np.array([2.0], dtype=np.float32))
 
-    old_state = (
-        env.current_datetime,
-        env.current_step,
-        env.previous_load,
-        env.pcs.get_total_storage(),
-        env.total_reward,
-        env._last_observation.copy(),
-    )
-
-    with pytest.raises(ValueError, match="not both"):
-        env.reset(
-            start_date=readings.index[48],
-            options={"start_date": readings.index[60]},
+    def state():
+        return (
+            env.current_datetime,
+            env.current_step,
+            previous_load(env),
+            env.simulator.prosumer.storage_level(),
+            env.total_reward,
+            env.encoder.encode(env.simulator.observe()).tolist(),
         )
 
-    assert (
-        env.current_datetime,
-        env.current_step,
-        env.previous_load,
-        env.pcs.get_total_storage(),
-        env.total_reward,
-    ) == old_state[:5]
+    old_state = state()
 
-    np.testing.assert_array_equal(
-        env._last_observation,
-        old_state[5],
-    )
+    with pytest.raises(ValueError, match="Unknown reset options"):
+        env.reset(options={"start_date": readings.index[48],
+                           "start": readings.index[60]})
+
+    assert state() == old_state
 
 
 def test_render_action_directions_and_debug_average(
-    dated_pcs_env, capsys
+    dated_prosumer_env, capsys
 ):
-    env, readings = dated_pcs_env
-    env.reset(start_date=readings.index[1])
+    env, readings = dated_prosumer_env
+    env.reset(options={"start_date": readings.index[1]})
 
     env.step(np.array([2.0], dtype=np.float32))
     env.render(verbosity=3)

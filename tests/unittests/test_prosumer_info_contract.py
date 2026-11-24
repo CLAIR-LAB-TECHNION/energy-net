@@ -1,10 +1,10 @@
 
-"""Tests for complete PCS transition diagnostics."""
+"""Tests for complete prosumer transition diagnostics."""
 
 import numpy as np
 import pytest
 
-from tests.unittests.test_pcs_pomdp_rewards import _env
+from tests.unittests.test_prosumer_pomdp_rewards import _env
 
 
 @pytest.mark.parametrize("penalized", [False, True])
@@ -15,7 +15,7 @@ def test_info_exposes_reward_and_energy_decomposition(
 
     try:
         initial_obs, _ = env.reset(
-            start_date="2025-01-02 00:00"
+            options={"start_date": "2025-01-02 00:00"}
         )
 
         obs, reward, done, _, info = env.step(
@@ -74,6 +74,15 @@ def test_info_exposes_reward_and_energy_decomposition(
 
         assert info["terminal_state"] is None
 
+        # A household without a generator: nothing generated or exported.
+        assert info["generation_units"] == 0.0
+        assert info["exported_surplus_units"] == 0.0
+        assert info["total_generation_units"] == 0.0
+        expected_components = {"money": -1.0}
+        if penalized:
+            expected_components["grid_reliance"] = -7.0
+        assert info["reward_components"] == pytest.approx(expected_components)
+
         assert info["observation_at_decision"] == pytest.approx(
             initial_obs.tolist()
         )
@@ -90,7 +99,7 @@ def test_final_info_preserves_terminal_state(
 
     try:
         obs, _ = env.reset(
-            start_date="2025-01-02 00:00"
+            options={"start_date": "2025-01-02 00:00"}
         )
 
         rewards = []
@@ -115,7 +124,7 @@ def test_final_info_preserves_terminal_state(
         )
 
         assert info["terminal_state"]["storage_units"] == pytest.approx(
-            env.pcs.get_total_storage()
+            env.simulator.prosumer.storage_level()
         )
         assert done
         assert not truncated
