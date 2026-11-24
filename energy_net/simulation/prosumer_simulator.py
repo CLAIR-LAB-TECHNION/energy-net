@@ -229,6 +229,11 @@ class ProsumerSimulator:
             raise RuntimeError("No decision observation available; call reset()")
         if self._step_index >= self.episode_steps:
             raise RuntimeError("Episode has terminated; call reset() before step()")
+        command = float(command)
+        if not np.isfinite(command):
+            # NaN would otherwise fall through every battery branch and be
+            # silently treated as "do nothing".
+            raise ValueError(f"Battery command must be finite, got {command}")
 
         decision = self._snapshot
         interval_start = self._current_time

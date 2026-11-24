@@ -127,3 +127,14 @@ def test_seeded_reset_is_reproducible_and_unseeded_reset_advances():
     again, _ = env.reset(seed=3)
     assert env.current_datetime == start
     np.testing.assert_array_equal(first, again)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_actions_are_rejected_without_side_effects(bad):
+    env = ProsumerEnv(verbosity=0)
+    env.reset(options={"start_date": "2025-07-10", "initial_storage": 20.0})
+    before = (env.current_step, env.simulator.prosumer.storage_level(), env.simulator.observe())
+    with pytest.raises(ValueError, match="must be finite"):
+        env.step(np.array([bad], dtype=np.float32))
+    assert (env.current_step, env.simulator.prosumer.storage_level(),
+            env.simulator.observe()) == before
