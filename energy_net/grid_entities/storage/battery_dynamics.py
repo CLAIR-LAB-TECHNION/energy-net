@@ -53,10 +53,15 @@ class DeterministicBattery(EnergyDynamics):
         """
         Calculates the updated energy level of the storage based on the action and current state.
 
+        The action is grid-side (terminal) energy. Charging ``a`` stores
+        ``a * charge_efficiency``; delivering ``|a|`` while discharging
+        removes ``|a| / discharge_efficiency`` from storage. Requests are
+        clipped to the rate limits and to the capacity bounds.
+
         Args:
             **kwargs:
                 - time (float): Current time as a fraction of the day (0 to 1).
-                - action (float): Charging (+) or discharging (-) power (MW).
+                - action (float): Charging (+) or discharging (-) energy at the terminal.
                 - current_energy (float): Current energy level (MWh).
                 - min_energy (float): Minimum energy level (MWh).
                 - max_energy (float): Maximum energy level (MWh).
@@ -92,16 +97,15 @@ class DeterministicBattery(EnergyDynamics):
 
         # Apply charging or discharging efficiency
         if action > 0:
-            assert action <= charge_rate_max, "Charging action exceeds maximum charge rate."
-            # Charging
+            # Charging; requests above the rate limit are clipped to it.
             charge_power = min(action, charge_rate_max)
             energy_change = charge_power * self.charge_efficiency
             new_energy = min(current_energy + energy_change, max_energy)
         elif action < 0:
-            assert abs(action) <= discharge_rate_max, "Discharging action exceeds maximum discharge rate."
-            # Discharging
+            # Discharging; requests above the rate limit are clipped to it.
             discharge_power = min(abs(action), discharge_rate_max)
-            energy_change = discharge_power * self.discharge_efficiency
+            # Delivering discharge_power costs more stored energy than that.
+            energy_change = discharge_power / self.discharge_efficiency
             new_energy = max(current_energy - energy_change, min_energy)
         else:
             # No action

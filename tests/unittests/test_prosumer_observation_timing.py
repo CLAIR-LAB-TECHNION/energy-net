@@ -5,24 +5,30 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 
 
-@pytest.fixture
-def env_and_demand(tmp_path):
+def obs_value(env, observation, name):
+    return float(env.encoder.field(observation, name)[0])
+
+
+def _make_env(tmp_path, invalid_index=None):
     timestamps = pd.date_range(
         "2025-01-01", periods=4 * 48, freq="30min"
     )
 
     demand = 1.0 + np.arange(len(timestamps)) / 10.0
     forecasts = demand + 20.0
+    recorded = demand.copy()
+    if invalid_index is not None:
+        recorded[invalid_index] = np.nan
 
     consumption_file = tmp_path / "consumption.csv"
     predictions_file = tmp_path / "predictions.csv"
 
     pd.DataFrame({
         "Datetime": timestamps,
-        "Consumption": demand,
+        "Consumption": recorded,
     }).to_csv(consumption_file, index=False)
 
     predictions = pd.DataFrame({
@@ -38,12 +44,17 @@ def env_and_demand(tmp_path):
 
     predictions.to_csv(predictions_file, index=False)
 
-    env = PCSEnv(
-        test_data_file=str(consumption_file),
-        predictions_file=str(predictions_file),
+    env = ProsumerEnv(
+        load_data_file=str(consumption_file),
+        load_forecast_file=str(predictions_file),
         verbosity=0,
     )
+    return env, timestamps, demand, forecasts
 
+
+@pytest.fixture
+def env_and_demand(tmp_path):
+    env, timestamps, demand, forecasts = _make_env(tmp_path)
     try:
         yield env, timestamps, demand, forecasts
     finally:
@@ -56,27 +67,27 @@ def test_reset_uses_previous_load_without_processing_demand(
     env, timestamps, demand, forecasts = env_and_demand
     start_idx = 48
 
-    obs, _ = env.reset(start_date=timestamps[start_idx])
+    obs, _ = env.reset(options={"start_date": timestamps[start_idx]})
 
     assert env.current_step == 0
     assert env.current_datetime == timestamps[start_idx]
 
     # Observation contains the previous actual demand.
-    assert obs[1] == pytest.approx(
+    assert obs_value(env, obs, "previous_load") == pytest.approx(
         demand[start_idx - 1] / 10.0
     )
 
     # Forecast begins with the imminent interval.
-    assert obs[4] == pytest.approx(
+    assert obs_value(env, obs, "load_forecast") == pytest.approx(
         forecasts[start_idx] / 10.0
     )
 
     # Reset must not physically process current demand.
-    assert env.pcs.get_consumption() == pytest.approx(0.0)
-    assert env.pcs.get_total_storage() == pytest.approx(0.0)
+    assert env.simulator.prosumer.load.get_state() == pytest.approx(0.0)
+    assert env.simulator.prosumer.storage_level() == pytest.approx(0.0)
     assert env.total_reward == pytest.approx(0.0)
 
-    assert obs.shape == (109,)
+    assert obs.shape == env.observation_space.shape
 
 
 def test_step_updates_previous_load_for_next_observation(
@@ -85,7 +96,7 @@ def test_step_updates_previous_load_for_next_observation(
     env, timestamps, demand, forecasts = env_and_demand
     start_idx = 48
 
-    env.reset(start_date=timestamps[start_idx])
+    env.reset(options={"start_date": timestamps[start_idx]})
 
     for offset in range(2):
         obs, reward, terminated, truncated, info = env.step(
@@ -100,11 +111,11 @@ def test_step_updates_previous_load_for_next_observation(
         )
 
         # The next observation reveals that realized demand.
-        assert env.previous_load == pytest.approx(realized)
-        assert obs[1] == pytest.approx(realized / 10.0)
+        assert env.simulator.observe().previous_load == pytest.approx(realized)
+        assert obs_value(env, obs, "previous_load") == pytest.approx(realized / 10.0)
 
         # The next forecast now refers to the next interval.
-        assert obs[4] == pytest.approx(
+        assert obs_value(env, obs, "load_forecast") == pytest.approx(
             forecasts[start_idx + offset + 1] / 10.0
         )
 
@@ -123,7 +134,7 @@ def test_first_dataset_timestamp_requires_preceding_load(
     env, timestamps, _, _ = env_and_demand
 
     with pytest.raises(ValueError, match="preceding"):
-        env.reset(start_date=timestamps[0])
+        env.reset(options={"start_date": timestamps[0]})
 
 
 def test_default_reset_selects_first_eligible_timestamp(
@@ -134,36 +145,29 @@ def test_default_reset_selects_first_eligible_timestamp(
     obs, _ = env.reset()
 
     assert env.current_datetime == timestamps[1]
-    assert obs[1] == pytest.approx(demand[0] / 10.0)
-    assert env.pcs.get_consumption() == pytest.approx(0.0)
+    assert obs_value(env, obs, "previous_load") == pytest.approx(demand[0] / 10.0)
+    assert env.simulator.prosumer.load.get_state() == pytest.approx(0.0)
 
 
-def test_invalid_preceding_load_preserves_active_episode(
-    env_and_demand,
-):
-    env, timestamps, _, _ = env_and_demand
+def test_invalid_preceding_load_preserves_active_episode(tmp_path):
+    # The reading preceding the episode at index 96 is invalid.
+    env, timestamps, _, _ = _make_env(tmp_path, invalid_index=95)
+    try:
+        env.reset(options={"start_date": timestamps[1]})
+        env.step(np.array([0.0], dtype=np.float32))
 
-    env.reset(start_date=timestamps[48])
-    env.step(np.array([0.0], dtype=np.float32))
+        def state():
+            return (
+                env.current_datetime,
+                env.current_step,
+                env.simulator.observe().previous_load,
+                env.total_reward,
+                env.simulator.prosumer.storage_level(),
+            )
 
-    old_state = (
-        env.current_datetime,
-        env.current_step,
-        env.previous_load,
-        env.total_reward,
-        env.pcs.get_total_storage(),
-    )
-
-    # Invalidate the measurement preceding a different episode.
-    env.test_df.loc[timestamps[95], "Consumption"] = np.nan
-
-    with pytest.raises(ValueError, match="preceding"):
-        env.reset(start_date=timestamps[96])
-
-    assert (
-        env.current_datetime,
-        env.current_step,
-        env.previous_load,
-        env.total_reward,
-        env.pcs.get_total_storage(),
-    ) == old_state
+        old_state = state()
+        with pytest.raises(ValueError, match="preceding"):
+            env.reset(options={"start_date": timestamps[96]})
+        assert state() == old_state
+    finally:
+        env.close()

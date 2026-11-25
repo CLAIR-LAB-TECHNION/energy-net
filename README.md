@@ -20,9 +20,9 @@ EnergyNet is designed for flexibility and extensibility, making it suitable for 
 ## Key Features
 
 - **Three OpenAI Gym Environments**
-  - `PCSEnv`: Battery storage management with price arbitrage
+  - `ProsumerEnv`: A prosumer (battery + load + generator) managing storage under dynamic tariffs
   - `ISOEnv`: Grid operator pricing and dispatch optimization
-  - `AlternatingISOEnv`: Multi-agent training with ISO-PCS interaction
+  - `AlternatingISOEnv`: Multi-agent training with ISO-prosumer interaction
 
 - **Realistic Grid Simulation**
   - Configurable consumption patterns (constant, sinusoidal, data-driven)
@@ -31,7 +31,7 @@ EnergyNet is designed for flexibility and extensibility, making it suitable for 
   - Shortage penalties and demand-supply balancing
 
 - **Multi-Agent Learning**
-  - Alternating training framework for ISO and PCS agents
+  - Alternating training framework for ISO and prosumer agents
   - Coordinated or adversarial agent objectives
   - Flexible reward structures
 
@@ -64,14 +64,13 @@ pip install -e .[test]
 ### Basic Usage
 
 ```python
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 from stable_baselines3 import SAC
 
 # Create environment
-env = PCSEnv(
-    test_data_file='tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
-    predictions_file='tests/gym/data_for_tests/consumption_predictions_without_features.csv',
-    shortage_penalty=1.0
+env = ProsumerEnv(
+    load_data_file='tests/gym/data_for_tests/synthetic_household_consumption_test.csv',
+    load_forecast_file='tests/gym/data_for_tests/consumption_predictions_without_features.csv',
 )
 
 # Train an agent
@@ -91,40 +90,72 @@ for _ in range(48):  # One day (48 half-hour steps)
 
 ## Environments
 
-### PCSEnv (Production-Consumption-Storage)
+### ProsumerEnv
 
-Simulates a household or facility managing:
-- **Energy consumption**: Time-varying demand that must be met
-- **Battery storage**: Charge/discharge decisions for cost optimization
-- **Grid interaction**: Buy/sell energy at dynamic prices
+Simulates one prosumer with exactly **one battery, one load and one
+generator** (a household without PV uses a zero-output generator):
+- **Load and generation**: not controlled by any agent
+- **Battery storage**: the agent's charge/discharge decision
+- **Grid interaction**: net-metered import/export at dynamic tariffs; surplus
+  generation first charges the battery and the rest is exported
 
-**Agent Goal**: Minimize energy costs while meeting consumption requirements through strategic battery management.
+**Agent Goal**: Minimize energy costs through strategic battery management.
 
-#### PCS tariffs and reward variants
+#### Architecture
 
-`PCSEnv` exposes both tariffs in the observation: channel `2` is the price paid by
-PCS for net imports (`p_buy`) and channel `3` is the payment PCS receives for net
-exports (`p_sell`). These are from the **PCS** perspective, whereas the ISO price
-strategy methods use the ISO perspective. With 48 forecast steps and seven
-calendar features, the observation has 109 channels.
+The gym environment is a thin adapter; the simulation runs without gym:
 
-The default reward is the negative net-metered electricity bill, where the
-metered exchange includes the explicit battery transaction and residual grid
-supply after automatic battery service:
+| Layer | Package | Responsibility |
+|---|---|---|
+| Gym adapter | `energy_net.gym_envs` | spaces, action decoding, observation encoding |
+| Simulation | `energy_net.simulation` | episodes, tariffs, settlement, rewards |
+| Entities | `energy_net.grid_entities` | `Prosumer`, `Battery`, `ConsumptionUnit`, `ProductionUnit` |
+| Ground truth | `energy_net.dynamics` | `CSVDynamics`, `ProfileDynamics`, `ConstantDynamics` |
+| Predictions | `energy_net.forecasting` | `TableForecaster`, `PredictorForecaster`, `NoisyGroundTruthForecaster` |
+
+Each load and generator entity owns **ground-truth dynamics** (what actually
+happens) and a **forecaster** (what some algorithm predicts). Any object with
+`forecast(issue_time, target_times)` can be a forecaster, including one backed
+by your own model-based or model-free learner; its optional
+`observe(times, realized)` hook only ever receives values already realized.
+
+```python
+from energy_net.simulation import make_prosumer_simulator
+
+simulator = make_prosumer_simulator(
+    generation_data_file="pv.csv",          # column "Production"
+    generation_forecast_file="pv_forecast.csv",  # column "predicted_production"
+)
+env = ProsumerEnv(simulator)
+
+# Privileged query of the ground truth (never part of the observation).
+env.ground_truth("generator", ["2025-07-10 12:00", "2025-07-10 12:30"])
+```
+
+#### Observation, tariffs and reward variants
+
+The observation is a flat vector with a named layout (`env.observation_layout`):
+storage, previous load and generation, buy and sell tariffs (prosumer
+perspective), load and generation forecasts with a validity mask, battery
+capacities, and seven calendar features (158 values with 48 forecast steps).
+Use `env.encoder.field(obs, "buy_tariff")` instead of indices.
+
+The default reward is the money settled under net metering:
 
 ```python
 # Documented POMDP baseline: no additional reward shaping.
-env = PCSEnv(include_shortage_penalty=False)
+env = ProsumerEnv(include_shortage_penalty=False)
 
 # Experimental variant: same electricity bill, plus a fixed penalty per
 # interval where any demand must be supplied by the grid.
-env = PCSEnv(include_shortage_penalty=True, shortage_penalty=1.0)
+env = ProsumerEnv(include_shortage_penalty=True, shortage_penalty=1.0)
 ```
 
-The penalty is *not* the price of unmet demand: household demand is always
+Any `RewardFunction` can be injected (`ProsumerEnv(reward_fn=...)`). The
+penalty is *not* the price of unmet demand: household demand is always
 satisfied because the grid supplies any residual. Settle and log the real
-monetary cost (`info["step_money"]`) separately from the shaped reward.
-Existing PCS RL policies trained with the old 108-channel input need retraining.
+monetary cost (`info["step_money"]`) separately from the shaped reward
+(`info["reward_components"]`).
 
 ### ISOEnv (Independent System Operator)
 
@@ -136,8 +167,8 @@ Simulates a grid operator managing:
 
 ### AlternatingISOEnv (Multi-Agent)
 
-Coordinates ISO and PCS agents in an alternating training framework:
-- ISO sets prices → PCS responds → ISO adapts → PCS adapts
+Coordinates ISO and prosumer agents in an alternating training framework:
+- ISO sets prices → prosumer responds → ISO adapts → prosumer adapts
 - Enables study of strategic interactions between grid operators and consumers
 - Configurable reward structures (competitive or cooperative)
 
@@ -187,10 +218,14 @@ energy-net/
 ├── prediction/                    # Target-neutral energy forecasting
 │   └── energy_predictor.py        # Primary prediction API
 ├── energy_net/                    # Core package
-│   ├── gym_envs/                  # Gym environments (PCS, ISO, Alternating)
-│   ├── grid_entities/             # Grid components (batteries, consumption units, etc.)
-│   └── foundation/                # Base classes and dynamics
+│   ├── gym_envs/                  # Thin gym adapters (Prosumer, ISO, Alternating)
+│   ├── simulation/                # Gym-free prosumer simulator, tariffs, rewards
+│   ├── grid_entities/             # Prosumer, battery, load and generator units
+│   ├── dynamics/                  # Ground-truth dynamics (CSV, profiles, constants)
+│   ├── forecasting/               # Built-in forecasters
+│   └── foundation/                # Base classes and interfaces
 ├── tests/                         # Test suite and test data
+│   ├── golden/                    # Recorded legacy trajectories (regression oracle)
 │   ├── gym/                       # Environment test data and generators
 │   └── unittests/                 # Unit tests and prediction demonstration
 ├── Energy_Net_Tutorial.ipynb      # Comprehensive environment tutorial

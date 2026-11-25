@@ -4,10 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 
 
-def _make_env(tmp_path, demand):
+PENALTY = 7.0
+
+
+def _make_env(tmp_path, demand, **kwargs):
     timestamps = pd.date_range("2025-01-01", periods=3 * 48, freq="30min")
     data_file = tmp_path / "consumption.csv"
     predictions_file = tmp_path / "predictions.csv"
@@ -19,12 +22,13 @@ def _make_env(tmp_path, demand):
         "timestamp": timestamps,
         "predicted_consumption": demand,
     }).to_csv(predictions_file, index=False)
-    return PCSEnv(
-        test_data_file=str(data_file),
-        predictions_file=str(predictions_file),
-        shortage_penalty=7.0,
+    return ProsumerEnv(
+        load_data_file=str(data_file),
+        load_forecast_file=str(predictions_file),
+        shortage_penalty=PENALTY,
         include_shortage_penalty=True,
         verbosity=0,
+        **kwargs,
     )
 
 
@@ -53,12 +57,9 @@ def test_shortage_penalizes_only_uncovered_consumption(
     tmp_path, initial_storage, demand, action, uncovered
 ):
     env = _make_env(tmp_path, demand)
-    penalty = env.shortage_penalty
+    penalty = PENALTY
     try:
-        env.reset()
-        # Reset initializes an empty battery and services demand; seed only afterward.
-        battery = env.pcs.storage_units[0]
-        battery.reset(initial_storage)
+        env.reset(options={"initial_storage": initial_storage})
 
         obs, reward, _, _, info = env.step(np.array([action], dtype=np.float32))
 
@@ -70,7 +71,7 @@ def test_shortage_penalizes_only_uncovered_consumption(
             -info["buy_tariff"] * max(action + uncovered, 0.0)
             + info["sell_tariff"] * max(-(action + uncovered), 0.0)
         )
-        assert env.pcs.get_production() == 0.0
+        assert env.simulator.prosumer.generator.get_state() == 0.0
         assert info["consumption_units"] == pytest.approx(demand)
         assert info["uncovered_consumption_units"] == pytest.approx(uncovered)
         assert info["battery_energy_used_for_consumption_units"] == pytest.approx(served)
@@ -83,7 +84,7 @@ def test_shortage_penalizes_only_uncovered_consumption(
         assert (
             info["shortage"],
             reward,
-            env.shortage_count,
+            env.simulator.metrics.grid_supplied_count,
             env.total_shortage_penalty,
         ) == (
             expected_shortage,
@@ -92,7 +93,7 @@ def test_shortage_penalizes_only_uncovered_consumption(
             expected_penalty,
         ), f"Served={served}; uncovered={uncovered}; post-service capacity={info['available_discharge_units']}"
         assert env.total_reward == pytest.approx(reward)
-        assert env.total_money_earned == pytest.approx(expected_money)
+        assert env.simulator.metrics.total_money == pytest.approx(expected_money)
     finally:
         env.close()
 
@@ -109,8 +110,7 @@ def test_shortage_uses_actual_not_requested_battery_action(
 ):
     env = _make_env(tmp_path, demand=3.0)
     try:
-        env.reset()
-        env.pcs.storage_units[0].reset(initial_storage)
+        env.reset(options={"initial_storage": initial_storage})
 
         _, reward, _, _, info = env.step(np.array([action], dtype=np.float32))
 
@@ -118,7 +118,7 @@ def test_shortage_uses_actual_not_requested_battery_action(
         assert info["storage_after_units"] == pytest.approx(expected_storage)
         assert info["uncovered_consumption_units"] == pytest.approx(uncovered)
         assert info["shortage"] == (uncovered > 0.0)
-        penalty = env.shortage_penalty if uncovered > 0.0 else 0.0
+        penalty = PENALTY if uncovered > 0.0 else 0.0
         assert reward == pytest.approx(info["step_money"] - penalty)
     finally:
         env.close()
@@ -134,21 +134,22 @@ def test_shortage_uses_actual_not_requested_battery_action(
 def test_shortage_respects_discharge_rate(
     tmp_path, discharge_limit, expected_storage, expected_shortage
 ):
-    env = _make_env(tmp_path, demand=3.0)
+    env = _make_env(
+        tmp_path, demand=3.0,
+        battery_config={"min": 0.0, "max": 100.0, "init": 8.0,
+                        "discharge_rate_max": discharge_limit},
+    )
     try:
         env.reset()
-        battery = env.pcs.storage_units[0]
-        battery.reset(8.0)
-        battery.discharge_rate_max = discharge_limit
 
         _, reward, _, _, info = env.step(np.array([0.0], dtype=np.float32))
 
         assert info["storage_after_units"] == pytest.approx(expected_storage)
         assert info["shortage"] == expected_shortage
-        expected_penalty = env.shortage_penalty if expected_shortage else 0.0
+        expected_penalty = PENALTY if expected_shortage else 0.0
         assert reward == pytest.approx(info["step_money"] - expected_penalty)
         assert env.total_shortage_penalty == pytest.approx(expected_penalty)
-        assert env.shortage_count == int(expected_shortage)
+        assert env.simulator.metrics.grid_supplied_count == int(expected_shortage)
     finally:
         env.close()
 
@@ -156,8 +157,7 @@ def test_shortage_respects_discharge_rate(
 def test_only_actual_shortfalls_accumulate_penalties(tmp_path):
     env = _make_env(tmp_path, demand=3.0)
     try:
-        env.reset()
-        env.pcs.storage_units[0].reset(6.0)
+        env.reset(options={"initial_storage": 6.0})
 
         shortages = []
         rewards = []
@@ -174,19 +174,19 @@ def test_only_actual_shortfalls_accumulate_penalties(tmp_path):
         assert (
             shortages,
             rewards,
-            env.shortage_count,
+            env.simulator.metrics.grid_supplied_count,
             env.total_shortage_penalty,
             env.total_reward,
         ) == (
             [False, False, True],
-            [money[0], money[1], money[2] - env.shortage_penalty],
+            [money[0], money[1], money[2] - PENALTY],
             1,
-            env.shortage_penalty,
-            sum(money) - env.shortage_penalty,
+            PENALTY,
+            sum(money) - PENALTY,
         )
 
         env.reset()
-        assert env.shortage_count == 0
+        assert env.simulator.metrics.grid_supplied_count == 0
         assert env.total_shortage_penalty == 0.0
         assert env.total_reward == 0.0
     finally:
@@ -212,8 +212,7 @@ def test_floating_point_residual_does_not_trigger_shortage(
     """
     env = _make_env(tmp_path, demand)
     try:
-        env.reset()
-        env.pcs.storage_units[0].reset(initial_storage)
+        env.reset(options={"initial_storage": initial_storage})
 
         _, reward, _, _, info = env.step(
             np.array([0.0], dtype=np.float32)
@@ -235,7 +234,7 @@ def test_floating_point_residual_does_not_trigger_shortage(
 
         # Numerical noise must not cause an actual penalty.
         assert not info["shortage"]
-        assert env.shortage_count == 0
+        assert env.simulator.metrics.grid_supplied_count == 0
         assert env.total_shortage_penalty == pytest.approx(0.0)
 
         # No battery transaction and no shortage means zero reward.

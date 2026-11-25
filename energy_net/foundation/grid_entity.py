@@ -2,6 +2,10 @@
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+from energy_net.foundation.forecaster import validate_forecaster
 from energy_net.foundation.model import State, Action
 
 
@@ -83,6 +87,60 @@ class ElementaryGridEntity(GridEntity):
             action (Action): Action object specifying the operation to perform.
         """
         pass
+
+
+class ForecastableGridEntity(ElementaryGridEntity):
+    """
+    An elementary entity whose value no agent controls (load, generation).
+
+    It owns two separate things:
+
+    - its dynamics, which give the ground truth (what actually happens);
+    - an optional forecaster, which gives a prediction (what some algorithm
+      believes will happen). Any object with
+      ``forecast(issue_time, target_times)`` can be used.
+    """
+
+    def __init__(self, dynamics: Any, forecaster: Any = None):
+        super().__init__(dynamics)
+        self.forecaster = None
+        if forecaster is not None:
+            self.set_forecaster(forecaster)
+
+    def ground_truth(self, times):
+        """Realized values at ``times`` (privileged: not an observation)."""
+        query = getattr(self.dynamics, "ground_truth", None)
+        if not callable(query):
+            raise TypeError(
+                f"{type(self.dynamics).__name__} does not provide ground "
+                "truth; use a GroundTruthDynamics"
+            )
+        return query(times)
+
+    def set_forecaster(self, forecaster: Any) -> None:
+        """Attach or replace the prediction component."""
+        validate_forecaster(forecaster)
+        self.forecaster = forecaster
+
+    def predict(self, issue_time, target_times):
+        """Prediction for ``target_times`` made at ``issue_time``."""
+        if self.forecaster is None:
+            raise RuntimeError(
+                f"No forecaster configured for {type(self).__name__}; "
+                "call set_forecaster() first"
+            )
+        return np.asarray(
+            self.forecaster.forecast(issue_time, target_times), dtype=float
+        )
+
+    def _dynamics_kwargs(self, state: State, time_value: float,
+                         action_value: float) -> Dict[str, Any]:
+        """Arguments for ``dynamics.get_value``; adds the timestamp if known."""
+        kwargs = {"time": time_value, "action": action_value}
+        timestamp = state.get_attribute("timestamp")
+        if timestamp is not None:
+            kwargs["timestamp"] = timestamp
+        return kwargs
 
 
 class CompositeGridEntity(GridEntity):

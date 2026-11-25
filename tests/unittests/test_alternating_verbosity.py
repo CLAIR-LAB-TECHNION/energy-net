@@ -15,7 +15,7 @@ import pytest
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, PROJECT_ROOT)
 
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 from energy_net.gym_envs.alternating_env import AlternatingISOEnv
 from stable_baselines3 import PPO
 
@@ -23,35 +23,35 @@ from stable_baselines3 import PPO
 TEST_DATA_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/synthetic_household_consumption_test.csv')
 PREDICTIONS_FILE = os.path.join(PROJECT_ROOT, 'tests/gym/data_for_tests/consumption_predictions.csv')
 
-def create_test_environment(iso_verbosity=2, pcs_verbosity=0):
+def create_test_environment(iso_verbosity=2, prosumer_verbosity=0):
     """
     Create a minimal alternating environment for testing.
     
     Args:
         iso_verbosity: Verbosity level for ISO rendering
-        pcs_verbosity: Verbosity level for PCS rendering during ISO episodes
+        prosumer_verbosity: Verbosity level for prosumer rendering during ISO episodes
     
     Returns:
         AlternatingISOEnv instance
     """
-    # Create base PCS environment
-    pcs_env = PCSEnv(
-        test_data_file=TEST_DATA_FILE,
-        predictions_file=PREDICTIONS_FILE,
-        verbosity=0  # Keep PCS quiet during setup
+    # Create base prosumer environment
+    prosumer_env = ProsumerEnv(
+        load_data_file=TEST_DATA_FILE,
+        load_forecast_file=PREDICTIONS_FILE,
+        verbosity=0  # Keep prosumer quiet during setup
     )
     
-    # Create a simple PCS model (not trained, just for structure)
-    pcs_model = PPO("MlpPolicy", pcs_env, verbose=0)
+    # Create a simple prosumer model (not trained, just for structure)
+    prosumer_model = PPO("MlpPolicy", prosumer_env, verbose=0)
     
     # Create alternating ISO environment
     iso_env = AlternatingISOEnv(
         actual_csv=TEST_DATA_FILE,
         predicted_csv=PREDICTIONS_FILE,
-        pcs_env=pcs_env,
-        pcs_model=pcs_model,
+        prosumer_env=prosumer_env,
+        prosumer_model=prosumer_model,
         iso_verbosity=iso_verbosity,
-        pcs_verbosity=pcs_verbosity
+        prosumer_verbosity=prosumer_verbosity
     )
     
     return iso_env
@@ -71,7 +71,7 @@ def test_iso_verbosity_level(level, description):
     
     try:
         # Create environment with specific ISO verbosity
-        env = create_test_environment(iso_verbosity=level, pcs_verbosity=0)
+        env = create_test_environment(iso_verbosity=level, prosumer_verbosity=0)
         
         # Reset and take a single step
         obs, info = env.reset()
@@ -79,7 +79,7 @@ def test_iso_verbosity_level(level, description):
         # Generate random action for ISO (prices + dispatch)
         action = env.action_space.sample()
         
-        # Step the environment (this runs the full PCS loop internally)
+        # Step the environment (this runs the full prosumer loop internally)
         obs, reward, terminated, truncated, info = env.step(action)
         
         # Render the ISO day summary
@@ -99,17 +99,17 @@ def test_iso_verbosity_level(level, description):
         traceback.print_exc()
         raise
 
-def test_pcs_verbosity_levels():
-    """Test PCS verbosity during ISO episodes."""
+def test_prosumer_verbosity_levels():
+    """Test prosumer verbosity during ISO episodes."""
     print("\n" + "=" * 80)
-    print("TESTING PCS VERBOSITY CONTROL")
+    print("TESTING prosumer VERBOSITY CONTROL")
     print("=" * 80)
-    print("\nISO verbosity=1 (summary), PCS verbosity=0 (silent)")
-    print("PCS should be completely silent during ISO episode...\n")
+    print("\nISO verbosity=1 (summary), prosumer verbosity=0 (silent)")
+    print("Prosumer should be completely silent during ISO episode...\n")
     
     try:
-        # Create environment where ISO shows summary but PCS is silent
-        env = create_test_environment(iso_verbosity=1, pcs_verbosity=0)
+        # Create environment where ISO shows summary but prosumer is silent
+        env = create_test_environment(iso_verbosity=1, prosumer_verbosity=0)
         
         obs, info = env.reset()
         action = env.action_space.sample()
@@ -117,18 +117,18 @@ def test_pcs_verbosity_levels():
         env.render()
         
         print("\n" + "-" * 80)
-        print("\nNow testing with PCS verbosity=1 (summary)")
-        print("PCS should show episode summary...\n")
+        print("\nNow testing with prosumer verbosity=1 (summary)")
+        print("Prosumer should show episode summary...\n")
         
         # Create environment where both show summaries
-        env = create_test_environment(iso_verbosity=1, pcs_verbosity=1)
+        env = create_test_environment(iso_verbosity=1, prosumer_verbosity=1)
         
         obs, info = env.reset()
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         env.render()
         
-        print(f"\n[PCS verbosity test complete]\n")
+        print(f"\n[prosumer verbosity test complete]\n")
         
     except Exception as e:
         print(f"\n[ERROR] Test failed with exception: {e}")
@@ -145,7 +145,7 @@ def test_verbosity_override():
     print("But we'll call render() with different verbosity levels...\n")
     
     try:
-        env = create_test_environment(iso_verbosity=2, pcs_verbosity=0)
+        env = create_test_environment(iso_verbosity=2, prosumer_verbosity=0)
         
         obs, info = env.reset()
         action = env.action_space.sample()
@@ -175,28 +175,28 @@ def test_backward_compatibility():
     print("TESTING BACKWARD COMPATIBILITY")
     print("=" * 80)
     print("\nCreating env with render_enabled=True (old style)...")
-    print("This should map to iso_verbosity=2, pcs_verbosity=1\n")
+    print("This should map to iso_verbosity=2, prosumer_verbosity=1\n")
     
     try:
-        pcs_env = PCSEnv(
-            test_data_file=TEST_DATA_FILE,
-            predictions_file=PREDICTIONS_FILE,
+        prosumer_env = ProsumerEnv(
+            load_data_file=TEST_DATA_FILE,
+            load_forecast_file=PREDICTIONS_FILE,
             verbosity=0
         )
         
-        pcs_model = PPO("MlpPolicy", pcs_env, verbose=0)
+        prosumer_model = PPO("MlpPolicy", prosumer_env, verbose=0)
         
         # Use old-style render_enabled parameter
         env = AlternatingISOEnv(
             actual_csv=TEST_DATA_FILE,
             predicted_csv=PREDICTIONS_FILE,
-            pcs_env=pcs_env,
-            pcs_model=pcs_model,
+            prosumer_env=prosumer_env,
+            prosumer_model=prosumer_model,
             render_enabled=True  # Old style
         )
         
         print(f"Environment iso_verbosity is: {env.iso_verbosity}")
-        print(f"Environment pcs_verbosity is: {env.pcs_verbosity}")
+        print(f"Environment prosumer_verbosity is: {env.prosumer_verbosity}")
         
         obs, info = env.reset()
         action = env.action_space.sample()
@@ -227,8 +227,8 @@ if __name__ == "__main__":
     test_iso_verbosity_level(3, "DETAILED (summary + timesteps with features)")
     test_iso_verbosity_level(4, "DEBUG (comprehensive analysis)")
     
-    # Test PCS verbosity control
-    test_pcs_verbosity_levels()
+    # Test prosumer verbosity control
+    test_prosumer_verbosity_levels()
     
     # Test verbosity override functionality
     test_verbosity_override()
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     print("  ✓ Level 2: Condensed mode shows summary + sampled timesteps (DEFAULT)")
     print("  ✓ Level 3: Detailed mode shows comprehensive day information")
     print("  ✓ Level 4: Debug mode includes pricing strategy and analysis")
-    print("  ✓ PCS verbosity can be controlled separately (0=silent, 1+=various levels)")
+    print("  ✓ prosumer verbosity can be controlled separately (0=silent, 1+=various levels)")
     print("  ✓ Verbosity can be overridden per render() call")
     print("  ✓ Backward compatible with render_enabled parameter")
     print("\n")

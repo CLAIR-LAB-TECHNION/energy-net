@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 from energy_net.grid_entities.management.price_curve import (
     PriceCurveStrategy,
 )
@@ -53,9 +53,9 @@ def _files(tmp_path, *, forecast_offset=0, scramble_forecasts=False):
 
 
 def _env(consumption_path, forecast_path, **kwargs):
-    return PCSEnv(
-        test_data_file=str(consumption_path),
-        predictions_file=str(forecast_path),
+    return ProsumerEnv(
+        load_data_file=str(consumption_path),
+        load_forecast_file=str(forecast_path),
         verbosity=0,
         **kwargs,
     )
@@ -71,18 +71,18 @@ def test_shuffled_forecasts_with_earlier_start_are_aligned_by_timestamp(
     env = _env(actual, predicted)
     try:
         start = timestamps[48]
-        obs, _ = env.reset(start_date=start)
+        obs, _ = env.reset(options={"start_date": start})
 
         expected = forecast_df.loc[
             forecast_df["timestamp"] == start,
             "predicted_consumption",
         ].iloc[0]
 
-        assert obs[4] == pytest.approx(expected / 10.0)
+        assert env.encoder.field(obs, "load_forecast")[0] == pytest.approx(expected / 10.0)
         # Calendar features now come from timestamps,
         # not arbitrary values in the forecast CSV.
-        weekday = start.dayofweek
-        doy = start.dayofyear
+        weekday = start.day_of_week
+        doy = start.day_of_year
 
         expected_features = np.array([
             0.0,
@@ -95,7 +95,7 @@ def test_shuffled_forecasts_with_earlier_start_are_aligned_by_timestamp(
         ])
 
         np.testing.assert_allclose(
-            obs[-7:],
+            env.encoder.field(obs, "calendar"),
             expected_features,
             atol=1e-6,
         )
@@ -124,13 +124,13 @@ def test_invalid_realized_demand_is_rejected_before_episode(tmp_path):
         with pytest.raises(
             ValueError, match="Non-finite or negative.*consumption"
         ):
-            env.reset(start_date=timestamps[48])
+            env.reset(options={"start_date": timestamps[48]})
 
         assert env.current_step == 0
-        assert env.pcs.get_total_storage() == 0.0
+        assert env.simulator.prosumer.storage_level() == 0.0
 
         # A later episode that avoids the invalid row is eligible.
-        env.reset(start_date=timestamps[80])
+        env.reset(options={"start_date": timestamps[80]})
     finally:
         env.close()
 
@@ -147,7 +147,7 @@ def test_invalid_forecasts_or_features_are_rejected(tmp_path, column):
         with pytest.raises(
             ValueError, match="Non-finite forecast or calendar"
         ):
-            env.reset(start_date=timestamps[48])
+            env.reset(options={"start_date": timestamps[48]})
     finally:
         env.close()
 
@@ -162,7 +162,7 @@ def test_missing_forecast_timestamp_is_rejected(tmp_path):
         with pytest.raises(
             ValueError, match="Missing forecast/calendar timestamp"
         ):
-            env.reset(start_date=timestamps[48])
+            env.reset(options={"start_date": timestamps[48]})
     finally:
         env.close()
 
@@ -187,7 +187,7 @@ def test_terminal_transition_does_not_request_next_day_data(tmp_path):
     env = _env(actual, predicted)
 
     try:
-        env.reset(start_date=timestamps[-48])
+        env.reset(options={"start_date": timestamps[-48]})
 
         for step in range(48):
             obs, reward, done, truncated, info = env.step(
@@ -196,7 +196,7 @@ def test_terminal_transition_does_not_request_next_day_data(tmp_path):
             assert done == (step == 47)
             assert not truncated
 
-        assert obs.shape == (109,)
+        assert obs.shape == env.observation_space.shape
         assert np.all(obs == 0.0)
 
         with pytest.raises(RuntimeError, match="terminated"):
@@ -229,7 +229,7 @@ def test_data_driven_iso_requires_entire_calendar_day(tmp_path):
         with pytest.raises(
             ValueError, match="Missing forecast/calendar timestamp"
         ):
-            env.reset(start_date="2025-01-02 18:00")
+            env.reset(options={"start_date": "2025-01-02 18:00"})
     finally:
         env.close()
 
@@ -241,7 +241,7 @@ def test_final_forecast_entries_are_zero_padded_not_extrapolated(
     env = _env(actual, predicted)
 
     try:
-        env.reset(start_date=timestamps[48])
+        env.reset(options={"start_date": timestamps[48]})
 
         for _ in range(47):
             obs, reward, done, truncated, _ = env.step(
@@ -249,10 +249,12 @@ def test_final_forecast_entries_are_zero_padded_not_extrapolated(
             )
 
         # One interval remains.
-        assert obs[52:100].sum() == pytest.approx(1.0)
-        assert obs[52] == pytest.approx(1.0)
-        assert np.all(obs[53:100] == 0.0)
-        assert np.all(obs[5:52] == 0.0)
+        mask = env.encoder.field(obs, "forecast_mask")
+        assert mask.sum() == pytest.approx(1.0)
+        assert mask[0] == pytest.approx(1.0)
+        assert np.all(mask[1:] == 0.0)
+        assert np.all(env.encoder.field(obs, "load_forecast")[1:] == 0.0)
+        assert np.all(env.encoder.field(obs, "generation_forecast")[1:] == 0.0)
     finally:
         env.close()
 

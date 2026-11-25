@@ -9,7 +9,7 @@ This test validates that when asymmetric pricing is enabled:
 
 import unittest
 import numpy as np
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 from energy_net.grid_entities.management.price_curve import (
     ActionBasedPriceStrategy,
     RLPriceCurveStrategy,

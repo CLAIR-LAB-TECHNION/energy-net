@@ -1,19 +1,16 @@
 
-"""PCS POMDP calendar and tariff-admission tests."""
+"""Prosumer POMDP calendar and tariff-admission tests."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from energy_net.gym_envs.pcs_env import (
-    PCSEnv,
-    CALENDAR_FEATURE_COLUMNS,
-)
+from energy_net.simulation import CALENDAR_FEATURE_COLUMNS, calendar_features
 from energy_net.grid_entities.management.price_curve import (
     PriceCurveStrategy,
     FixedPriceStrategy,
 )
-from tests.unittests.test_pcs_episode_data_validation import (
+from tests.unittests.test_prosumer_episode_data_validation import (
     _files,
     _env,
 )
@@ -27,7 +24,7 @@ class ExplicitTariffStrategy(PriceCurveStrategy):
         self.sell = sell
         self.calls = 0
 
-    def calculate_pcs_tariffs(self, observation=None):
+    def calculate_prosumer_tariffs(self, observation=None):
         self.calls += 1
         return self.buy, self.sell
 
@@ -71,11 +68,11 @@ def test_reject_invalid_price_curves_before_reset(
 
     try:
         with pytest.raises(ValueError, match=error):
-            env.reset(start_date=timestamps[48])
+            env.reset(options={"start_date": timestamps[48]})
 
-        assert env.previous_load is None
+        assert not env.simulator.has_episode
         assert env.current_step == 0
-        assert env.pcs.get_total_storage() == pytest.approx(0)
+        assert env.simulator.prosumer.storage_level() == pytest.approx(0)
 
     finally:
         env.close()
@@ -92,14 +89,12 @@ def test_strategy_change_is_atomic_and_refreshes_observation(
     )
 
     try:
-        original_obs, _ = env.reset(
-            start_date=timestamps[48]
-        )
+        original_obs, _ = env.reset(options={"start_date": timestamps[48]})
 
-        assert original_obs[2] == pytest.approx(.10)
+        assert env.encoder.field(original_obs, "buy_tariff")[0] == pytest.approx(.10)
 
-        old_strategy = env.price_strategy
-        old_cache = env._episode_day_prices.copy()
+        old_strategy = env.simulator.price_strategy
+        old_cache = env.simulator.tariffs.cached_days()
 
         with pytest.raises(ValueError, match="sell tariff"):
             env.set_price_strategy(
@@ -109,23 +104,23 @@ def test_strategy_change_is_atomic_and_refreshes_observation(
                 )
             )
 
-        assert env.price_strategy is old_strategy
-        assert set(env._episode_day_prices) == set(old_cache)
+        assert env.simulator.price_strategy is old_strategy
+        assert env.simulator.tariffs.cached_days() == old_cache
 
-        assert env._last_observation.tolist() == pytest.approx(
-            original_obs.tolist()
-        )
+        decision = env.encoder.encode(env.simulator.observe())
+        assert decision.tolist() == pytest.approx(original_obs.tolist())
 
         new_obs = env.set_price_strategy(
             FixedPriceStrategy(.15)
         )
 
-        assert new_obs[2] == pytest.approx(.15)
-        assert new_obs[3] == pytest.approx(.15)
+        assert env.encoder.field(new_obs, "buy_tariff")[0] == pytest.approx(.15)
+        assert env.encoder.field(new_obs, "sell_tariff")[0] == pytest.approx(.15)
 
-        assert env._last_observation.tolist() == pytest.approx(
-            new_obs.tolist()
-        )
+        decision = env.encoder.encode(env.simulator.observe())
+        assert decision.tolist() == pytest.approx(new_obs.tolist())
+        _, _, _, _, info = env.step(np.array([0.0], dtype=np.float32))
+        assert info["observation_at_decision"] == pytest.approx(new_obs.tolist())
 
     finally:
         env.close()
@@ -146,9 +141,7 @@ def test_terminal_prices_precomputed_for_cross_midnight_episode(
     )
 
     try:
-        env.reset(
-            start_date=pd.Timestamp("2025-01-02 18:00")
-        )
+        env.reset(options={"start_date": pd.Timestamp("2025-01-02 18:00")})
 
         # One curve for January 2, one for January 3.
         assert strategy.calls == 2
@@ -178,11 +171,11 @@ def test_calendar_channels_have_documented_order_and_values(
 
     try:
         t = pd.Timestamp("2025-01-02 18:00")
-        obs, _ = env.reset(start_date=t)
+        obs, _ = env.reset(options={"start_date": t})
 
         j = 36
-        weekday = t.dayofweek
-        doy = t.dayofyear
+        weekday = t.day_of_week
+        doy = t.day_of_year
 
         expected = [
             np.sin(2 * np.pi * j / 48),
@@ -194,21 +187,18 @@ def test_calendar_channels_have_documented_order_and_values(
             float(weekday >= 5),
         ]
 
-        assert tuple(env.feature_columns) == (
+        assert tuple(env.simulator.observe().calendar_columns) == (
             CALENDAR_FEATURE_COLUMNS
         )
 
-        assert obs.shape == (109,)
+        assert obs.shape == env.observation_space.shape
 
         np.testing.assert_allclose(
-            obs[-7:], expected, atol=1e-6
+            env.encoder.field(obs, "calendar"), expected, atol=1e-6
         )
 
-        assert len(
-            env._get_feature_window(
-                48, start_datetime=t
-            )
-        ) == 336
+        day = pd.date_range(t, periods=48, freq="30min")
+        assert calendar_features(day).size == 336
 
     finally:
         env.close()

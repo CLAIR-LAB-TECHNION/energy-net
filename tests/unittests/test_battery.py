@@ -69,7 +69,8 @@ class TestDeterministicBattery(unittest.TestCase):
             charge_rate_max=15,
             discharge_rate_max=20
         )
-        expected = 50 - 10 * self.dynamics.discharge_efficiency
+        # Delivering 10 units at 80% efficiency withdraws 12.5 from storage.
+        expected = 50 - 10 / self.dynamics.discharge_efficiency
         self.assertAlmostEqual(energy, expected)
 
     def test_get_value_no_action(self):

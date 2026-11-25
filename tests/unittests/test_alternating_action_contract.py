@@ -7,7 +7,7 @@ from stable_baselines3 import PPO
 
 from energy_net.gym_envs.alternating_env import AlternatingISOEnv
 from energy_net.gym_envs.iso_env import ISOEnv
-from energy_net.gym_envs.pcs_env import PCSEnv
+from energy_net.gym_envs.prosumer_env import ProsumerEnv
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -27,24 +27,24 @@ PREDICTIONS_FILE = os.path.join(
 )
 
 
-class ConstantPCSModel:
+class ConstantProsumerModel:
     def predict(self, observation, deterministic=True):
         return np.zeros(1, dtype=np.float32), None
 
 
 def create_model_linked_environment(use_asymmetric_pricing=False):
-    pcs_env = PCSEnv(
-        test_data_file=TEST_DATA_FILE,
-        predictions_file=PREDICTIONS_FILE,
+    prosumer_env = ProsumerEnv(
+        load_data_file=TEST_DATA_FILE,
+        load_forecast_file=PREDICTIONS_FILE,
         verbosity=0,
     )
     iso_env_kwargs = dict(
         actual_csv=TEST_DATA_FILE,
         predicted_csv=PREDICTIONS_FILE,
-        pcs_env=pcs_env,
-        pcs_model=ConstantPCSModel(),
+        prosumer_env=prosumer_env,
+        prosumer_model=ConstantProsumerModel(),
         iso_verbosity=0,
-        pcs_verbosity=0,
+        prosumer_verbosity=0,
     )
     if use_asymmetric_pricing:
         iso_env_kwargs["use_asymmetric_pricing"] = True
@@ -71,7 +71,7 @@ def test_model_linked_default_action_stays_symmetric():
     iso_env.reset()
     _, _, _, _, info = iso_env.step(action)
 
-    strategy = iso_env.pcs_env.price_strategy
+    strategy = iso_env.prosumer_env.simulator.price_strategy
     assert strategy.use_asymmetric_pricing is False
     np.testing.assert_allclose(
         strategy.calculate_buy_price(),
@@ -96,7 +96,7 @@ def test_explicit_asymmetric_action_slices_all_three_blocks():
     iso_env.reset()
     _, _, _, _, info = iso_env.step(action)
 
-    strategy = iso_env.pcs_env.price_strategy
+    strategy = iso_env.prosumer_env.simulator.price_strategy
     assert strategy.use_asymmetric_pricing is True
     np.testing.assert_allclose(
         strategy.calculate_buy_price(),
@@ -148,7 +148,7 @@ def test_alternating_reset_skips_missing_preceding_demand():
     try:
         obs, reset_info = iso_env.reset()
 
-        # First dataset day is not eligible for PCS reset.
+        # First dataset day is not eligible for prosumer reset.
         assert reset_info["start_idx"] == 48
         assert reset_info["timestamp"] == pd.Timestamp(
             "2025-07-10 00:00:00"
@@ -174,7 +174,7 @@ def test_alternating_reset_skips_missing_preceding_demand():
             iso_env.actual_data[48]
         )
 
-        assert iso_env.pcs_env.current_step == 48
+        assert iso_env.prosumer_env.current_step == 48
 
     finally:
         iso_env.close()

@@ -1,15 +1,16 @@
 from typing import Any, Dict, Optional
-from energy_net.foundation.grid_entity import ElementaryGridEntity
+from energy_net.foundation.grid_entity import ForecastableGridEntity
 from energy_net.foundation.dynamics import EnergyDynamics
 from energy_net.foundation.model import State, Action
 
 
-class ConsumptionUnit(ElementaryGridEntity):
+class ConsumptionUnit(ForecastableGridEntity):
     """
     Consumption Unit component managing energy consumption.
     """
 
-    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any]):
+    def __init__(self, dynamics: EnergyDynamics, config: Dict[str, Any],
+                 forecaster: Any = None):
         """
         Initializes the ConsumptionUnit with dynamics and configuration parameters.
 
@@ -20,11 +21,13 @@ class ConsumptionUnit(ElementaryGridEntity):
                 - consumption_capacity: Maximum consumption capacity in MWh
                 Optional parameters:
                 - state_attributes: Additional custom state attributes to track (dict)
+            forecaster: Optional prediction component; any object with
+                forecast(issue_time, target_times).
 
         Raises:
             AssertionError: If required configuration parameters are missing.
         """
-        super().__init__(dynamics)
+        super().__init__(dynamics, forecaster)
 
         # Ensure that 'consumption_capacity' is provided in the configuration
         assert 'consumption_capacity' in config, "Missing 'consumption_capacity' in ConsumptionUnit configuration."
@@ -96,7 +99,9 @@ class ConsumptionUnit(ElementaryGridEntity):
 
         # Delegate the consumption calculation to the dynamics
         previous_consumption = self.current_consumption
-        self.current_consumption = self.dynamics.get_value(time=time_value, action=action_value)
+        self.current_consumption = self.dynamics.get_value(
+            **self._dynamics_kwargs(state, time_value, action_value)
+        )
 
         # Update internal state
         self._state.set_attribute('time', time_value)
