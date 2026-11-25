@@ -202,3 +202,31 @@ def test_unit_update_realizes_ground_truth_from_state_timestamp():
     unit = ProductionUnit(dynamics, {"production_capacity": 10.0})
     unit.update(State({"time": 0.0, "timestamp": TIMES[3]}))
     assert unit.get_state() == dynamics.ground_truth(TIMES[3:4])[0]
+
+
+def test_csv_inputs_are_parsed_exactly():
+    """
+    Why setup.cfg requires pandas>=3: pandas 2's default float parser is one
+    ulp off for ~15% of these values, so simulation inputs would silently
+    depend on the installed pandas version.
+    """
+    import csv
+
+    from energy_net.dynamics import CSVDynamics
+    from tests.golden.scenarios import DEFAULT_FORECAST, DEFAULT_LOAD
+
+    with open(DEFAULT_FORECAST, newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    times = pd.DatetimeIndex([row["timestamp"] for row in rows])
+    exact = np.array([float(row["predicted_consumption"]) for row in rows])
+    forecaster = TableForecaster.from_csv(DEFAULT_FORECAST)
+    np.testing.assert_array_equal(forecaster.forecast(times[0], times), exact)
+
+    with open(DEFAULT_LOAD, newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    times = pd.DatetimeIndex([row["Datetime"] for row in rows])
+    # Empty cells are the dataset's invalid readings.
+    exact = np.array([float(row["Consumption"] or "nan") for row in rows])
+    dynamics = CSVDynamics.from_csv(DEFAULT_LOAD, "Consumption", quantity="consumption")
+    valid = np.isfinite(exact)
+    np.testing.assert_array_equal(dynamics.ground_truth(times[valid]), exact[valid])
